@@ -219,14 +219,51 @@ async function renderRealDoodads() {
   log(`真实装饰物: ${drawn} 组模型 / ${placed} 个摆放完成 (${(Date.now()-t0)/1000}s)`);
 }
 
-// 占位单位/金矿/出生点 (下一步换真实单位模型)
-for (const u of units.units) {
-  if (u.id === 'ngol') { const mm = new THREE.Mesh(mineGeo, mineMat); mm.position.set(u.x, yOf(u.z), u.y); mineMeshes.push(mm); scene.add(mm); }
-  else if (u.id === 'sloc') { const mm = new THREE.Mesh(slocGeo, slocMats[u.player % 2]); mm.position.set(u.x, yOf(u.z), u.y); slocMeshes.push(mm); scene.add(mm); }
-  else { const mm = new THREE.Mesh(unitGeo, unitMat); mm.position.set(u.x, yOf(u.z), u.y); unitMeshes.push(mm); scene.add(mm); }
+// 真实单位/金矿/建筑模型渲染 (unitmodels.json 映射, 复用 foc-web 管线模型)
+async function renderRealUnits() {
+  const um = await fetch('./foc/data/unitmodels.json').then(r => r.json());
+  const loader = new GLTFLoader();
+  loader.setResourcePath('./foc/assets/');
+  const cache = new Map();
+  const getModel = async (name) => {
+    if (!name) return null;
+    if (cache.has(name)) return cache.get(name);
+    try {
+      const glb = await loader.loadAsync('./foc/assets/models/' + name + '.glb');
+      cache.set(name, glb.scene);
+      return glb.scene;
+    } catch (e) { cache.set(name, null); return null; }
+  };
+  const Y = new THREE.Vector3(0, 1, 0);
+  let real = 0, fallback = 0;
+  for (const u of units.units) {
+    if (u.id === 'sloc') {  // 出生点: 保留红/蓝球
+      const mm = new THREE.Mesh(slocGeo, slocMats[u.player % 2]);
+      mm.position.set(u.x, u.z, u.y);
+      slocMeshes.push(mm); scene.add(mm);
+      continue;
+    }
+    const info = um[u.id] || {};
+    const proto = await getModel(info.m);
+    const s = (info.s || 1);
+    if (proto) {
+      const obj = cloneSkeleton(proto);
+      obj.position.set(u.x, u.z, -u.y);
+      obj.rotation.y = Math.random() * Math.PI * 2;  // 野怪随机朝向
+      obj.scale.setScalar(s);
+      scene.add(obj);
+      real++;
+    } else {
+      const mm = new THREE.Mesh(unitGeo, unitMat);
+      mm.position.set(u.x, u.z, u.y);
+      unitMeshes.push(mm); scene.add(mm);
+      fallback++;
+    }
+  }
+  log(`单位: 真实模型 ${real} 个 (含金矿) | 占位 ${fallback} 个 | 出生点 ${slocMeshes.length}`);
 }
-log(`占位: 金矿 ${mineMeshes.length} 单位 ${unitMeshes.length} 出生点 ${slocMeshes.length}`);
 
+await renderRealUnits();
 await renderRealDoodads();
 
 const cam = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 1, 50000);
