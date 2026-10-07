@@ -1,0 +1,492 @@
+<title>Says, Does, Shows</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  --ground:#f4f2ef; --panel:#fffefc; --panel2:#eae7e1; --line:#dbd6ce; --line2:#c7c1b7;
+  --ink:#1a1820; --ink2:#57535f; --ink3:#8b8693;
+  --accent:#3b4fc4; --accent-soft:#3b4fc41f;
+  --ok:#2c7a4d; --warn:#a86f14; --bad:#b8352c; --info:#615c70; --mute:#8b8693;
+  --shadow:0 1px 2px #1a182010, 0 8px 24px #1a182008;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#100f16; --panel:#191822; --panel2:#21202b; --line:#2e2c3a; --line2:#403d4e;
+    --ink:#edebf3; --ink2:#a7a3b5; --ink3:#726e80;
+    --accent:#93a0ff; --accent-soft:#93a0ff1f;
+    --ok:#5cbc80; --warn:#dfa444; --bad:#f2735f; --info:#9c96ad; --mute:#726e80;
+    --shadow:0 1px 2px #00000040, 0 8px 24px #00000030;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#100f16; --panel:#191822; --panel2:#21202b; --line:#2e2c3a; --line2:#403d4e;
+  --ink:#edebf3; --ink2:#a7a3b5; --ink3:#726e80;
+  --accent:#93a0ff; --accent-soft:#93a0ff1f;
+  --ok:#5cbc80; --warn:#dfa444; --bad:#f2735f; --info:#9c96ad; --mute:#726e80;
+  --shadow:0 1px 2px #00000040, 0 8px 24px #00000030;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:Archivo,"Helvetica Neue",Arial,sans-serif;
+  font-size:15px; line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1220px; margin:0 auto; padding:0 24px 96px}
+
+/* ---------------------------------------------------------------- masthead */
+header{padding:56px 0 28px; border-bottom:1px solid var(--line)}
+.eyebrow{
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px; font-weight:500;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--ink3); margin:0 0 14px;
+}
+h1{
+  font-family:Anton,"Arial Narrow",Impact,sans-serif; font-weight:400;
+  font-size:clamp(46px,9vw,92px); line-height:.92; letter-spacing:-.005em;
+  margin:0; text-wrap:balance; text-transform:uppercase;
+}
+h1 .slash{color:var(--accent); font-style:normal}
+.lede{
+  max-width:62ch; margin:18px 0 0; color:var(--ink2); font-size:17px;
+}
+.lede b{color:var(--ink); font-weight:600}
+.provenance{
+  display:flex; flex-wrap:wrap; gap:6px 22px; margin-top:22px;
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11.5px; color:var(--ink3);
+}
+.provenance span{white-space:nowrap}
+.provenance b{color:var(--ink2); font-weight:500}
+
+/* -------------------------------------------------------------- score strip */
+.axis{margin:30px 0 0}
+.axistitle{
+  display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 10px;
+  font-size:12px; font-weight:700; letter-spacing:.11em; text-transform:uppercase; color:var(--ink);
+}
+.axistitle span{
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px; font-weight:400;
+  letter-spacing:0; text-transform:none; color:var(--ink3);
+}
+.strip{
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+  gap:1px; background:var(--line); border:1px solid var(--line);
+  border-radius:3px; overflow:hidden; margin:28px 0 0;
+}
+.tile{
+  background:var(--panel); border:0; padding:16px 16px 14px; text-align:left;
+  cursor:pointer; font:inherit; color:inherit; position:relative;
+  transition:background .12s ease;
+}
+.tile:hover{background:var(--panel2)}
+.tile:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+.tile[aria-pressed="true"]{background:var(--panel2)}
+.tile[aria-pressed="true"]::after{
+  content:""; position:absolute; inset:auto 0 0 0; height:3px; background:var(--dot);
+}
+.tile .n{
+  font-family:Anton,"Arial Narrow",Impact,sans-serif; font-size:38px; line-height:1;
+  font-variant-numeric:tabular-nums; color:var(--dot); display:block;
+}
+.tile .was{
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:10.5px; font-weight:500;
+  letter-spacing:.02em; margin-left:7px; vertical-align:middle; color:var(--ink3);
+}
+.tile .was::before{content:"\2190 "; opacity:.7}
+.tile .k{
+  display:flex; align-items:center; gap:6px; margin-top:7px;
+  font-size:11px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--ink2);
+}
+.tile .k::before{content:""; width:7px; height:7px; border-radius:50%; background:var(--dot); flex:none}
+.tile .d{margin-top:5px; font-size:12px; line-height:1.35; color:var(--ink3)}
+
+[data-v="ok"]{--dot:var(--ok)}
+[data-v="partial"]{--dot:var(--warn)}
+[data-v="mismatch"],[data-v="missing"],[data-v="error"]{--dot:var(--bad)}
+[data-v="unknown"]{--dot:var(--info)}
+[data-v="passive"]{--dot:var(--mute)}
+[data-s="draws"],[data-s="morph"]{--dot:var(--ok)}
+[data-s="invisible"],[data-s="model-failed"]{--dot:var(--bad)}
+[data-s="no-art"]{--dot:var(--warn)}
+[data-s="n/a"]{--dot:var(--mute)}
+.px{
+  display:block; margin-top:3px; font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10.5px; color:var(--ink3); font-variant-numeric:tabular-nums;
+}
+
+/* ------------------------------------------------------------------ toolbar */
+.toolbar{
+  display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+  margin:26px 0 0; padding:0 0 14px;
+}
+.field{position:relative; flex:1 1 260px; min-width:200px}
+input[type="search"],select{
+  width:100%; font:inherit; font-size:14px; color:var(--ink);
+  background:var(--panel); border:1px solid var(--line2); border-radius:3px;
+  padding:9px 12px; appearance:none;
+}
+select{flex:0 0 auto; width:auto; padding-right:30px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink3) 50%),linear-gradient(135deg,var(--ink3) 50%,transparent 50%);
+  background-position:calc(100% - 16px) 52%,calc(100% - 11px) 52%;
+  background-size:5px 5px,5px 5px; background-repeat:no-repeat}
+input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+.count{margin-left:auto; font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:12px; color:var(--ink3); white-space:nowrap}
+.linkish{
+  background:none; border:0; padding:0 2px; font:inherit; font-size:12px;
+  color:var(--accent); cursor:pointer; text-decoration:underline; text-underline-offset:2px;
+}
+
+/* -------------------------------------------------------------------- table */
+.tablewrap{overflow-x:auto; border:1px solid var(--line); border-radius:3px; background:var(--panel)}
+table{border-collapse:collapse; width:100%; min-width:840px}
+thead th{
+  position:sticky; top:0; z-index:2; background:var(--panel2);
+  border-bottom:1px solid var(--line2); text-align:left; white-space:nowrap;
+  font-size:10.5px; font-weight:700; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--ink2); padding:11px 12px;
+}
+thead th.sortable{cursor:pointer; user-select:none}
+thead th.sortable:hover{color:var(--ink)}
+thead th .arrow{color:var(--accent); font-size:9px; margin-left:4px; visibility:hidden}
+thead th[aria-sort] .arrow{visibility:visible}
+tbody tr.row{border-bottom:1px solid var(--line); cursor:pointer}
+tbody tr.row:hover{background:var(--accent-soft)}
+tbody tr.row>td{padding:10px 12px; vertical-align:top}
+tbody tr.row.open{background:var(--accent-soft)}
+td.stripe{
+  width:4px; padding:0 !important; background:var(--dot);
+}
+td.who{white-space:nowrap}
+td.who .hero{font-weight:600; font-size:14px}
+td.who .id{
+  display:block; font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:11px; color:var(--ink3);
+}
+td.what .nm{font-weight:500}
+td.what .ds{
+  color:var(--ink3); font-size:12.5px; line-height:1.4; margin-top:2px;
+  display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden;
+  max-width:52ch;
+}
+.pill{
+  display:inline-block; font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:10.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase;
+  padding:2.5px 7px; border-radius:2px; white-space:nowrap;
+  color:var(--dot); border:1px solid currentColor; background:transparent;
+}
+td.why{color:var(--ink2); font-size:13px; min-width:230px}
+.tags{display:flex; flex-wrap:wrap; gap:4px}
+.tag{
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:10.5px;
+  padding:2px 6px; border-radius:2px; background:var(--panel2);
+  border:1px solid var(--line); color:var(--ink2); white-space:nowrap;
+}
+.tag.hit{border-color:var(--ok); color:var(--ok)}
+.tag.miss{border-color:var(--bad); color:var(--bad); text-decoration:line-through}
+
+/* ------------------------------------------------------------------- detail */
+tr.detail>td{padding:0; background:var(--panel2); border-bottom:1px solid var(--line2)}
+.diff{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; background:var(--line)}
+@media (max-width:1000px){.diff{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:700px){.diff{grid-template-columns:minmax(0,1fr)}}
+.side{background:var(--panel); padding:16px 18px 18px}
+.side h4{
+  margin:0 0 10px; font-size:10.5px; font-weight:700; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--ink3);
+}
+.prose{margin:0 0 12px; color:var(--ink2); font-size:13.5px; max-width:60ch}
+ul.bullets{list-style:none; margin:0; padding:0; display:grid; gap:5px}
+ul.bullets li{
+  display:flex; gap:8px; font-size:13.5px; color:var(--ink);
+}
+ul.bullets li::before{content:"\25CE"; color:var(--accent); flex:none; font-size:12px; line-height:1.5}
+dl.readout{
+  display:grid; grid-template-columns:auto 1fr; gap:5px 14px; margin:0;
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:12.5px;
+  font-variant-numeric:tabular-nums;
+}
+dl.readout dt{color:var(--ink3)}
+dl.readout dd{margin:0; color:var(--ink)}
+dl.readout dd.zero{color:var(--ink3)}
+.none{color:var(--ink3); font-size:13px; font-style:italic}
+ul.paths{list-style:none; margin:0; padding:0; display:grid; gap:3px}
+ul.paths li{
+  font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px; color:var(--ink2);
+  word-break:break-all;
+}
+ul.paths.bad li{color:var(--bad)}
+.empty{padding:48px 20px; text-align:center; color:var(--ink3)}
+
+/* ------------------------------------------------------------------- footer */
+footer{
+  margin-top:38px; padding-top:20px; border-top:1px solid var(--line);
+  color:var(--ink3); font-size:13px; max-width:70ch;
+}
+footer b{color:var(--ink2); font-weight:600}
+@media (prefers-reduced-motion:reduce){*{transition:none !important; animation:none !important}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Fight of Characters 7.7b &nbsp;/&nbsp; web port</p>
+  <h1>Says<span class="slash">,</span> Does<span class="slash">,</span> Shows</h1>
+  <p class="lede">Every hero ability in the map, read as a promise and then held to it. The
+  tooltip is the map author's own statement of intent &mdash; a line of prose and a stack of
+  <span style="color:var(--accent)">&#9678;</span> numbers. Each spell was cast at a punching bag
+  on open ground, then its effects were replayed into the renderer on its own. Three columns:
+  what it <b>says</b>, what it <b>does</b>, and whether it <b>shows</b> anything.</p>
+  <div class="provenance">
+    <span><b>__TOTAL__</b> abilities</span>
+    <span><b>__HEROES__</b> heroes</span>
+    <span>run <b>__DATE__</b></span>
+    <span><b>__RENDERED__</b> casts rendered</span>
+    <span>harness <b>spell_check.mjs</b> + <b>spell_render.mjs</b></span>
+  </div>
+</header>
+
+<section class="axis">
+  <h2 class="axistitle">Does it do what it says<span>behaviour measured on the server</span></h2>
+  <div class="strip" id="strip"></div>
+</section>
+<section class="axis">
+  <h2 class="axistitle">Does it show anything<span>effects replayed into the renderer, pixels counted</span></h2>
+  <div class="strip" id="strip2"></div>
+</section>
+
+<div class="toolbar">
+  <div class="field"><input type="search" id="q" placeholder="Search hero, spell, ability id, or tooltip text" aria-label="Search"></div>
+  <select id="hero" aria-label="Filter by hero"><option value="">All heroes</option></select>
+  <span class="count"><span id="shown">0</span> shown <button class="linkish" id="reset" hidden>clear filters</button></span>
+</div>
+
+<div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th style="width:4px" aria-hidden="true"></th>
+      <th class="sortable" data-k="hero">Hero<span class="arrow">&#9650;</span></th>
+      <th class="sortable" data-k="name">Ability<span class="arrow">&#9650;</span></th>
+      <th class="sortable" data-k="verdict">Does<span class="arrow">&#9650;</span></th>
+      <th class="sortable" data-k="shows">Shows<span class="arrow">&#9650;</span></th>
+      <th>Promised</th>
+      <th class="sortable" data-k="why">Finding<span class="arrow">&#9650;</span></th>
+    </tr></thead>
+    <tbody id="body"></tbody>
+  </table>
+</div>
+<p class="empty" id="empty" hidden>Nothing matches those filters.</p>
+
+<footer>
+  <p><b>How to read this.</b> The harness parses English tooltip text and watches one target
+  dummy, so it nominates suspects rather than convicting them. A spell marked
+  <em>nothing observed</em> may still be doing something this bench cannot see &mdash; a knockback,
+  a vision grant, an effect that only lands on a hero. One marked <em>does what it says</em> is
+  doing the right <em>kind</em> of thing; the numbers are only checked where the tooltip
+  states one. Read it as a worklist, top-down.</p>
+</footer>
+</div>
+
+<script>
+const DATA = /*__DATA__*/null;
+const {rows, does, shows, doesBlurb, showsBlurb, counts, showsCounts, baseline} = DATA;
+const $ = (id) => document.getElementById(id);
+const body = $('body'), qEl = $('q'), heroEl = $('hero');
+
+const DOES_LABEL = {ok:'Does what it says', partial:'Partly', mismatch:'Mismatch',
+                    unknown:'No tooltip', passive:'Passive'};
+const DOES_SHORT = {ok:'ok', partial:'partial', mismatch:'mismatch',
+                    unknown:'no tooltip', passive:'passive'};
+const SHOWS_LABEL = {draws:'Draws something', morph:'Changes form', invisible:'Invisible',
+                     'model-failed':'Model fails', 'no-art':'No art fired', 'n/a':'Not cast'};
+const SHOWS_SHORT = {draws:'draws', morph:'transforms', invisible:'invisible',
+                     'model-failed':'model fails', 'no-art':'no art', 'n/a':'—'};
+
+let fDoes = null, fShows = null, sortKey = null, sortDir = 1, openId = null;
+
+const KEY = 'foc-spell-sheet';
+try {
+  const st = JSON.parse(localStorage.getItem(KEY) || '{}');
+  if (does.includes(st.fDoes)) fDoes = st.fDoes;
+  if (shows.includes(st.fShows)) fShows = st.fShows;
+  if (typeof st.q === 'string') qEl.value = st.q;
+} catch (e) {}
+const save = () => {
+  try { localStorage.setItem(KEY, JSON.stringify({fDoes, fShows, q: qEl.value})); } catch (e) {}
+};
+
+function buildStrip(el, keys, cnt, label, blurb, attr, get, set, axis) {
+  for (const v of keys) {
+    if (!cnt[v]) continue;
+    const b = document.createElement('button');
+    b.className = 'tile'; b.type = 'button';
+    b.setAttribute(attr, v);
+    b.dataset.key = v;
+    const was = baseline && baseline[axis] ? (baseline[axis][v] || 0) : null;
+    const d = was === null || was === cnt[v] ? ''
+      : '<span class="was ' + (cnt[v] > was ? 'up' : 'down') + '">was ' + was + '</span>';
+    b.innerHTML = '<span class="n">' + cnt[v] + d + '</span>'
+                + '<span class="k">' + label[v] + '</span>'
+                + '<span class="d">' + blurb[v] + '</span>';
+    b.onclick = () => { set(get() === v ? null : v); save(); render(); };
+    el.appendChild(b);
+  }
+}
+buildStrip($('strip'), does, counts, DOES_LABEL, doesBlurb, 'data-v',
+           () => fDoes, (v) => { fDoes = v; }, 'does');
+buildStrip($('strip2'), shows, showsCounts, SHOWS_LABEL, showsBlurb, 'data-s',
+           () => fShows, (v) => { fShows = v; }, 'shows');
+
+for (const h of [...new Set(rows.map((r) => r.hero))].sort()) {
+  const o = document.createElement('option'); o.value = h; o.textContent = h;
+  heroEl.appendChild(o);
+}
+
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function readout(g) {
+  if (!g) return '<p class="none">Not castable, so nothing was measured.</p>';
+  if (g.cast !== 'ok') return '<p class="none">The cast was refused: ' + esc(g.cast) + '.</p>';
+  const f = [
+    ['damage', g.damage, g.damage && g.damageHalfSec !== undefined
+        ? (g.damage > g.damageHalfSec * 1.6
+            ? 'over 2s (' + g.damageHalfSec + ' in the first half-second) &mdash; it keeps ticking'
+            : 'to the target, in one hit')
+        : 'to the target'],
+    ['splash', g.splash, 'to a second body 80 units off'],
+    ['summons', g.summon, ''],
+    ['stun', g.stun ? g.stun + 's' : 0, ''],
+    ['slow', g.slow ? 'yes' : 0, ''],
+    ['silence', g.silence ? 'yes' : 0, ''],
+    ['healed', g.healed, 'on the caster'],
+    ['caster buffs', g.casterBuff && g.casterBuff.length ? g.casterBuff.join(', ') : 0, ''],
+    ['moved', g.moved ? g.moved + ' units' : 0, ''],
+    ['morphed', g.morph ? 'yes' : 0, ''],
+    ['missile', g.missile ? 'launched' : 0, ''],
+    ['cooldown', g.cooldown ? g.cooldown + 's' : 0, 'charged'],
+  ];
+  return '<dl class="readout">' + f.map(([k, v, note]) => {
+    const zero = !v || v === 0;
+    return '<dt>' + k + '</dt><dd class="' + (zero ? 'zero' : '') + '">'
+      + (zero ? '&mdash;' : esc(v) + (note ? ' <span style="color:var(--ink3)">' + note + '</span>' : ''))
+      + '</dd>';
+  }).join('') + '</dl>';
+}
+
+function artout(r) {
+  const g = r.got, v = r.render;
+  if (!g || g.cast !== 'ok') return '<p class="none">Not cast, so nothing was drawn.</p>';
+  const models = (g.models || []);
+  let out = '<dl class="readout">'
+    + '<dt>effects fired</dt><dd class="' + (g.fx ? '' : 'zero') + '">' + (g.fx || '&mdash;') + '</dd>'
+    + '<dt>missile</dt><dd class="' + (g.missile ? '' : 'zero') + '">' + (g.missile ? 'yes' : '&mdash;') + '</dd>';
+  if (v) {
+    out += '<dt>models loaded</dt><dd class="' + (v.spawned ? '' : 'zero') + '">'
+        + (v.asked ? v.spawned + ' of ' + v.asked : '&mdash;') + '</dd>'
+        + '<dt>triangles</dt><dd class="' + (v.tris ? '' : 'zero') + '">' + (v.tris || '&mdash;') + '</dd>'
+        + '<dt>pixels changed</dt><dd class="' + (v.pixels > 40 ? '' : 'zero') + '">'
+        + (v.pixels || 0) + ' <span style="color:var(--ink3)">of 76800</span></dd>';
+  }
+  out += '</dl>';
+  out += models.length
+    ? '<h4 style="margin-top:14px">Art it fires</h4><ul class="paths">'
+      + models.map((m) => '<li>' + esc(m) + '</li>').join('') + '</ul>'
+    : '<p class="none" style="margin-top:12px">This cast tells the client to draw nothing at all.</p>';
+  if (g.unresolved && g.unresolved.length)
+    out += '<h4 style="margin-top:14px">Named but never converted</h4><ul class="paths bad">'
+        + g.unresolved.map((m) => '<li>' + esc(m) + '</li>').join('') + '</ul>';
+  return out;
+}
+
+function detail(r) {
+  const promised = r.bullets && r.bullets.length
+    ? '<ul class="bullets">' + r.bullets.map((b) =>
+        '<li>' + esc(b.replace(/^◎/, '').trim()) + '</li>').join('') + '</ul>'
+    : '<p class="none">The tooltip gives no numbered lines.</p>';
+  const prose = r.desc ? '<p class="prose">' + esc(r.desc) + '</p>' : '';
+  return '<div class="diff">'
+    + '<div class="side"><h4>Says</h4>' + prose + promised + '</div>'
+    + '<div class="side"><h4>Does</h4>' + readout(r.got) + '</div>'
+    + '<div class="side"><h4>Shows</h4>' + artout(r) + '</div>'
+    + '</div>';
+}
+
+function tags(r) {
+  if (!r.expects || !r.expects.length) return '<span class="none">&mdash;</span>';
+  const m = r.why.match(/^no ([a-z/]+) seen/);
+  const missed = new Set(m ? m[1].split('/') : []);
+  const gone = r.verdict === 'mismatch';
+  return '<div class="tags">' + r.expects.map((k) =>
+    '<span class="tag ' + ((gone || missed.has(k)) ? 'miss' : (r.got ? 'hit' : '')) + '">'
+    + esc(k) + '</span>').join('') + '</div>';
+}
+
+function render() {
+  const q = qEl.value.trim().toLowerCase();
+  const hero = heroEl.value;
+  let list = rows.filter((r) =>
+    (!fDoes || r.verdict === fDoes) &&
+    (!fShows || r.shows === fShows) &&
+    (!hero || r.hero === hero) &&
+    (!q || (r.hero + ' ' + r.name + ' ' + r.id + ' ' + r.desc + ' ' + r.why).toLowerCase().includes(q)));
+
+  if (sortKey) {
+    const rd = Object.fromEntries(does.map((v, i) => [v, i]));
+    const rs = Object.fromEntries(shows.map((v, i) => [v, i]));
+    const val = (r) => sortKey === 'verdict' ? rd[r.verdict]
+                     : sortKey === 'shows' ? rs[r.shows]
+                     : String(r[sortKey]).toLowerCase();
+    list = [...list].sort((a, b) => {
+      const av = val(a), bv = val(b);
+      return (av < bv ? -1 : av > bv ? 1 : 0) * sortDir;
+    });
+  }
+
+  body.innerHTML = list.map((r) => {
+    const key = r.heroId + '/' + r.id;
+    const open = openId === key;
+    const px = r.render && r.render.asked ? '<span class="px">' + r.render.pixels + ' px</span>' : '';
+    return '<tr class="row' + (open ? ' open' : '') + '" data-v="' + r.verdict
+      + '" data-key="' + esc(key) + '" tabindex="0">'
+      + '<td class="stripe"></td>'
+      + '<td class="who"><span class="hero">' + esc(r.hero) + '</span><span class="id">' + esc(r.id) + '</span></td>'
+      + '<td class="what"><div class="nm">' + esc(r.name) + '</div>'
+        + (r.desc ? '<div class="ds">' + esc(r.desc) + '</div>' : '') + '</td>'
+      + '<td data-v="' + r.verdict + '"><span class="pill">' + DOES_SHORT[r.verdict] + '</span></td>'
+      + '<td data-s="' + r.shows + '"><span class="pill">' + SHOWS_SHORT[r.shows] + '</span>' + px + '</td>'
+      + '<td>' + tags(r) + '</td>'
+      + '<td class="why">' + esc(r.why || r.artWhy || '') + '</td>'
+      + '</tr>'
+      + (open ? '<tr class="detail"><td colspan="7">' + detail(r) + '</td></tr>' : '');
+  }).join('');
+
+  $('shown').textContent = list.length + ' of ' + rows.length;
+  $('empty').hidden = list.length > 0;
+  $('reset').hidden = !(fDoes || fShows || hero || q);
+  for (const t of $('strip').children) t.setAttribute('aria-pressed', String(fDoes === t.dataset.key));
+  for (const t of $('strip2').children) t.setAttribute('aria-pressed', String(fShows === t.dataset.key));
+  for (const tr of body.querySelectorAll('tr.row')) {
+    const go = () => { openId = (openId === tr.dataset.key ? null : tr.dataset.key); render(); };
+    tr.onclick = go;
+    tr.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
+  }
+}
+
+for (const th of document.querySelectorAll('th.sortable')) {
+  th.onclick = () => {
+    const k = th.dataset.k;
+    sortDir = sortKey === k ? -sortDir : 1;
+    sortKey = k;
+    for (const o of document.querySelectorAll('th.sortable')) o.removeAttribute('aria-sort');
+    th.setAttribute('aria-sort', sortDir === 1 ? 'ascending' : 'descending');
+    th.querySelector('.arrow').innerHTML = sortDir === 1 ? '&#9650;' : '&#9660;';
+    render();
+  };
+}
+qEl.oninput = () => { save(); render(); };
+heroEl.onchange = render;
+$('reset').onclick = () => {
+  fDoes = null; fShows = null; qEl.value = ''; heroEl.value = ''; save(); render();
+};
+render();
+</script>

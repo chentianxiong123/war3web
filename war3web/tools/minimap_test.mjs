@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { minimapPoint } from '../client/js/minimap.js';
+const bounds={minX:-100,maxX:300,minY:-200,maxY:600};
+const rect={left:20,top:40,width:200,height:300};
+assert.deepEqual(minimapPoint(bounds,rect,20,40),{x:-100,y:600});
+assert.deepEqual(minimapPoint(bounds,rect,220,340),{x:300,y:-200});
+assert.deepEqual(minimapPoint(bounds,rect,120,190),{x:100,y:200});
+assert.deepEqual(minimapPoint(bounds,rect,-50,500),{x:-100,y:-200});
+assert.equal(minimapPoint(bounds,{...rect,width:0},100,100),null);
+console.log('Minimap CSS-coordinate mapping and clamping passed');

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { AlertHistory } from '../client/js/alerts.js';
+const h = new AlertHistory();
+assert.equal(h.next(), null);
+assert.equal(h.add('attack', NaN, 0, 0), null);
+h.add('attack', 0, 0, 0);
+assert.equal(h.add('attack', 100, 0, 9999), null);
+assert.ok(h.add('attack', 2000, 0, 1), 'separate battle alerts immediately');
+assert.ok(h.add('attack', 0, 0, 10000), 'cooldown expires');
+h.clear();
+for (let i=0;i<10;i++) h.add('death', i, -i, i);
+assert.equal(h.entries.length,8);
+assert.deepEqual(Array.from({length:9},()=>h.next().x),[9,8,7,6,5,4,3,2,9]);
+h.add('death',20,20,20);
+assert.equal(h.next().x,20,'new alert restarts newest-first cycle');
+h.clear();assert.equal(h.next(),null);
+assert.ok(h.add('attack',0,0,1),'reset clears suppression');
+console.log('Alert capacity, cycling, reset and spatial throttling passed');

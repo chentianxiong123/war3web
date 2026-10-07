@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cliff check</title>
+<style>html,body{margin:0;height:100%;background:#0a0c12}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<canvas id="view"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { Renderer } from '/js/render.js';
+
+const view = new Renderer(document.getElementById('view'));
+window.THREE = THREE;
+window.view = view;
+
+const [terr, heightsBuf] = await Promise.all([
+  fetch('/data/terrain.json').then(r => r.json()),
+  fetch('/data/heights.bin').then(r => r.arrayBuffer()),
+]);
+const spec = await fetch('/data/cliffs.json').then(r => r.ok ? r.json() : null);
+if (spec && spec.groups?.length) {
+  spec.data = new Float32Array(await fetch('/data/cliffs.bin').then(r => r.arrayBuffer()));
+}
+await view.buildTerrain(terr, new Float32Array(heightsBuf), spec);
+
+// no game loop here: render on demand so a screenshot is deterministic
+window.shoot = (x, y, dist, pitch, yaw) => {
+  view.camTarget.set(x, view.heightAt(x, -y * 1), -y);
+  view.camDist = dist; view.camPitch = pitch; view.camYaw = yaw;
+  view.updateCamera();
+  view.renderer.render(view.scene, view.camera);
+};
+window.stats = {
+  cliffCells: spec ? spec.cells.length : 0,
+  rampCells: spec ? spec.ramps.length : 0,
+  tris: spec ? spec.tris : 0,
+  groundTris: view.terrain.geometry.index.count / 3,
+  cliffMeshes: view.cliffs ? view.cliffs.children.length : 0,
+};
+window.ready = true;
+</script>

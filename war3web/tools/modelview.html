@@ -1,0 +1,283 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>model check</title>
+<style>html,body{margin:0;height:100%;background:#1a1c22}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<canvas id="view"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { Renderer } from '/js/render.js';
+import { stepLights } from '/js/lights.js';
+
+// One unit, lit and turned around, with nothing else in the scene. The point is
+// to see a model as the game builds it -- same spawnView, same materials, same
+// team-colour substitution -- rather than as a converter test would.
+const view = new Renderer(document.getElementById('view'));
+window.THREE = THREE; window.view = view;
+// the bench drives event objects by hand, so it needs the stepper
+const { stepEvents } = await import('/js/splats.js');
+window.__stepEvents = stepEvents;
+
+const [terr, heightsBuf] = await Promise.all([
+  fetch('/data/terrain.json').then(r => r.json()),
+  fetch('/data/heights.bin').then(r => r.arrayBuffer()),
+]);
+await view.buildTerrain(terr, new Float32Array(heightsBuf), null);
+const models = await fetch('/assets/models.json').then(r => r.json());
+window.__unitModels = await fetch('/data/unitmodels.json').then(r => r.json()).catch(() => ({}));
+// the event-object tables, so blood and footprints resolve here too
+view.splatTable = await fetch('/data/splats.json').then(r => r.json()).catch(() => ({}));
+view.splats = await fetch('/data/ubersplats.json').then(r => r.json()).catch(() => ({}));
+view.spawnTable = await fetch('/data/spawns.json').then(r => r.json()).catch(() => ({}));
+window.ready = true;
+
+let id = 90000;
+// `unitId` matters whenever a model is shared, which is most of them.
+// Five unit types draw as the Demon Hunter -- Illidan, his two metamorphosis
+// forms, a hero of this map's own and Osam -- and the first one this lookup
+// happens to reach declares "alternateex". Spawning Osam with it hands him
+// Metamorphosis's Required Animation Names, pickClip duly prefers "Stand
+// Alternate", and the demon form's geoset animation hides the body it is
+// supposed to be showing: 17 prims, 4 visible, an empty portrait. Naming the
+// unit takes its own row instead of a sibling's.
+window.showUnit = async (model, colour = 0, scale = 1, unitId = null) => {
+  for (const [k, v] of [...view.views]) view.removeView(k);
+  const um = window.__unitModels || {};
+  const meta = (unitId && um[unitId])
+            || Object.values(um).find((t) => t.m === model) || {};
+  const ent = { i: ++id, k: 1, t: 0, p: colour, c: colour, x: 0, y: 0, f: 2.2,
+                model, scale, isHero: true, radius: 32, name: model,
+                // the shadow the real game would give this unit
+                sh: meta.sh, sw: meta.sw, shh: meta.shh, sx: meta.sx, sy: meta.sy,
+                // which variant of a shared model this unit is
+                an: meta.an, us: meta.us, isBuilding: !!meta.b };
+  await view.spawnView(ent);
+  const v = view.views.get(ent.i);
+  // let a skinned model settle into its stand pose
+  for (let i = 0; i < 30; i++) v?.mixer?.update(1 / 30);
+  // Frame from the MDX extent, not Box3: three.js computes a bounding box from
+  // the bind-pose vertex buffer and takes no account of skinning, so a posed
+  // model reports whatever height it had before its bones moved it.
+  const ex = v.meta?.extent;
+  const h = ex ? Math.max(60, (ex.max[2] - ex.min[2]) * (scale || 1)) : 180;
+  // spawnView drops the unit at terrain height, so the camera has to look there
+  // and not at world-space zero, or the whole frame is empty sky.
+  view.camTarget.set(0, view.heightAt(0, 0) + h * 0.55, 0);
+  view.camDist = Math.max(220, h * 2.6); view.camPitch = 0.18; view.camYaw = 0.7;
+  view.updateCamera();
+  view.renderer.render(view.scene, view.camera);
+  return { model, tris: v.prims.reduce((n, m) => n + (m.geometry.index?.count || 0) / 3, 0),
+           prims: v.prims.length, height: Math.round(h) };
+};
+window.modelNames = Object.keys(models);
+
+/** Pull the camera in on the model, for looking at something small closely. */
+window.zoom = (factor = 0.45, pitch = 0.25, yaw = 0.9) => {
+  view.camDist *= factor;
+  view.camPitch = pitch; view.camYaw = yaw;
+  view.updateCamera();
+  view.renderer.render(view.scene, view.camera);
+};
+
+/**
+ * Play an animation and advance everything that hangs off it together.
+ *
+ * Ribbons and particles are driven by the render loop, which this bench
+ * bypasses, and a ribbon is *only* visible while the bone it hangs from is
+ * moving -- so a trail has to be stepped alongside the mixer that moves it,
+ * not sampled from a still pose.
+ */
+window.playAnim = async (state, seconds = 1.2, step = 1 / 30) => {
+  const v = [...view.views.values()][0];
+  if (!v) return { error: 'nothing spawned' };
+  view.play(v, state, false);
+  const frames = Math.max(1, Math.round(seconds / step));
+  let peak = 0;
+  for (let i = 0; i < frames; i++) {
+    v.mixer?.update(step);
+    // Emitters are scoped to the sequence being played, so the bench has to
+    // hand them the same context the render loop does -- otherwise it measures
+    // every emitter running at once, which is not what the game draws.
+    const ctx = view.animCtxOf(v);
+    for (const p of (v.emitters || [])) p.update(step, ctx);
+    for (const r of (v.ribbons || [])) r.update(step, ctx);
+    // lights are moved onto their nodes by the render loop this bench skips
+    stepLights(v.lights || [], ctx);
+    for (const sp of (v.sprays || [])) sp.update(step, ctx);
+    peak = Math.max(peak, (v.ribbons || []).reduce(
+      (n, r) => n + (r.geo.drawRange.count || 0), 0));
+  }
+  view.renderer.render(view.scene, view.camera);
+  return {
+    // view.actions is keyed by clip *name*, and view.current is that string --
+    // not a clip object, which is what makes `.name` on it read as null
+    clip: v.current || null,
+    clips: [...(v.actions?.keys() || [])],
+    ribbons: (v.ribbons || []).length,
+    emitters: (v.emitters || []).length,
+    peakRibbonIndices: peak,
+  };
+};
+
+/**
+ * What the ribbons alone contribute, in one fixed pose.
+ *
+ * Diffing a swinging frame against a standing one measures the whole model
+ * moving, which swamps the trail and can come out negative. Toggling just the
+ * ribbon meshes in a single frame isolates exactly their pixels.
+ */
+window.ribbonContribution = async (state = 'attack', seconds = 0.8) => {
+  const v = [...view.views.values()][0];
+  if (!v || !(v.ribbons || []).length) return { ribbons: 0 };
+  // a ribbon whose texture has not arrived samples black-transparent and every
+  // fragment is discarded, which looks exactly like "ribbons do not work"
+  for (let w = 0; w < 40; w++) {
+    if (v.ribbons.every((r) => r.mat.uniforms.map.value?.image)) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  await window.playAnim(state, seconds);
+  // Count pixels that *changed*, not pixels that are bright. A ribbon is a
+  // faint additive wash laid over terrain that is already lit, so it never
+  // pushes anything over a brightness threshold -- measured that way it reads
+  // as absent no matter how well it is drawing.
+  const frame = () => {
+    const w = 320, h = 240, rt = new THREE.WebGLRenderTarget(w, h);
+    view.renderer.setRenderTarget(rt);
+    view.renderer.render(view.scene, view.camera);
+    const buf = new Uint8Array(w * h * 4);
+    view.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+    view.renderer.setRenderTarget(null);
+    rt.dispose();
+    return buf;
+  };
+  for (const r of v.ribbons) r.mesh.visible = false;
+  const off = frame();
+  for (const r of v.ribbons) r.mesh.visible = true;
+  const on = frame();
+  let changed = 0, brightest = 0;
+  for (let i = 0; i < off.length; i += 4) {
+    const d = Math.abs(on[i] - off[i]) + Math.abs(on[i + 1] - off[i + 1]) + Math.abs(on[i + 2] - off[i + 2]);
+    if (d > 6) changed++;
+    if (d > brightest) brightest = d;
+  }
+  const without = 0, with_ = changed;
+  const segs = v.ribbons.map((r) => r.seg.length);
+  const spans = v.ribbons.map((r) => {
+    if (r.seg.length < 2) return 0;
+    const a = r.seg[0].top, b = r.seg[r.seg.length - 1].top;
+    return Math.round(Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z));
+  });
+  return { ribbons: v.ribbons.length, segments: segs, trailLength: spans,
+           texturesReady: v.ribbons.filter((r) => r.mat.uniforms.map.value?.image).length,
+           ribbonPixels: changed, strongestChange: brightest, of: 320 * 240 };
+};
+
+/**
+ * What each effect layer contributes, measured on its own.
+ *
+ * Same trick as the ribbon measure: play the animation, then render the very
+ * same frame twice with one layer switched off, and count the pixels that
+ * differ. Comparing two different poses measures the model moving; counting
+ * bright pixels misses anything faint and additive.
+ */
+window.layerContribution = async (state = 'attack', seconds = 1.0) => {
+  const v = [...view.views.values()][0];
+  if (!v) return { error: 'nothing spawned' };
+  for (let w = 0; w < 40; w++) {
+    const pend = (v.ribbons || []).some((r) => !r.mat.uniforms.map.value?.image)
+              || (v.emitters || []).some((e) => !e.mat.uniforms.map.value?.image);
+    if (!pend) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  await window.playAnim(state, seconds);
+  const frame = () => {
+    const w = 320, h = 240, rt = new THREE.WebGLRenderTarget(w, h);
+    view.renderer.setRenderTarget(rt);
+    view.renderer.render(view.scene, view.camera);
+    const buf = new Uint8Array(w * h * 4);
+    view.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+    view.renderer.setRenderTarget(null);
+    rt.dispose();
+    return buf;
+  };
+  const diff = (a, b) => {
+    let n = 0;
+    for (let i = 0; i < a.length; i += 4)
+      if (Math.abs(a[i] - b[i]) + Math.abs(a[i+1] - b[i+1]) + Math.abs(a[i+2] - b[i+2]) > 6) n++;
+    return n;
+  };
+  const measure = (off, on) => { off(); const a = frame(); on(); const b = frame(); return diff(a, b); };
+
+  const out = { ribbons: (v.ribbons || []).length, emitters: (v.emitters || []).length,
+                lights: (v.lights || []).length, sprays: (v.sprays || []).length };
+  if (out.ribbons) out.ribbonPixels = measure(
+    () => v.ribbons.forEach((r) => { r.mesh.visible = false; }),
+    () => v.ribbons.forEach((r) => { r.mesh.visible = true; }));
+  if (out.emitters) out.particlePixels = measure(
+    () => v.emitters.forEach((e) => { e.points.visible = false; }),
+    () => v.emitters.forEach((e) => { e.points.visible = true; }));
+  if (out.lights) {
+    const keep = v.lights.map((l) => l.slot.light.intensity);
+    out.lightPixels = measure(
+      () => v.lights.forEach((l) => { l.slot.light.intensity = 0; }),
+      () => v.lights.forEach((l, i) => { l.slot.light.intensity = keep[i]; }));
+  }
+  if (out.sprays) {
+    // sprays fire on death, so drive that clip and let pieces fly first
+    // These are thrown hard and pulled down hard -- gravity is 2156 in the data
+    // -- so by a fixed moment later they have already hit the floor. Sample the
+    // arc and keep the best frame rather than whatever instant we land on.
+    let best = 0, bestLive = 0;
+    for (let step = 0; step < 24; step++) {
+      for (const sp of v.sprays) sp.update(1 / 30, view.animCtxOf(v));
+      const live = v.sprays.reduce((n, sp) => n + sp.pieces.filter((p) => p.alive).length, 0);
+      if (!live) continue;
+      const px = measure(
+        () => v.sprays.forEach((sp) => sp.pieces.forEach((p) => { if (p.alive) p.obj.visible = false; })),
+        () => v.sprays.forEach((sp) => sp.pieces.forEach((p) => { if (p.alive) p.obj.visible = true; })));
+      if (px > best) { best = px; bestLive = live; }
+    }
+    out.sprayPieces = bestLive;
+    out.sprayPixels = best;
+  }
+  return out;
+};
+
+/**
+ * Render into a target and hand the pixels back as a PNG data URL.
+ *
+ * Screenshotting the canvas is unreliable: WebGL clears the drawing buffer once
+ * the frame is composited unless preserveDrawingBuffer is set, so a capture
+ * taken a moment later comes back empty -- which reads exactly like "the model
+ * did not render". Reading the target and re-encoding through a 2D canvas is
+ * not subject to that.
+ */
+window.grab = (w = 520, h = 640) => {
+  const rt = new THREE.WebGLRenderTarget(w, h);
+  view.camera.aspect = w / h; view.camera.updateProjectionMatrix();
+  view.renderer.setRenderTarget(rt);
+  view.renderer.render(view.scene, view.camera);
+  const buf = new Uint8Array(w * h * 4);
+  view.renderer.readRenderTargetPixels(rt, 0, 0, w, h, buf);
+  view.renderer.setRenderTarget(null);
+  rt.dispose();
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  for (let y = 0; y < h; y++) {                 // GL reads bottom-up
+    const src = (h - 1 - y) * w * 4, dst = y * w * 4;
+    img.data.set(buf.subarray(src, src + w * 4), dst);
+  }
+  // the renderer clears to alpha 0, which would save as a wholly transparent
+  // PNG -- indistinguishable from a black frame once something displays it
+  for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
+  ctx.putImageData(img, 0, 0);
+  let lit = 0;
+  for (let i = 0; i < buf.length; i += 4)
+    if (buf[i] + buf[i + 1] + buf[i + 2] > 20) lit++;
+  return { uri: cv.toDataURL('image/png'), lit, of: w * h };
+};
+</script>

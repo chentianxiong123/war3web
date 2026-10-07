@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>魔兽争霸3 · Terenas 对战</title>
+<link rel="icon" href="/favicon.png">
+<link rel="stylesheet" href="/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "/three/build/three.module.js",
+  "three/addons/": "/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<!-- the flat layer between world and interface: health bars over units, drawn
+     in world space but as rectangles, the way Warcraft III draws them -->
+<canvas id="overlay"></canvas>
+
+<div id="loading"><div class="box"><h1>FOC<span>S</span></h1>
+  <p id="loadmsg">connecting…</p><div class="bar"><i id="loadbar"></i></div></div></div>
+
+<!-- lobby / hero pick -->
+<div id="lobby" class="hidden">
+  <header>
+    <h1>魔兽争霸<span>3</span> <small>Terenas 之战 — 官方对战</small></h1>
+    <div id="objective"></div>
+  </header>
+  <div class="lobby-main">
+    <aside id="teams"></aside>
+    <section id="picker">
+      <div id="tavtabs"></div>
+      <div id="heroGrid"></div>
+    </section>
+    <aside id="heroDetail">
+      <!-- the canvas outlives each selection: rebuilding it would leak a WebGL
+           context per hero picked -->
+      <canvas id="heroSpin" width="280" height="280"></canvas>
+      <div id="heroInfo"><p class="dim">等待开始…</p></div>
+    </aside>
+  </div>
+  <footer>
+    <input id="pname" maxlength="18" placeholder="你的名字">
+    <button id="btnTeam0">加入红方</button>
+    <button id="btnTeam1">加入蓝方</button>
+    <button id="btnLang" title="Show the map's own Korean text, or the English overlay">EN</button>
+    <button id="btnReady" class="primary">准备</button>
+    <span id="lobbyMsg"></span>
+  </footer>
+</div>
+
+<!-- in-game HUD -->
+<div id="letterbox"><div class="bar top"></div><div class="bar bottom"></div></div>
+<div id="hud" class="hidden">
+  <!-- Warcraft III's own console, built from ConsoleUI.fdf. First child so it
+       sits behind every panel that lives in its slots. -->
+  <div id="console"></div>
+  <!-- Warcraft III's own top strip: the resource readout on the right and the
+       Quests/Menu/Allies/Chat buttons on the left, from ResourceBar.fdf and
+       UpperButtonBar.fdf. The game anchors these to the screen rather than to
+       the console, which is why ConsoleUI.fdf says nothing about them. -->
+  <div id="uitop"></div>
+  <div id="topbar">
+    <div class="score"><b id="k0">0</b><span>红方</span></div>
+    <div class="score-mid" id="scoreMid">Terenas 对战</div>
+    <div class="score"><span>蓝方</span><b id="k1">0</b></div>
+  </div>
+  <!-- Warcraft III's timer dialog: this map runs its duel countdown through one -->
+  <div id="gameclock" class="hidden"><span id="clockTitle"></span><b id="clockTime"></b></div>
+  <div id="minimap"><canvas id="mmcanvas" width="200" height="300"></canvas></div>
+  <!-- Warcraft III's console shows the unit itself, animated, in its own arch
+       between the minimap and the info panel. Same renderer as the lobby
+       preview, so it is lit the way the game lights it. -->
+  <canvas id="unitPortrait" width="160" height="160"></canvas>
+  <div id="portrait">
+    <div class="pinfo">
+    <div id="pname2"></div><div id="heroClass"></div>
+    <div class="bars">
+      <div class="bar hp"><i id="hpbar"></i><span id="hptext"></span></div>
+      <div class="bar mp"><i id="mpbar"></i><span id="mptext"></span></div>
+      <div class="bar xp"><i id="xpbar"></i></div>
+    </div>
+    <div id="stats"></div>
+    </div>
+  </div>
+  <div id="inventory"></div>
+  <div id="abilities"></div>
+  <!-- RTS 命令面板: 建造/训练按钮 (不占右下角技能格 #abilities) -->
+  <div id="commands"></div>
+  <div id="log"></div>
+  <div id="respawn" class="hidden"></div>
+  <div id="gameover" class="hidden"></div>
+  <div id="hint">left-click select · right-click smart order · Shift to queue · Tab / Shift+Tab subgroups · numpad 7/8, 4/5, 1/2 items · F10 menu and scoreboard</div>
+</div>
+<div id="score" class="hidden"></div>
+
+<!-- A dropped socket leaves the last frame standing with nothing moving in it,
+     which reads as the game having hung. Say what happened instead. Outside
+     #hud and #lobby because the connection can go at either. -->
+<div id="disconnected" class="hidden"><div class="box">
+  <h2>connection lost</h2>
+  <p>reconnecting…</p>
+  <button id="btnRejoin">Refresh</button>
+</div></div>
+
+<!-- which build is on screen. Deliberately outside #hud and #lobby: the first
+     question about a bug is always which build it is, and that is as true at
+     the character select as it is mid-match. -->
+<div id="build" title=""></div>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

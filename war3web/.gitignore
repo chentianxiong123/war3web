@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------- game data
+# Warcraft III's archives and the map itself. These are Blizzard's and the map
+# author's work, not this project's -- supply your own copy. Everything below
+# them is *derived* from them by the pipeline, so it is regenerated rather than
+# committed: see the README for the build order.
+#
+# Note: git takes no trailing comments on a pattern line, so each of these
+# stands alone. A pattern written "extracted/  # unpacked map" matches nothing.
+*.mpq
+*.w3x
+*.w3m
+
+# unpacked map: script, object data, imported art
+extracted/
+
+# unpacked Warcraft III: models, textures, sounds, SLKs
+war3_extracted/
+
+# converted glTF, PNG and OGG
+assets/
+
+# the staged client tree
+public/
+
+# compiled tables: units, items, abilities, terrain
+data/
+
+# the deployable bundle, built by tools/make_serve.py
+serve/
+
+# ------------------------------------------------------------------- working
+node_modules/
+.tmp/
+.venv/
+__pycache__/
+*.pyc
+.claude/
+
+# screenshots and scratch output from the verification tools
+*.png
+!docs/**/*.png

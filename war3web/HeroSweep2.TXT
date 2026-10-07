@@ -1,0 +1,1056 @@
+FOC Web -- Sweep 1, second half: PARTIAL RESULT (5 of the 13 uncovered heroes)
+==============================================================================
+
+Written 2026-09-13, mid-run, because the session was about to run out of
+budget. Same method as HeroSweep.TXT: one read-only finder per hero, then a
+hostile verifier prompted to REFUTE every non-CORRECT row. To save budget this
+half used ONE verifier per hero (covering all its non-CORRECT rows) rather than
+two per row, so "SURVIVED" here means one hostile lens, not two.
+
+THIS IS A QUEUE OF CANDIDATES, NOT CONCLUSIONS. Confirm before fixing. Nothing
+here has been reproduced in play.
+
+==============================================================================
+IF YOU READ ONLY ONE PAGE, READ THIS ONE
+==============================================================================
+The sweep converged on a small number of ENGINE faults that surface on hero
+after hero, rather than on per-hero mistakes. Ranked by what a fix buys:
+
+ 1. X13  34 abilities across 20 of 26 heroes -- 11 of them ultimates -- can
+         never be levelled past rank 1, because two compiled tables disagree
+         about how many levels an ability has and the one that gates skill
+         points has no fallback. Already recorded for 3 abilities; now
+         measured at 34. Biggest single gameplay defect found.
+ 2. X1   108 of 108 cleared art fields across 87 abilities come back from
+         the base defaults. NOT cosmetic: where the field is the missile,
+         the ability gains a projectile and the whole payload is deferred to
+         impact, which delays damage and breaks two channelled spells (X3).
+         GATED on an unproven premise -- see the entry before touching it.
+ 3. recalc's isHero gate  Carried burn damage and attribute bonuses reach
+         only heroes, so Ace's fire wall and Byakuya's petals -- the damage
+         half of two signature ultimates -- deal nothing. Three sightings.
+ 4. X11  setAbilityLevel(...,0) DELETES an ability here. The map reads a
+         level off the wrong variable in at least two places, so the payload
+         silently vanishes; in retail it may clamp to 1 instead. ONE SOURCED
+         ANSWER settles Uryu's A03F, Kimimaro's A047 and Gaara's A05P.
+ 5. X10  A numeric stop order force-casts the unit's first ability. Real,
+         player-visible, and a new case of a defect already on record.
+
+TWO PROCESS FINDINGS, which cost more than any single row:
+ - X12  The repo already records deliberate omissions WITH REASONS in
+        tools/unread_accepted.json, and several "findings" here were
+        restatements of decisions already made. Future sweeps must read it.
+        One entry in it is also WRONG (Zoro's A03H) and needs correcting.
+ - Four of my own framings were overturned by verifiers, and two stale notes
+   were found in the existing files. The verify half earned its cost: it
+   refuted or corrected something in 8 of the 9 claims sets it examined.
+
+Heroes covered:   Shiki Tohno (H00M), Gaara (H023), Portgas D. Ace (N016),
+                  Kisame Hoshigaki (H02A), Uryu Ishida (O006).
+Also covered:     Ichigo Kurosaki (H00C) -- clean; Itachi Uchiha (H00K);
+                  Byakuya Kuchiki (H00N); Goku (H00B) -- near clean;
+                  Roronoa Zoro (H00L).
+Also covered:     Alucard (H003).
+Also covered:     Kimimaro Kaguya (H01A), Rob Lucci with Hattori (N003).
+COVERAGE IS NOW COMPLETE. All 13 heroes of the uncovered half have finder
+data, so with HeroSweep.TXT's 13 the whole 26-hero roster has been swept.
+In flight:        Kimimaro's verifier (the X13 rank-lock count).
+
+STATE WHEN WRITTEN
+------------------
+  Shiki   finder DONE, verifier DONE (results below, verdicts applied)
+  Gaara   finder DONE, verifier DONE 2026-09-13 (verdicts applied below)
+  Ace     finder DONE, verifier DONE 2026-09-13: 3 SURVIVED, 0 refuted
+  Kisame  finder DONE, verifier DONE 2026-09-13: 2 SURVIVED, 1 PARTLY
+  Uryu    finder DONE, verifier DONE 2026-09-13: 1 PARTLY, 1 REFUTED (and
+          the refutation found something worse), 1 PARTLY
+Finder summaries were also saved in the session scratchpad (sweep2_*.txt) but
+that directory does not survive; this file is the record.
+
+UNCOMMITTED WORK IN repo/ FROM THE SAME SESSION (two themes, commit separately)
+------------------------------------------------------------------------------
+  Theme "stub natives" (TODO.txt entry dated 2026-09-12 under "The stub
+  natives, ranked"): server/jass/engine.js, server/room.js, client/js/main.js,
+  client/js/render.js, client/js/ui.js, client/index.html, client/style.css,
+  tools/soundsets.py, tools/stage.py, tools/stubs_test.mjs (new),
+  tools/cinemode_test.mjs (new), TODO.txt.
+  Theme "rejoin" (TODO.txt NETWORK entry dated 2026-09-13): server/room.js,
+  server/index.js, client/js/net.js, client/js/main.js, client/js/ui.js,
+  client/index.html, tools/rejoin_test.mjs (new), TODO.txt.
+  Both are copied into repo/ and the full suite passed 63/63 with both in.
+  Not committed, not pushed. Suggested subjects:
+    "Answer the reached stub natives: selection, cinematic mode, queued animation, sound labels"
+    "Hold a dropped player's seat and let the client reconnect"
+
+==============================================================================
+CROSS-HERO FINDINGS (worth their own TODO rows once confirmed)
+==============================================================================
+
+X1. [SURVIVED, one lens] The compiler keeps art the author blanked.
+    tools/abilities.py:34-38 text('') returns None and the override loop at
+    225-229 only writes non-None, so a w3a art field set to "" falls back to
+    Blizzard's base art. Verifier's count: 108 blanked art fields in
+    data/war3map.w3a.json (amat 60, atat 12, acat 10, aeat 7, asat 6, alig 6,
+    aaea 5, aani 1 in custom; 1 in base), all 108 still carry a value in
+    data/abilities.json. 58 of the amat blanks compile with missileSpeed > 0;
+    of those 15 are dummy-only abilities ordered by id (castDummy -> execute,
+    no missile ever flies: A05F A05J A04O A05G A021 A03W A03X A04Q A063 A067
+    A01L A04L A05E A06I A06T) and 43 are on real rosters and DO fly a missile
+    the author removed (A05D, A06A, A060's InfernalBirth effect, A069's
+    SilenceAreaBirth, A05Q's caster/target art, A05J's BPSE buff art ...).
+    MEASURED MAP-WIDE by Itachi's verifier: 108 of 108 explicit art blanks
+    are ignored, across 87 distinct abilities. Largest groups: 30 amat on
+    AHtb StormBoltMissile, 11 on AOsh/ACsh ShockwaveMissile, 8 on AUcs
+    CarrionSwarmMissile, 6 full AOcl sets (missile + BoltImpact +
+    "CLPB,CLSB"), 5 acat ThunderClapCaster, 5 aaea BlinkTarget. The map uses
+    "" as its only blank form, so text()'s handling of '-' and '_' never
+    bites here. Not recorded in TODO.txt or Shelved.txt.
+    THE ONE PREMISE THAT IS NOT ESTABLISHED, and it gates the whole fix:
+    whether retail Warcraft III honours an empty-string override as "no art"
+    or itself falls back to the base's art. That is not in the MPQs or the
+    .w3x. If retail also falls back, the port is accidentally CORRECT and
+    only the code reads wrong. Settle this before changing tools/abilities.py
+    -- this is precisely the shape of plausible inference the project has
+    had to revert before.
+    Fix shape (only if the premise holds): treat "" as an explicit clear in
+    tools/abilities.py, then
+    re-run the ability compile + stage. Also same class: abuf "" (A05J,
+    A05F) compiles to the SLK's default buff.
+    THIS IS NOT ONLY COSMETIC, and it is the most widespread finding in the
+    sweep -- independently hit by Shiki, Gaara, Ace, Itachi and Goku. Where
+    the leaked field is amat, the ability gains a MISSILE it should not
+    have, and world.js:2322-2325 launches whenever art.missile and a
+    positive missileSpeed are both present. That defers the whole payload to
+    impact. Consequences already recorded elsewhere in this file: Goku's
+    signature 에너지파 is delayed up to 0.45 s over its 900 range and draws
+    an undead bat swarm; Kisame's A04C and Gaara's A03T have their channel
+    broken entirely by the same deferral (X3). So fixing X1 also fixes part
+    of X3.
+
+X2. [VERIFIED, and it carries NO information at all] tools/abilities.py:320
+    reads `m.get('atar:1') or b.get('targs')`, and AbilityData.slk has no
+    bare `targs` column -- only targs1..targs4 (verifier dumped the header
+    row). So b.get('targs') is always None and `targets` is "" for every
+    ability the map did not override with atar:1 (569 of 1046 by the Gaara
+    finder's count). Proof it is an artifact and not a reading of the data:
+    A04C's SLK targs1 is "ground,structure,debris,enemy,neutral" and it also
+    compiles to "". Correction to the finders: an empty `targets` therefore
+    does NOT mean the retail row said '_' (instant self-cast), so it cannot
+    be used as evidence either way about a spell's target mode.
+
+X3. [VERIFIED for A03T, with one exception] Missile-first cast breaks channelled bases (ANst Stampede
+    on A03T Gaara and A04C Kisame): with art.missile + speed the ANst case
+    runs on impact, c.channels is empty on the cast tick, castEffect calls
+    finishCast at once -> FINISH and ENDCAST fire immediately, CHANNEL_HOLDS
+    holds nothing, the caster is free, the bombardment cannot be
+    interrupted, and any map ENDCAST trigger runs before the spell's own
+    effect trigger's units draw a frame (A04C: nine nhem waterfalls created
+    on EFFECT are removed by ENDCAST on the same tick, formatted.j 6931-6950).
+    Gaara's verifier confirmed the mechanism on A03T and found the one exit:
+    world.js:2329 `if (!target && hypot(tx-caster.x, ty-caster.y) < 64)
+    return false`, so a click at the caster's own feet with no unit under it
+    DOES take the synchronous path and is held and interruptible for the full
+    10 s. Otherwise the bombardment stops only if the caster dies
+    (world.js:1664). And the waves centre on the missile's IMPACT point, not
+    the click: a point-mode click that lands on a unit still sends targetId,
+    so the missile homes and the disc can end up ~0.6 s of travel from where
+    the player clicked. Kisame's A04C is being checked separately.
+
+X4. [VERIFIED, and the retail question is SETTLED] UnitRemoveAbility with a
+    BUFF id must strip the buff, and here it does not.
+    Blizzard.j:2588-2590 defines the World Editor's own "Remove Buff" action
+    as UnitRemoveBuffBJ(buffcode, unit) { return UnitRemoveAbility(unit,
+    buffcode) }, and UnitHasBuffBJ (:2583-2585) as GetUnitAbilityLevel(unit,
+    buffcode) > 0. So passing a buff code to UnitRemoveAbility IS how
+    Warcraft III removes a buff -- not UNESTABLISHABLE after all.
+    The port: engine.js:638 -> world.removeAbility world.js:822-828 deletes
+    from u.abilities, calls holdReleasedBy and recalc, and never prunes
+    u.buffs; u.buffs is pruned only on expiry (world.js:2089), and
+    abilityLevel (world.js:829-846) answers UnitHasBuffBJ off u.buffs while
+    b.until > now.
+    Two corrections to the finder. The map does this in THREE places, not
+    two: formatted.j 6149 'Bmlt' (a buff of A04X/A011, Amls), 6484 'B00X',
+    7481 'B00H'. And removeAbility is NOT buff-blind -- it already calls
+    holdReleasedBy (world.js:1970-1977), built for this very pattern. It does
+    nothing for B00X only because the AEer case (abilities.js:653-667)
+    returns {ok:true} with no `hold`, where Amls (abilities.js:706-719)
+    returns one and castEffect stores it (world.js:1907). The fix is one
+    `hold:` return away, not a new mechanism.
+
+X13. [from Kimimaro, UNVERIFIED -- potentially the most consequential item
+    in either half] TWO COMPILED TABLES DISAGREE ABOUT HOW MANY LEVELS AN
+    ABILITY HAS, and the one that gates skill-ups wins.
+    When the map sets no `alev` override, tools/abilities.py (~301) falls
+    back to the base ability's SLK `levels` column, so data/abilities.json
+    gets the right count. tools/compile_game.py (~178) does NOT have that
+    fallback -- `nlev = lvl_get(m,'alev',0,1) or 1` -- so data/game.json
+    stamps maxLvl 1. server/room.js loads game.json, and its LEARN handler
+    refuses any further point once the level reaches learnCap, which reads
+    maxLvl. The player can never put a second point into such an ability.
+    On Kimimaro this hits A047 (locked at 1500 damage instead of scaling to
+    4500) and A04P, HIS ULTIMATE at required level 20 -- a twelve-spike
+    ring whose payload deals 2000/4000/6000 per spike, frozen at the 2000
+    row, a 24000 ceiling instead of 72000.
+    VERIFIED 2026-09-13, every link re-derived. AND THE COUNT IS IN:
+
+      34 ABILITIES, ACROSS 20 OF THE 26 HEROES, 11 OF THEM ULTIMATES
+      (required level 20 or above). 34 of the 130 hero-ability slots on the
+      roster; 34 of the 57 that currently read maxLvl 1. Reverse mismatch:
+      zero. 17 distinct bases involved.
+
+      H003 Alucard   A036 A050     H01D Rock Lee  A03R A06J
+      H00K Itachi    A00K A02W     H01W Haku      A059
+      H00L Zoro      A01M          H023 Gaara     A03O
+      H00M Shiki     A056 A05I A066  H026 Robin   A06O A06R
+      H00O InuYasha  A03K          H02A Kisame    A069 A06A
+      H00T Yusuke    A025          N00M Gilgamesh A007 A02C
+      H019 Akiha     A044 A048     N00W Luffy     A04N A04W
+      H01A Kimimaro  A047 A04P     N016 Ace       A05N
+      H01B Renji     A065          O001 Sandaime  A02N
+                                   O002 Eneru     A01P A01V A01X
+                                   O006 Uryu      A03F A05R
+
+    THE CORROBORATION THAT SETTLES INTENT: two hero abilities, A05V and
+    A05P, DO have alev:0 = 1 written explicitly, and they genuinely have one
+    rank. When the author wanted a single rank he said so. The 34 that say
+    nothing are meant to have three -- and all 34 also carry a levelSkip of
+    5 to 10, which is meaningless on a one-rank ability.
+    NOT A DISCOVERY: HeroSweep.TXT:2878-2884 already states this exactly for
+    Rock Lee's A06J, naming both files and the gate, and repeats it at :3189
+    for A02N and :4298 for A03R. This is a CONFIRMED-OPEN KNOWN BUG WITH 31
+    NEW INSTANCES and, now, a measured scope.
+
+X12. [PROCESS, and it applies to everything above] tools/unread_accepted.json
+    ALREADY RECORDS deliberate omissions with reasons, and neither finders
+    nor I checked it consistently. Byakuya's verifier found that three of
+    that hero's "findings" are restatements of documented decisions:
+    A00T|3, A00T|4 and A00T|5 (the swarm's per-target cap and its life
+    return, left unread because the return needs the swarm's own damage
+    first), and A02G|1 / A02H|1 (Apig names no interval field of its own, so
+    it was "left unread rather than guessed at" -- which is CLAUDE.md's rule
+    working as intended, not a bug nobody noticed). Any future sweep prompt
+    must name this file alongside TODO.txt and HeroSweep.TXT.
+
+X11. [from Uryu's verifier -- NEEDS ONE SOURCE CHECK, then it is a big one]
+    SetUnitAbilityLevel(u, id, 0) DELETES the ability here; retail clamps to
+    at least 1.
+    world.js:852 is `if (n === 0) u.abilities.delete(k); else
+    u.abilities.set(k, n)`. The verifier states Warcraft III clamps
+    SetUnitAbilityLevel to >= 1 instead. THAT CLAIM IS NOT YET SOURCED from
+    the archives -- common.j declares the native without semantics -- so it
+    must be confirmed before anything is changed, exactly the kind of
+    plausible-sounding inference this project has had to revert before.
+    Why it matters if true: the map reads a level off the WRONG unit in at
+    least one place (see Uryu A03F below), which in retail still leaves the
+    dummy holding the ability at level 1 and dealing its level-1 damage,
+    while here the ability is deleted and the spell does nothing at all. The
+    Gaara finder hit the same question from the other side (A05P cast before
+    A05K is learned) and recorded it as UNESTABLISHABLE. One answer settles
+    both.
+
+X10. [VERIFIED as a mechanism, BUT MY FRAMING WAS WRONG IN FOUR WAYS AND IT
+    IS NOT NEW] A numeric stop order force-casts an ability instead.
+    world.js order() (~951-958) tests for a numeric order and calls
+    castDummy -- "run this unit's first non-passive ability" -- BEFORE it
+    ever checks whether the order is a stop. Warcraft III order id 851972 is
+    stop, and the map issues IssueImmediateOrderById(GetTriggerUnit(),
+    851972) to cancel a cast at 6 sites (grep -c "851972" = 6). So every one
+    of those refusals instead makes the hero cast their first non-passive
+    ability. For Byakuya that is always A02F (Blink), because A02F is
+    granted at unit creation (world.js:447) before any skill point is spent
+    and AInv is passive, so it is deterministically first in his ability
+    map -- and with no target passed, tx,ty default to his own position, so
+    distance 0 is clamped UP to Ebl2 = 50 and he teleports 50 units due east
+    with no art. castDummy also returns true without checking the ability
+    ran, and bypasses castEffect, so no cooldown or mana is spent.
+    The mechanism is confirmed twice over: castDummy returns at
+    world.js:957 before the stop test, and even if it did not, String(851972)
+    could never match the /stop|halt/ test at :959.
+    FOUR CORRECTIONS, all against what I wrote first:
+     1. "851972 is stop" is NOT derivable in this repo. There is no order-id
+        table in war3_extracted, and OrderId() here is a hash of ours that
+        can never match a literal the script passes. TODO.txt:1281-1283
+        already says exactly this. The reading is supported only by the six
+        call contexts, which all read as "abort".
+     2. Only 4 of the 6 sites are cast cancels. Line 3988 is an item-use
+        trigger; line 5183 is an attack trigger that stops the ATTACKER, and
+        that unit carries a passive-base ability, so castDummy returns false
+        and the stop is silently dropped instead of becoming a cast.
+     3. "Instead of stopping the hero" is wrong: interruptCast(u) runs
+        FIRST, unconditionally (world.js:955), so a cast in progress IS
+        broken off. What is lost is the idle order and the cleared path --
+        the unit keeps walking or attacking -- plus the spurious hop.
+     4. It does NOT break three of Byakuya's gates. Two hold correctly and
+        only suffer the hop. A00T's IS broken, by a DIFFERENT cause:
+        castEffect runs runAbility before firing SPELL_EFFECT, AUls is not
+        in CHANNEL_HOLDS, and the swarm list is one interruptCast never
+        touches -- so the petals keep spawning for the full duration and the
+        cooldown was already stamped. That persists even if the stop were
+        handled correctly.
+    AND IT IS NOT NEW: TODO.txt:1275-1283 already records "castDummy runs
+    the first ability the dummy holds, not the one ordered" with the Rock
+    Lee example, and HeroSweep.half1.json records the same for the blink
+    guard. This is a new CASE of a recorded defect, not a discovery.
+
+X9. [VERIFIED, with MY OWN FRAMING CORRECTED] A map condition gated on an
+    unimplemented boolean native fails closed forever.
+    Confirmed: IsUnitIllusion is declared `constant native` in common.j:1576,
+    wrapped by Blizzard.j:3689, and implemented nowhere -- grep -rni
+    "illusion" server/ returns 0 hits, and installNatives builds one literal
+    object with no computed keys or proxy. The filter really is evaluated
+    and really does fail: fillGroup (engine.js:1485-1501) runs filter.fn and
+    skips on a falsy return, so the group is empty.
+    CORRECTION TO WHAT I WROTE HERE FIRST: it is NOT silent, and the vm.js
+    path I cited is not the one taken. engine.js:93-100 pre-registers a
+    COUNTED NO-OP for every declared-but-unimplemented native, records it in
+    eng.unimplemented and surfaces it at engine.js:146, so the interpreter
+    already knows and reports. The boolean still comes back false
+    (vm.js:64), but "nothing reports it" was wrong and I should not have
+    written it without checking.
+    ALSO STALE, do not use as evidence either way: data/jass_missing.json
+    lists JASS KEYWORDS (if, and, return, exitwhen) and several BJs that
+    work fine (GetSpellAbilityId, ForGroupBJ, TriggerRegisterAnyUnitEventBJ,
+    all present in Blizzard.j and loaded by boot.js), and does NOT list
+    IsUnitIllusion.
+
+X5. [UNVERIFIED] No server path plays ability sounds (aefs / AbilitySounds):
+    every hero's cast sound is silent. AbilitySounds.slk is not among the
+    extracted Units/ files per the Ace finder (UI/SoundInfo/AbilitySounds.slk
+    does exist and is compiled into soundlabels.json). Consistent across
+    all four heroes.
+
+X6. [UNVERIFIED] SetUnitScalePercent -> engine SetUnitScale writes
+    u.renderScale, which is not in the snapshot and has no client reader:
+    every script-driven unit scaling is lost (A06B's nhef, A060's h006).
+
+X7. [UNVERIFIED] UnitDamageTarget passes attackType/damageType but
+    world.damage ignores them and uses the caster's own attack type.
+    Irrelevant against hero armour today (the finders disagree on whether a
+    damageBonus table is loaded at all: Gaara's says data/gameplay.json has
+    one, Kisame's says data/game.json has none -- check).
+
+X8. [UNVERIFIED] AoE and line damage do not skip Locust units (isLocust is
+    consulted only for acquisition, world.js 2164/2213/2382); dummies with
+    hp 1-5 die to any splash. Retail rule not in the data.
+
+==============================================================================
+PER-HERO ROWS
+==============================================================================
+
+SHIKI TOHNO (H00M) -- verified
+------------------------------
+1. [MEDIUM] A05H 극사나나야 (ANsb) -- APPROXIMATE, SURVIVED (mechanism)
+   ANsb has code = AHtb in AbilityData.slk but no case, alias or
+   HANDLED_BASES entry in server/abilities.js -> default fallback deals one
+   spell hit of Htb1 7000/10000/13000 (w3a Htb1:1..3) and nothing else. The
+   stun (SLK Dur 5/7/9, HeroDur 3/4/5) and buff B00R (w3a abuf:1..3) are
+   never applied. Verifier corrected the timing: the MoonPriestessMissile
+   flies at 1000 over range 1600/1800/2000, so the target is freed 1.2-3 s
+   early at L1 up to 3.2-5 s at L3 relative to Warcraft III (the map's own
+   trigger mk, formatted.j 6436-6470, pauses it ~1.8 s regardless).
+   Fix shape: alias ANsb -> AHtb plus a slot_test CONTRACT entry.
+2. [LOW] A05D 섬소·팔천 (AUcs) -- APPROXIMATE, SURVIVED
+   Case abilities.js:309-313 -> world.lineDamage 1553-1568 deals Ucs1
+   300..1500 over Ucs3 800 (SLK DataC1) at constant half-width Ucs4 300;
+   retail widens Area1 100 -> 300. And it flies CarrionSwarmMissile the
+   author blanked (amat:0 = "", see X1).
+3. [LOW] A056, A066, A05I -- CORRECT (base zeroed and left at zero; the
+   trigger payloads A03X / A05F Storm Bolts run through castDummy -> AHtb
+   case; ANdb procs pinned by proc_test).
+
+GAARA (H023) -- VERIFIED 2026-09-13 (one hostile lens)
+-----------------------------------------------------
+1. [HIGH] A05Q 사폭장송 (AHtc) -- APPROXIMATE
+   Trigger 6475-6488: every B00X holder map-wide takes A05J (AHtb, Htb1
+   300..1500, 2 s stun) via castDummy, then UnitRemoveAbility(victim,'B00X')
+   is meant to release Sand Coffin -- it releases nothing (X4), so victims
+   stay rooted + burning for A05K's full duration and are hit again every
+   5 s. The zeroed AHtc base still runs the Thunder Clap case with area||300
+   and calls damage(...,0) on every enemy in 300: sets lastAttackedAt, pulls
+   allies via callForHelp, fires DAMAGED events for 0.
+   SURVIVED on the core. Verifier adds: the 0-damage sweep is invisible
+   client-side (main.js:351 guards ev.amt > 0), but lastAttackedAt is read at
+   world.js:2146 for the creep leash, so spamming A05Q every 5 s keeps every
+   creep within 300 chasing forever; callForHelp returns early for controlled
+   units, so it pulls creeps and not heroes. See X4 for the two corrections.
+2. [MEDIUM] A05K 사박궤 (AEer) -- APPROXIMATE
+   Numbers right (Eer1 100..500 dps, adur 5..13). spell_targets.json says
+   "point": a ground click burns the 15 s cooldown for nothing because
+   castEffect ignores the case's 'need target' result. Four point-mode hero
+   spells whose case needs a unit: A025, A05K, A009, A011. Never released
+   by A05Q (above). ahdu written only at L4; compiled L5 hero duration 5.0
+   is a clamp to SLK HeroDur3, not a map value: compiled heroDuration is
+   3,4,5,6,5, non-monotonic, because tools/abilities.py:302-303 clamps ranks
+   4 and 5 to HeroDur3 and the map's ahdu:4 then overwrites only rank 4.
+   SURVIVED, and worse than reported: A05K has NO trigger at all (one grep
+   hit, 6504, where A05P merely reads its level), and
+   tools/spell_targets.mjs:21-30 documents "point" as the DEFAULT when no
+   GetSpellTargetUnit read occurs. The "point" label is classifier fallout,
+   not map evidence -- a unit-target root mislabelled, and the silent
+   cooldown burn is the consequence.
+3. [MEDIUM] A03T 유사폭류 (ANst) -- APPROXIMATE
+   Slots right (Nst1 waves/s, Nst3 damage, Nst4 radius). But X3: missile
+   first, no hold, uninterruptible, full-disc pulse within Nst4 (200..120)
+   rather than beasts crossing aare (300..500). Nst3:2 absent -> compiled 60
+   = SLK DataC1 (clamp; 60 is Blizzard's row and it breaks the map's own
+   25/50/75/100/125 arithmetic). Stampede sounds staged but never played
+   (X5). SURVIVED on the data, PARTLY on the code path -- see the <64
+   exception in X3.
+4. [LOW] A05M 인주력 (AEme) -- APPROXIMATE: forms/hp bonus/durations right;
+   whether the alt type's own base stats replace the hero's on morph is
+   UNESTABLISHABLE from the data.
+5. [LOW] A03O, A05P, AInv -- CORRECT (script-delivered; crater native real).
+
+PORTGAS D. ACE (N016) -- VERIFIED 2026-09-13, all three claims SURVIVED
+-----------------------------------------------------------------------
+The verifier could not break any of the three and added the corrections
+noted per row. Only cosmetic quibble: A05N is an arlv-10 skill, not Ace's
+ultimate (A060 is, at arlv 25).
+1. [HIGH] A05N 불의장벽 (AOsw) -- DEAD
+   Engine summons nothing (Hwe1 o000/o00D/o00E undefined; deliberate, see
+   TODO o00D entry). The real payload is trigger DK 6791-6810: 12 x o007
+   (TownBurningFireEmitter, not a hero) each with A05Y (AIcf Cloak of
+   Flames: Icfd 1000/2000/3000 "Damage Per Duration", aare 150, adur 1.0,
+   abuf B00Z) for 3/6/9 s. AIcf is in PASSIVE_BASES; the only burn path is
+   carriedImmolation (abilities.js ~882-895) called from world.recalc, which
+   returns for non-heroes (world.js ~643). The wall deals 0. Note the
+   tension: TODO.txt ~866-874 calls the Icfd-per-adur reading unproven, but
+   abilities.js already applies it for A020 on Eneru.
+   PARTLY SHARED with Byakuya's petals, but do NOT state it as one root
+   cause -- Byakuya's verifier refuted that wording and it was my mistake.
+   A05N itself is base AOsw and its summon half fails because it names unit
+   types that do not exist. What is shared is one layer down: the BURN on
+   the units involved. Ace's o007 carry A05Y (AIcf), Byakuya's petals carry
+   A02H/A02G (Apig), and both die at recalc's isHero gate -- with Byakuya's
+   dying one step earlier still, since carriedImmolation matches only AIcf
+   and never sees Apig at all. Fix the isHero gate and Ace's wall works;
+   Byakuya's petals need the Apig question answered too, and that one is
+   deliberately unanswered (see X12). A THIRD sighting: Alucard's A037 on
+   n012 reads its attribute bonuses through ATTR_SKILLS, which is likewise
+   read only from recalc, so it too can never run on a non-hero summon --
+   costing nothing there only because the figures happen to be zero. The
+   recalc isHero gate is the single most repeated root cause in this half.
+   SURVIVED. Verifier enumerated every writer of u.immolation in the repo --
+   abilities.js:539 (a cast-only case for other bases), world.js:678
+   (carriedImmolation), :679 (an item bonus), :680 (null) -- and confirmed
+   createUnit guards its recalc on isHero too (world.js:450), so a non-hero
+   never reaches the block at creation either; u.immolation stays undefined
+   and the tick at world.js:2108 never fires. B00Z appears nowhere in server/
+   or in the script. Net: 12 locusted, attackless, 5-HP emitters for 3/6/9 s
+   dealing nothing.
+   STALE NOTE FOUND: TODO.txt:868-869 says Icfd is "850-3000 across A05Y's
+   five levels". The w3a does carry Icfd:4=850 and Icfd:5=1000, but alev:0=3
+   kills levels 4-5, so the live range is 1000/2000/3000 over three levels.
+   Fix the note when fixing the ability.
+2. [MEDIUM] A060 대염계염제 (AUin) -- APPROXIMATE
+   Uin1 6000/10000/15000 in aare 500, h006 for Uin2 5 s, 5 s channel with
+   30 ritual dummies raised on CHANNEL and removed on ENDCAST all run.
+   Missing: BNin stun (Dur 4 / HeroDur 2; 0 refs in server), Uin3 1.0 s
+   impact delay, hostile structures (enemiesInRange filters buildings).
+   Plays InfernalBirth the author blanked (X1). h006's scripted
+   SetUnitScalePercent lost (X6).
+   SURVIVED. Two additions from the verifier: acas 5.0 IS modelled
+   (world.js:1876 sets effectAt from castTime), so the omission list is not
+   exhaustive but nothing on it is wrong; and SetUnitScale drops the y and z
+   arguments entirely (engine.js:670 keeps only x), so the script's 1000%
+   vertical stretch is lost twice over.
+3. [LOW] A05Z 불주먹 (AOsh) -- APPROXIMATE, SURVIVED: right numbers; whole
+   strip hit on one tick when the missile lands; buildings/Locust not
+   excluded. Verifier sharpens the building half into a real divergence
+   rather than an inconsistency: A05Z's atar is "enemies,neutral,ground"
+   with NO structure, so Warcraft III would not hit structures and the port
+   does (world.js:984 allUnits + the loop's only rejection being hostile()).
+   The Locust half is deliberate and documented at world.js:2547-2564.
+4. [LOW] A061 불기둥 (AOws) -- CORRECT (Wrs1 damage, aare, 4 s BPSE stun).
+
+KISAME HOSHIGAKI (H02A) -- VERIFIED 2026-09-13 (2 SURVIVED, 1 PARTLY)
+---------------------------------------------------------------------
+1. [HIGH] A04C 수둔-대 폭포술 (ANst) -- APPROXIMATE
+   X3 in its worst form: EFFECT trigger tK 6931-6940 raises 9 nhem
+   waterfalls, ENDCAST trigger UK 6948-6950 removes them, and both fire on
+   the same tick because the missile-first cast finishes immediately; the
+   caster is not held for the 10 s loop. Damage right (Nst3 1000/2000/3000,
+   2 waves/s from SLK DataA1, 20 waves) but a stationary disc. Nst4/aare
+   only written at L1 (200/600); L2-3 compile to 275/1000 = SLK level-1
+   columns while SLK DataD2/3 and Area2/3 are 200/600 -- which one
+   Warcraft III uses is UNESTABLISHABLE -- and the verifier insists on that
+   wording: ANst's SLK declares levels=1, so whether the World Editor seeds
+   ranks 2-3 from the level-1 columns or from those orphan level-2..4
+   columns is editor behaviour written down nowhere in the archives. Report
+   as unresolved, not as a defect.
+   SURVIVED otherwise, re-derived exactly: the triggers are udg_trigger239
+   on SPELL_EFFECT (cond SK 6928, action tK 6931-6941, nine nhem by grep -c)
+   and udg_trigger240 on SPELL_ENDCAST (cond TK 6942, action UK 6948-6950);
+   execTrigger runs a sleepless action to completion (engine.js:177-193), so
+   no snapshot can interleave and the nine waterfalls never reach a client at
+   all. They are not filtered as dummies either -- nhem names a real
+   Waterfall model, so isDummy (world.js:2575-2587) is false. CHANNEL_HOLDS
+   (world.js:182) governs only c.loops and the channel slice, never the exit
+   at world.js:1914, which is why the hold does nothing.
+   One narrowing: the <64 synchronous path needs !target as well, and the
+   client sends targetId whenever the click lands on any entity but the hero
+   (main.js:653), so a close click on a creep still launches a homing
+   missile.
+2. [MEDIUM] A06A 수둔-물 분신술 (AOmi) -- APPROXIMATE, PARTLY (the bounty
+   half SURVIVED; two supporting statements refuted)
+   Omi1 1/2/3 images, dealt 1.0, taken 1.5, 20 s: right. But a self-instant
+   ability (targs '_') is cast as point+missile (spell_targets "point",
+   WaterElementalMissile speed 1000), images appear only on impact, caster
+   art drawn at the click. Killing an image pays the killer bountyPlus 500
+   gold and hero XP (world.js ~439/725/749; nothing sets victim.summoned).
+   The bounty half SURVIVED and is worse than reported: grep for .summoned
+   across server/ gives exactly two hits, the read at world.js:749 and
+   engine.js:897's GetSummonedUnit -- summon() sets summonedBy, never
+   summoned, so the XP discount is dead code for every summon in the map.
+   And expiry routes through killUnit(u, null) -> awardKill too, so enemy
+   heroes in range harvest hero XP off images that merely time out.
+   REFUTED, two supporting statements. An image is NOT a full H02A:
+   world.js:1471-1476 sets isImage, multiplies dmg by Omi2 and sets
+   damageTakenMul to Omi3 = 1.5, so it takes 50% MORE damage, and
+   world.js:423 stamps every summoned hero at level 1 with base stats and no
+   items. And the empty `targets` is not evidence of a retail '_' self-cast
+   (see X2), so "a self-instant ability cast as point+missile" is only
+   established by the missile and spell_targets halves, not by targs.
+3. [MEDIUM] A06B 수둔-오식교 (AUin) -- APPROXIMATE
+   Uin1 350..1750 in aare 200..400, cooldown 15: right. Missing the 2 s
+   BNin stun (adur 2, HeroDur 2). Engine's own nhef lives 1 s instead of
+   0.01 (world.summon floors to 1 s). Trigger's 80-400% scale lost (X6).
+   SURVIVED in every part: BNin has zero references across server/, client/
+   and tools/; renderScale is absent from snapshot() (world.js:2598-2621)
+   and the client reads scale from the static type table instead
+   (main.js:273, render.js:975), so the trigger asks for 80-400% by level
+   and the client always draws 100%. Two additions: the engine case AND the
+   map's LK each create an nhef, so two are made per cast; and the 1 s
+   expiry runs through killUnit -> awardKill, leaking a small XP payout.
+   LK is formatted.j 6848-6886, not 6884.
+4. [LOW] A069 개미 물지옥 (ANsi) -- APPROXIMATE: script runs verbatim, crater
+   real; plays SilenceAreaBirth the author blanked (X1).
+
+ICHIGO KUROSAKI (H00C) -- finder done 2026-09-13. CLEAN.
+--------------------------------------------------------
+No verifier was run: every row came back CORRECT and the only two notes are
+LOW, so there was no non-CORRECT verdict to refute. Recorded as a negative
+result, which is worth as much as a finding -- this hero's machinery (a
+metamorphosis, a form-only ability, a trigger-delivered buff form) is the
+most intricate on the roster and it holds together.
+  A00M 시해:참월 (Aamk)  CORRECT: Iagi/Iint/Istr 25 each, read through
+    ATTR_SKILLS (abilities.js:850) into recalc (world.js:642-663). No script
+    involvement (grep count 0).
+  A013 월아천충 (AUcs)   CORRECT: missile-gated line, 400..1200 damage over
+    Ucs3 1200 at width Ucs4 400, cooldown 20..12. Buff BUcs declared and
+    never stamped, but inert -- its art is the same model the ability's own
+    art.target already plays.
+  A00I 순보 (AEbl)       CORRECT: Ebl1 500 max, Ebl2 50 min, correctly NOT
+    reading the 99999 order range as the hop distance. Only script touch is
+    the shared seven-blink boundary gate at formatted.j 2879.
+  A00J 만해:천쇄참월 (ANcr) CORRECT: a genuine metamorphosis through Eme1 /
+    Emeu (H00C -> O000), form length ahdu 10/20/30/40/60, reverting on its
+    own timer (world.js:2090). LOW note: buff BNcr is never stamped, and in
+    Warcraft III that buff icon IS the remaining-time countdown, so the port
+    shows no timer for Bankai at all -- the model swap is the only cue.
+  O000 (the Bankai form) grants A030 and AInv only; its heroAbilities are
+    deliberately not re-granted so learned ranks survive (world.js:1416-1422).
+    A030 is reachable ONLY while morphed: it is absent from H00C's own
+    ability list and no trigger ever adds it (grep UnitAddAbility.*A030 = 0).
+  A02M 바이저드 (AHtc)   CORRECT: the base's slots are explicitly zeroed by
+    the author and the case honours the zeros (slot() keeps an explicit 0);
+    the real Vizard is the map's triggers -- remove A04D, dummy-cast A02Q
+    (AUfa) to stamp B000, then AGI x2 bonus damage on attack, and learning
+    it permanently destroys the automatic near-death Hollow trigger.
+    STALE NOTE FOUND: TODO.txt's "Ichigo's near-death transformation --
+    art half open" (~line 2237) predates the later buff-art fix; B000's and
+    B001's masks now reach the client through syncBuffArt, and
+    tools/buffart_test.mjs asserts the B001 mask attaches at "head".
+  A030 검은 월아천충 (ANbf) CORRECT: cone half-angle derived as
+    atan2(Ucs4 400, Ucs3 600) ~= 34 degrees rather than a constant, 3000
+    damage, and its BNbf 30% slow IS applied.
+  AInv  CORRECT in effect, APPROXIMATE in method, LOW: every AInv row in the
+    map carries data1 = 6 (measured across all entries), and the engine caps
+    at a hardcoded 6 (world.js:1105) rather than reading the field. No
+    present defect; it would diverge silently if a future row differed.
+
+GOKU (H00B) -- finder done 2026-09-13. NEAR CLEAN.
+---------------------------------------------------
+No verifier was run: every non-CORRECT row here is an instance of X1, whose
+mechanism is already verified (Shiki's verifier re-derived it and counted the
+fields), so there was no new claim to refute. Recorded as instances.
+  A03A 소기탄 (ANcs)   CORRECT: a barrage, not a line -- Ncs3 10..50 shots of
+    Ncs1 30/45/60/60/50 every Ncs2 seconds into the area. Ncs2 level 2
+    (0.25) and Ncs5 (1.0) are genuine SLK fallbacks, not artifacts.
+  A003 초사이어인 (AEme) CORRECT, and it verifies two recorded fixes live
+    rather than restating them: the three forms H00U/H012/H013 are granted
+    their own ability lists on morph, and Eme5 3000/6000/9000 reaches maxHp.
+    A dead fourth rank in the raw data names H00K (Itachi's unit type); alev
+    caps it at 3 so it is unreachable.
+  A03C / A00G / A03B 초사이언 1/2/3 (AIx2) CORRECT: +50 / +100 / +150 to all
+    three attributes, confirmed from the current w3a rather than the note,
+    flowing through ATTR_SKILLS and recalc. LOW: the cho.mdx art two of them
+    declare can never reach the client, because art is emitted only from a
+    played cast and these are never cast. Whether Warcraft III draws target
+    art for an order-less passive at all is UNESTABLISHABLE.
+  A00E 에너지파 (AUcs)  APPROXIMATE, MEDIUM -- X1 instance with teeth. Numbers
+    exact (Ucs1 300..1500, Ucs3 800 from the SLK then 900..1200, Ucs4 200).
+    The author blanked BOTH asat and amat; both leak, so his signature beam
+    draws a Carrion Swarm bat missile and its damage is deferred up to
+    0.45 s to impact instead of applying at once.
+  A00L 원기옥 (AUin)    APPROXIMATE, MEDIUM -- X1 instance. Damage 6000/10000/
+    15000, h006 summoned for Uin2 2 s, and the five-stage cast sequence
+    (CHANNEL raises 24 ring dummies and a charge orb, EFFECT removes the orb,
+    ENDCAST cleans up) all verified, including that the h006 world-bounds
+    entry trigger really fires through checkRegions. Leaked aeat draws an
+    Infernal birth crack over the intended explosion.
+  A03D 순간이동 (AEbl)  APPROXIMATE, MEDIUM -- X1 instance: leaked aaea draws
+    a Night Elf blink flash the author removed. The hop itself is correct.
+    Open and UNESTABLISHABLE: the port teleports before firing SPELL_EFFECT,
+    so the map's blink-into-base guard can only cancel the follow-up order,
+    never undo the hop. Whether retail's SPELL_EFFECT lands before or after
+    an instant blink is not in the files. Note this guard is ALSO an X10
+    victim.
+  AInv  CORRECT for Goku; the 6-slot cap is hardcoded rather than read.
+  SCOPING CORRECTION to my own input list: Aloc is NOT one of Goku's
+    abilities. H00B carries only AInv; the Aloc belongs to the five dummy
+    types his spells spawn.
+
+BYAKUYA KUCHIKI (H00N) -- finder done 2026-09-13, verifier running
+-------------------------------------------------------------------
+1. [HIGH] Cross-cutting: the 851972 "stop" misdispatch -- see X10. It is
+   filed under Byakuya because his gates are where it was caught, but it is
+   a map-wide engine defect, not his.
+2. [HIGH contested -> MEDIUM] A02H / A02G 천본앵 이몰 (Apig) -- DEAD. The petals' immolation,
+   which is the damage-over-time half of his ultimate, is unreachable code:
+   Apig is in PASSIVE_BASES so it is never executed, carriedImmolation
+   matches only AIcf, and recalc returns for non-heroes anyway. Eim1 150 /
+   200 over area 500 for 10 s, delivering nothing. Same root as Ace's fire
+   wall. tools/unread_accepted.json:24-25 already records Eim1 as
+   deliberately unread for exactly these two ids. The verifier makes the
+   stronger point: that file records it as a DECISION with a reason -- Apig
+   names no interval field of its own, so it was left unread rather than
+   guessed at, which is CLAUDE.md's rule working correctly. Severity HIGH is
+   therefore contestable and I have moved it to MEDIUM. Also: Eim1 is
+   "Damage per Interval", not "damage", and the petals are not harmless
+   without it -- uloc has dmgBase 150 and u000 600, attacks enabled. Only
+   the burn layer is missing. See X12.
+3. [HIGH overall] A00T 시해:천본앵 (AUls) -- APPROXIMATE. The swarm itself is
+   CORRECT and data-driven: Uls1 50 petals (ranks 1-5) / 100 (6-10), Uls2
+   0.05 s interval, unit uloc / u000, released by releaseSwarm and
+   stepSwarms (world.js 1630-1655) as real units whose damage is their own
+   unit-type attack rather than an engine figure. What drags it to HIGH is
+   the two items above: its damage-over-time is dead and its exclusivity
+   lock misfires -- though see X10: the lock's real failure is that the
+   swarm is untouchable by interruptCast, not the misdispatch.
+   CORRECTION: Uls3 is "Max Swarm Units Per Target", a count of petals, not
+   a damage cap. Uls3 12, Uls4 0.1 (a w3a override of the SLK's 0.75) and
+   Uls5 20 (SLK DataE1, no override) are all unread in server/, and all
+   three are ALREADY documented as accepted omissions in
+   tools/unread_accepted.json:10-12. A restatement, not a finding (X12).
+4. [MEDIUM] A03S 섬경 천본앵경엄 (ANbr) -- APPROXIMATE. The stat buff is
+   CORRECT and matches the documented roar-case fix: Nbr1 1000/2000/3000
+   damage increase, Roa2 100/300/500 defense, Roa3 150/200/250 regen, 30 s,
+   buff B00N stamped. Its own B013 recast lock hits the X10 misdispatch.
+5. [MEDIUM] A02F 순보 (AEbl) -- CORRECT hop, APPROXIMATE gate. Ebl1/Ebl2
+   read correctly rather than the 99999 order range. The map-wide
+   blink-into-base block hits X10, so for Byakuya specifically the refusal
+   becomes a SECOND blink.
+6. [LOW] A064 섬화 (AHtb) -- CORRECT: Htb1 250..1250 plus a stun, then the
+   trigger blinks the caster to the target and a dummy h005 stomps (A02E,
+   Awrh -> AOws) for a second stun. Both halves traced.
+7. [LOW] A011 육장광뇌 (Amls) -- CORRECT: hold plus Mls1 damage per second,
+   30 (SLK DataA1) then 60/90/120/150, with the right unit-versus-hero
+   duration split. Buffs Bmlc/Bmlt deliberately unstamped and nothing reads
+   them.
+8. [LOW] A00V 종경 백제검 (Awfb) -- APPROXIMATE: falls to the data-driven
+   fallback for 5000 single-target damage, which is all the data states.
+   CORRECTION TO TODO.txt: its note that "Fire Bolt's stun is still not
+   modelled" does not apply -- Awfb's own SLK row carries no BuffID column
+   at all and the map sets no abuf, so there is no stun in the data to model.
+9. [LOW] Aloc -- CORRECT as an approximation, honestly scoped in its own
+   comment (acquisition only, no AoE exemption).
+
+ITACHI UCHIHA (H00K) -- finder done 2026-09-13, verifier running
+-----------------------------------------------------------------
+1. [MEDIUM, downgraded from HIGH by the verifier] A03Y 사륜안 (ACsi) --
+   PARTLY. NEW, and in no existing note.
+   Both halves terminate in nothing. The engine case (abilities.js:719-726)
+   breaks on its first iteration because the map zeroed adur/ahdu to 0.01
+   and the loop opens with `if (dur <= 0.1) break`, so nobody is silenced --
+   which is the map's intent. The script half, trigger ol/Vl (formatted.j
+   7085-7101, trigger245 at 9174-9177), enumerates units within 300 of the
+   target filtered on IsUnitIllusion(GetFilterUnit()) AND enemy -- and
+   IsUnitIllusion is declared `constant native` in common.j (~1576) and
+   implemented NOWHERE in server/jass/, so vm.js (~201) answers it with
+   defaultFor(BOOL) = false (vm.js:61-68), always. The filter never matches,
+   the illusion-marking action never runs. See X9.
+   THREE CORRECTIONS from the verifier, all against the finder (and me):
+     - "zero effect of any kind" is REFUTED. The cast succeeds, sets the
+       30 s cooldown and plays TWO special effects (SilenceTarget and
+       SilenceAreaBirth). The repo's own data/spell_check.json already
+       records this: cast ok, fx 2, silence 0, cooldown 28.
+     - Severity is MEDIUM, not HIGH. What is actually lost is one cosmetic
+       overhead marker (TalkToMe.mdl) over illusions. Illusions really do
+       exist to be marked (AOmi summons with image: true), so it is a real
+       regression against the tooltip, but it costs a visual tell, not
+       damage or crowd control.
+     - The 0.01 duration break is NOT part of the defect: it is the faithful
+       reading of the map's own idiom, and retail would silence for 0.01 s
+       too. The ONLY divergence from the map is IsUnitIllusion.
+     One of the two effects it plays is itself an X1 leak (its aeat was
+     cleared); the other is legitimately inherited, so it stays visible even
+     after X1 is fixed.
+   A03Y is innate on the unit type (w3u H00K uabi = "A03Y,AInv"), not a
+   learned hero skill, so every Itachi has it from the first second.
+2. [MEDIUM] A04B 봉선화의 술 (AOcl) -- APPROXIMATE. The base is zeroed
+   (Ocl1 0, Ocl2 1) and inert by design; the real payload is trigger El/Xl
+   (7104-7121, trigger246): five h016 dummies each carrying A02X (AHtb,
+   Htb1 50..250) ordered at the target, so 250..1250 total with a refreshing
+   3 s stun. Defect: the author cleared amat, atat AND alig, and the port
+   still fires a Chain Lightning bolt, its impact and the CLPB/CLSB strip.
+   Independent confirmation of X1.
+3. [MEDIUM] A00K 츠쿠요미 (AHtb) -- APPROXIMATE. Htb1 explicitly 0, so the
+   primary cast deals nothing but DOES land a real 5 s stun (ahdu 5.0, buff
+   B00E); the damage is trigger Ol/Rl (7130-7168) spawning a dummy with A03W
+   (Htb1 2000/4000/6000) plus a 2 s stun. SURVIVED entirely, and the repo's
+   own data/spell_check.json corroborates it: A00K measures 4955 damage
+   against a stated 1000.
+   Worth carrying forward: castDummy calls runAbility DIRECTLY, bypassing
+   castEffect, so a dummy-delivered ability fires with no missile, no art,
+   no cooldown or mana, and no SPELL_EFFECT event. That is why the X1 leak
+   on A03W's own missile is moot on this path -- and it is a general fact
+   about every trigger-delegated spell in this map. TODO.txt's spellshape_test note
+   about this ability being zeroed is true of the primary cast only and is
+   incomplete on its own. Same cleared-missile artifact (X1).
+4. [LOW] A02S 아마테라스 (AUdd) -- CORRECT mechanically. AUdd is in no case
+   and no alias, but every field is zeroed so the default fallback correctly
+   returns "no engine behaviour" and does nothing; the whole ultimate is the
+   trigger Il/cl (7170-7207): ten A04E flame pillars (AHfs burnGround) plus
+   per-enemy A04Q hits of 4000/5000/6000. Its declared buff B00B is dead
+   code -- never applied by engine or script (grep count 0).
+5. [CORRECT] A02T 화둔-호화구의 술 (ANcf->ANbf): cone plus a real per-second
+   burn, every figure traced; the ANcf->ANbf alias fix holds. No script
+   involvement at all (grep count 0).
+6. [CORRECT] A02W 만화경 사륜안 (ANdb): crit 5/8/10% at x1.25/1.5/1.75 and
+   evade 0.07/0.14/0.21, wired through PROC_BASES into stepAttack both ways.
+
+ROB LUCCI WITH HATTORI (N003) -- finder done 2026-09-13. The 13th and last.
+----------------------------------------------------------------------------
+No verifier was run: every non-CORRECT row is an instance of a class this
+half has already verified elsewhere, and the finder identified them as such
+rather than presenting them as new.
+1. [HIGH, but an instance of an already-verified class] A009 『지건』 (AHtb)
+   -- APPROXIMATE. Damage 200..600 and a 0.5 s stun are correct ON A UNIT.
+   But spell_targets calls it "point", the client only blocks a ground click
+   when the mode is "unit", and castEffect spends mana and starts the
+   cooldown BEFORE the case returns "need target". So a ground click burns
+   the cooldown for nothing. Exactly the Gaara A05K finding, which a
+   verifier already confirmed, and the same four abilities are named:
+   A025, A05K, A009, A011. Confirms the class on a second hero.
+2. [MEDIUM] A00H 『육왕권』 (Awfb) -- APPROXIMATE. Awfb is in no table, so the
+   ability's own execute returns "no engine behaviour"; the real payload is
+   scripted -- pause both units, a wait, then a dummy carrying A06I (AHtb,
+   8000 damage and a 10 s stun) ordered at the target, landing instantly and
+   bypassing the cast timeline. Two visual defects: the terrain ripple is a
+   documented deliberate no-op that TODO.txt names by this very ability id
+   (not a finding), and an X1 leak -- the author cleared amat, so a phantom
+   fireball flies on every cast. Cosmetic only; the missile's impact re-runs
+   the dead default, so no double damage.
+3. [LOW] A00C 『철괴』 (ANbr) -- CORRECT, and it CONFIRMS A RECORDED FIX LIVE:
+   TODO.txt names this ability as one of the two carriers that "did nothing
+   at all" before ANbr moved to the roar case. It now applies armour
+   100/200/400/800/1600 and the value is genuinely spent in recalc. One
+   open note: the case floors the buff at max(5, dur) seconds, so its real
+   3 s hero duration is stretched to 5 at every rank, and no comment
+   justifies that constant for a case with a real duration. UNESTABLISHABLE
+   whether deliberate.
+4. [CORRECT] A00D 고양고양 열매 (AEme -> Nbst): morph, the Eme5 HP bonus
+   1000..5000, and the granting and stripping of the form's own abilities
+   all verified.
+5. [CORRECT] A02D 『날으는 지건』 -- and this ANSWERS THE QUESTION I ASKED:
+   it is reached through NO trigger at all (zero hits, including a search
+   for its decimal FourCC). It is a base ability on the Nbst unit type,
+   granted the instant morph fires and revoked when it ends, ALWAYS at level
+   1 -- it is not in the form's hero-ability list, so level 1 is permanent
+   rather than a starting value. It reaches the command card only because of
+   the recorded cardSlots fix, which this verifies live.
+6. [CORRECT] A00A 『람각』, A00B 『체』, AInv: line damage, blink ranges and
+   the passive marker all read the right fields.
+7. Transitive: Nbst's hero abilities are the same four audited above, it
+   correctly lacks A00D (no re-transforming while transformed), and it
+   summons nothing, so the chain terminates.
+
+KIMIMARO KAGUYA (H01A) -- finder done 2026-09-13, verifier running
+-------------------------------------------------------------------
+1. [HIGH] A04P 고사리싹의 춤 (AHtc) -- DEAD by rank lock. See X13. The
+   payload itself is correct and substantial: the base is zeroed by the
+   map's own idiom (and abilities.js's own comment names this very ability
+   in Korean as one of its four examples), while the trigger spawns twelve
+   dummies in a 30-degree ring each carrying A04T (AUim Impale, damage
+   2000/4000/6000, air time 1.0), delivered through castDummy. Rank 1 is
+   twelve spikes of 2000. It is his ultimate and it can never be levelled.
+2. [HIGH] A047 동백나무의 춤 (AOcl) -- DEAD, and WORSE than the rank lock.
+   The base is explicitly zeroed (already on TODO.txt's list of nine, not a
+   finding); the real payload is a 3-second periodic trigger, fifteen ticks
+   at 0.2 s, each a dummy carrying A04O (AHtb 100/200/300).
+   THE "1500 DAMAGE" FIGURE IS REFUTED. The per-tick level is read off
+   udg_unit40 -- and the script's ONLY assignment to that variable is inside
+   the A04P handler, two lines above ITS own read. So until the player has
+   cast the ULTIMATE at least once, udg_unit40 is null, the level reads 0,
+   and setAbilityLevel(...,0) DELETES A04O from the dummy: all fifteen ticks
+   deal ZERO. The 1500 applies only after the level-20 ultimate has been
+   cast once. This is the third sighting of the wrong-variable pattern (see
+   Uryu's A03F) and it rides on the same unsourced retail-clamp question as
+   X11. A04P's own 24000-versus-72000 figure stands, since its variable is
+   set two lines above its read.
+3. [MEDIUM] A04U 십지천탄 (AOsh) -- APPROXIMATE, an X1 instance and labelled
+   as one: cleared amat leaks, so the line damage is deferred 0.45 s to
+   missile impact and a Blizzard shockwave mesh draws over the map's own
+   six-dummy finger-bone visual. Two corrections: the missile SPEED 2000 is
+   the map's own override and does not leak (only the model does), and the
+   live distance table is 800/900/1000/1100/1200 -- the 1250 belongs to rank
+   10, which alev caps away. Unstated consequence worth keeping: lineDamage
+   takes its angle from the caster's position AT IMPACT, 0.45 s later, and
+   runs its full length beyond the click point.
+4. [CORRECT] A01Z 주인술 (AEme -> O008): the morph works and it CONFIRMS A
+   RECORDED FIX LIVE -- the Eme5 HP bonus (1000..5000) is stored and reaches
+   maxHp through recalc, which was a defect on two other heroes. O008
+   carries an identical hero-ability list and morph deliberately does not
+   re-grant hero abilities, so learned ranks carry through untouched. Its
+   B00O buff is never applied and has no art to lose (its own record in the
+   w3h carries tooltips only, no art field). SURVIVED.
+   CORRECTION TO MY OWN NOTE: I wrote that O008 shares H01A's model so the
+   change is invisible. That is wrong. O008 sets animProps "alternateex"
+   where H01A has none, and the client DOES deliver it -- unitmodels carries
+   it, main.js reads it, render.js turns it into animation tokens, and the
+   view is rebuilt when the unit type changes. Plus 20-odd stat diffs
+   including move speed 250 to 400 and attack cooldown 1.5 to 0.5. The
+   verdict was right; my reasoning for it was not.
+5. [LOW] AInv -- CORRECT by coincidence, already established cross-hero.
+
+ALUCARD (H003) -- finder done 2026-09-13. One HIGH, already on record.
+-----------------------------------------------------------------------
+No verifier was run: the single non-CORRECT row confirms an item TODO.txt
+already carries, and the finder said so itself rather than presenting it as
+new -- which is the behaviour X12 asks for.
+1. [HIGH, but ALREADY RECORDED] A036 밤안개 (AOwk Windwalk) -- DEAD.
+   AOwk has no case, no alias, and is in no table; isPassive is false
+   because its order string is "windwalk", so it falls to the default
+   fallback, where both damage branches fail (no target, area 0) and it
+   returns "no engine behaviour for AOwk". Casting it burns a 15 s cooldown,
+   spawns one cosmetic fog dummy, and grants nothing: no stealth, no move
+   speed (data2 10/40/70%), no backstab (data3 200/400/600). This is
+   Alucard's signature stealth ability.
+   TODO.txt:1253-1254 already says "windwalk is not modelled so Alucard's
+   backstab has nothing to trigger on". CONFIRMED STILL TRUE against the
+   current code, with the numbers attached. Not a discovery.
+2. [LOW] A038 둠 버스트 (AUin) -- APPROXIMATE: damage 4000/5000/6000 in area
+   600 and the h004 summon's 5 s life are exact; only the ~1 s impact delay
+   is dropped, and tools/unread_accepted.json "A038|3" already records that
+   as an accepted timing gap. Not a finding (X12).
+3. [CORRECT] A04Z 크롬웰 (AUcs): an 800-long line for 300..900, plus a real
+   dummy-delivered self-heal of 200..600 scaled to its own rank.
+4. [CORRECT] A02Y 소환술-헬하운드 (AOsf): the default summon path reads the
+   per-level unit id and summons one hellhound for 30 s. The comment at
+   abilities.js:582 records the older bug this replaced, and it is gone.
+5. [CORRECT] A050 구속제어술식 0호 (ANsq): summons 10/15/20 n012 for 70 s,
+   and its retaliation combo works -- the map's own ATTACKED trigger deals
+   50% of Alucard's real agility back to whoever hits a summon.
+6. [CORRECT] The five 치명타 (ACct) on the five hellhounds: exactly
+   20/30/40/50/60 percent at x2 / x2.5 / x3 / x3.5 / x4, delivered through
+   the shared attack-time proc table.
+   ANSWERING THE QUESTION I ASKED: the engine's "strongest wins" handling
+   for several ACct on one unit is real but never exercised -- a scan of
+   every entry in unittypes.json against every ACct-based ability found ZERO
+   units carrying two or more. So the choice the code comment calls out as a
+   choice cannot currently affect anything.
+7. [CORRECT] A037 피의군사 (AIx2) on n012 is a no-op, and harmlessly so: all
+   three attribute figures are genuinely zero in the data. Worth noting for
+   the record that it ALSO could never run, since ATTR_SKILLS is read only
+   from recalc and recalc returns for non-heroes -- the same gate that kills
+   Ace's wall and Byakuya's petals. Here it costs nothing only because the
+   numbers are zero.
+8. [CORRECT] A051, Aloc: both as designed.
+
+RORONOA ZORO (H00L) -- VERIFIED 2026-09-13 (1 SURVIVED, 2 PARTLY; the
+verifier found a real defect the finder had waved off)
+----------------------------------------------------------------
+1. [HIGH] A00W 드래곤회오리 치기 (AOws) -- SPLIT. The primary hit is CORRECT
+   and confirms a recorded fix live: the old Math.max(1, dur) stun floor is
+   gone, the case now does `if (dur <= 0.1) continue` before any buff, and
+   A00W is 0.01 at ALL five levels, so no stun is applied. What is dead is
+   the whirlwind half. Its EFFECT trigger (formatted.j 5295-5301) waits
+   0.2 s and creates one n00T, whose ability list is
+   ["Aloc","Atdg","Atsp","A03G","Aasl"] -- the Blizzard tornado kit:
+   TornadoDamage, TornadoSpin, a custom copy of TornadoSpin, and a slow
+   aura. NONE of those four ids appears anywhere in server/ (no case, no
+   alias, no HANDLED_BASES, no PASSIVE_BASES, no AURA_BASES). n00T is
+   created once, never ordered, never referenced again, and dies on its own
+   negative regen. So a tornado appears, deals nothing, pulls nobody and
+   slows nobody. Note this is pattern (a) applied to a summoned unit's
+   INTRINSIC kit rather than to a cast ability -- a shape the sweep had not
+   hit before.
+   SURVIVED, and strengthened: that ability list is the MAP'S OWN w3u
+   override on n00T, not something inherited from the retail tornado. The
+   author wrote the kit and retuned one member of it -- A03G is a copy of
+   Atsp with its duration cut from 12 to 6. All four ids return 0 hits each
+   across server/, and n00T appears exactly once in the whole script.
+   BUT THE LOSS WAS MIS-DESCRIBED, and the correction matters for sizing any
+   fix. Slots resolved properly: Atdg is Damage Per Second with targs
+   "structure,enemy" -- a STRUCTURES-ONLY ability, so against heroes it
+   deals nothing in retail either. Atsp is Air Time, a toss and spin, not a
+   pull. What is actually lost is the SPIN DISABLE (12 s, 6 s on heroes,
+   radius 275, plus A03G's second 6 s copy) and the -60% MOVEMENT SLOW AURA
+   at radius 600. A six-second hero disable still carries HIGH. The slow
+   aura is doubly unreachable: auraEffects skips hostile units anyway.
+   ALSO STALE, found in passing: HeroSweep.TXT:1355 says hpReg -1 never
+   kills a unit. It does now -- world.js:2094-2105 kills on hp <= 0 from
+   negative regen, so n00T dies in about 3 s.
+2. [MEDIUM -> downgraded; NO PORT DEFECT SHOWN] A00Y 도깨비참수 (AHtb) --
+   PARTLY.
+   Htb1 250..1250 and the h00A follow-up are correctly wired. But the map
+   zeroed the stun only partway: adur is written for levels 1-3 and ahdu for
+   1-4, so adur:4, adur:5 and ahdu:5 fall back to the SLK's AHtb row (Dur
+   5.0, HeroDur 3.0). The AHtb case applies its stun whenever dur > 0, with
+   no 0.1 guard (unlike AOws), so LEVEL 5 ALONE lands a real 3-second stun
+   that levels 1-4 do not. Measured: stun until = 10, 10, 10, 10, 3000 ms.
+   TWO CORRECTIONS. The adur fields are a red herring: dur is
+   `heroDuration || duration`, and heroDuration is non-zero at every level,
+   so duration is NEVER read for this ability -- only ahdu:5's absence
+   causes the spike, so the finder over-attributed the cause by two thirds.
+   And the gap underneath it is already recorded: TODO.txt:1782-1786 notes
+   that abilities.js takes heroDuration whenever there is one, which
+   shortens every effect on a creep, and that twelve sites still do this.
+   Against a non-hero, A00Y should stun 5 s at ranks 4-5 and gives 10 ms --
+   that known entry, not a new one (X12).
+   FRAMING: no port defect is demonstrated. The compile faithfully clamps
+   the map's own data, and nothing in the archives establishes a different
+   retail rule for levels past the SLK's rows. Its h00A dummy casts A00X (Awrh -> AOws) for 25 damage
+   and a real 2 s stun, unscaled by rank.
+3. [MEDIUM] A03H 아수라일무은 (Awfb) -- PARTLY, MOSTLY REFUTED, and the
+   real defect is the one the finder dismissed. It compiles with an empty
+   order AND empty targets (atar:2 and atar:3 exist, atar:1 does not), so
+   isPassive returns true and the base's execute is a no-op -- but that does
+   NOT block it, because castAbility checks only the level and castEffect
+   spends mana and cooldown and fires SPELL_EFFECT regardless. The real
+   payload runs: a dummy carrying A03W (AHtb 2000/4000/6000 plus a 2 s
+   stun), correctly scaled to A03H's rank. Two gaps: the trigger's camera
+   shake and its terrain ripple are unimplemented natives and silently do
+   nothing, and mana at levels 2-3 is 75.
+   BOTH "GAPS" REFUTED. The camera shake and the terrain ripple are
+   DOCUMENTED DELIBERATE DECISIONS, not oversights: TODO.txt:798-802 names
+   this very ability ("the other two of the six calls, on Rob Lucci's A00H
+   and Zoro's A03H") and gives the reason, TODO.txt:1649-1653 lists the
+   ripple as open, and HeroSweep.TXT:1348-1353 says of the camera native
+   verbatim "consistent, not a new finding". And the mana has clear
+   provenance: Awfb's SLK Cost1 is 75 with levels = 1, the compile clones
+   that row to all three levels, and amcs:1 zeroes level 1 only -- giving
+   0/75/75. It is the SAME clamp the finder correctly called legitimate for
+   A00Y, described as an artifact here. See X12.
+   THE REAL DEFECT, which the finder called moot: A03H is the ONLY one of
+   the map's three Awfb abilities with no atar:1, so it alone compiles with
+   empty targets, isPassive returns TRUE, and execute short-circuits at
+   abilities.js:736 BEFORE the damage fallback at :742. A00V and A00H both
+   have targets and both reach the fallback. So A03H alone silently drops
+   its own base Htb1 damage of 100 at ranks 2 and 3. Small against the
+   trigger's 4000/6000, but real and unintended.
+   AND tools/unread_accepted.json:36 RECORDS THE OPPOSITE: "reaches the
+   damage fallback, which spends slot 1, and slot 1 here IS a Damage -- so
+   the number is delivered even though no case reads it". The slot meaning
+   is right and the delivery claim is false. TODO.txt:810-836 lists the six
+   verdicts the isPassive fix moved and A03H is not among them, because its
+   empty targets kept it passive -- the accepted reason reads as though it
+   had moved. That file needs correcting, which makes it a companion to X12
+   rather than an exception to it.
+4. [LOW] A00U 번뇌하는 봉황 (AUcs) -- CORRECT: a 800-long, 300-wide line for
+   300..900, slots verified through useSpecific. Its h014 phoenix is
+   decorative by design and does no work.
+5. [LOW] A01M 삼.천.세.계 (ANsh -> AOsh) -- CORRECT: 2000-long, 400-wide line
+   for 4000/5000/6000, cooldown 180/170/160. The only extra is a cinematic
+   filter flourish, and that path is implemented and asset-verified.
+
+URYU ISHIDA (O006) -- VERIFIED 2026-09-13 (1 PARTLY, 1 REFUTED, 1 PARTLY)
+---------------------------------------------------------------
+1. [HIGH] A04A 은령호작 (ANcf) -- split DEAD/APPROXIMATE. A FRESH ROUTING GAP.
+   The base half is inert by the map's own design: the w3a zeroes Ucs1..Ucs4
+   and Nbf5 and aare, so the ANbf cone case (abilities.js:344-368) computes
+   len = 0 and its per-unit loop skips everyone. slot() keeps an explicit 0
+   rather than falling back (abilities.js:137), which is the same
+   "the trigger does the work" convention as AHtc/AOws.
+   The real payload is trigger IK/AK (formatted.j 6675, 6678): h016 dummies
+   carrying A04L at A04A's level, ordered by numeric order id -> castDummy.
+   A04L's base is ACca, and ACca is in NEITHER BASE_ALIAS NOR HANDLED_BASES
+   and has no case label in server/abilities.js. AbilityMetaData.slk groups
+   ACca with AUcs and ANbf under the same Ucs1..Ucs4 fields (useSpecific =
+   AUcs,ANbf,ACbc,ACbf,ACca,ACcv), so it is meant to run the same line-shaped
+   Carrion Swarm mechanic: data1 60/120/180, data3 800 distance, data4 125
+   final area, data2 1e9 cap. Instead it falls to the generic default
+   fallback (abilities.js:735-742), a single point blast of radius `area`
+   dealing data1 once -- so the spell lands as small random point blasts
+   instead of a breath line. Same species as the already-fixed ANcf->ANbf
+   alias bug (TODO.txt:2036-2041). A04L is said to be the only ability on the
+   map with base ACca. Fix shape: an ACca case or alias plus a slot_test
+   CONTRACT entry.
+   PARTLY. The core survived: ACca really is absent from every table (grep
+   across server/ and tools/ returns nothing), the zeroed cone really is
+   inert twice over, and the trigger path really reaches the default
+   fallback. Four corrections, one of them large:
+     - NOT "twice per activation". AK enables a PERIODIC 0.1 s trigger and
+       waits 3 s, so it is about 30 ticks x 2 dummies = ~60 per activation.
+       The map's own counter agrees: it adds 2 per tick and prints "N Hit".
+     - The count is 2, not 1: data/abilities.json also holds the retail ACca
+       row itself, carried by two unit types neither of which appears in the
+       script. True form: A04L is the only CUSTOM ability with origin ACca.
+     - The cap framing is a non-difference -- the fallback has no cap either
+       and per-unit damage is identical. The real player-visible delta is
+       GEOMETRY: correct is an 800-long, 125-wide line from the dummy, which
+       stands on the caster; actual is a 100-radius disc centred 250-600
+       units away at a random angle. Anything past ~700 units becomes
+       unhittable and the 60 discs scatter instead of stacking down a
+       corridor.
+     - Use the stronger evidence for the fix: AbilityData.slk's ACca row
+       carries code = AUcs with the comment "Carrion Swarm (creep)", which is
+       the same evidence pattern that justified the existing ANcf -> ANbf
+       alias. So the fix is a BASE_ALIAS entry ACca -> AUcs.
+2. [MEDIUM] A03F 슈프링거 (AHtc) -- CORRECT via delegate. AHtc fields all
+   zeroed (adur = ahdu = 0.01), so the base case deals damage(...,0) and
+   skips the buff; trigger bK/CK (6711, 6727) spawns TWO h016 per enemy
+   within 600, each carrying A04Q (base AHtb, which IS handled), so each
+   enemy takes 2 x 4000/5000/6000.
+   REFUTED, and the truth is worse: A03F DEALS ZERO DAMAGE. The trigger's
+   cK reads the ability level off udg_unit46, which is NOT the caster -- the
+   map's only assignment to udg_unit46 is at formatted.j 5253, inside the
+   handler for A03S, which belongs to Byakuya, while A03F belongs to Uryu.
+   The map itself confused udg_unit46 with udg_unit63. So
+   GetUnitAbilityLevel returns 0, SetUnitAbilityLevel(dummy, A04Q, 0)
+   DELETES A04Q (world.js:852), castDummy then finds only a passive, and the
+   order degrades to an attack order on a dummy with attacks disabled and
+   3 hp. A 180-second-cooldown ultimate with a twelve-unit visual set that
+   does nothing at all.
+   Two caveats worth keeping straight. In retail the same map bug exists,
+   but IF SetUnitAbilityLevel clamps to >= 1 there (see X11 -- unsourced so
+   far) the dummy keeps A04Q at level 1 and deals 2 x 4000 = 8000 flat at
+   EVERY rank, so the finder's 8000/10000/12000 scaling was wrong either
+   way. Severity therefore depends entirely on X11: if retail clamps, this
+   is a real port defect and Uryu loses an ultimate the original had; if it
+   does not, the port faithfully reproduces a dead ability the map author
+   broke. Settle X11 before touching it.
+3. [LOW] A05X 멀티샷 (AUcs) -- CORRECT: real 800-long, 150..450-wide line for
+   300..900 (Ucs1 w3a; Ucs3 800 from SLK DataC1; Ucs4 150/150/300/300/450).
+   The visible arrow fan of 3/3/5/5/7 h029 is cosmetic -- Locust, attacks
+   disabled, hp 3 with -1 regen. SURVIVED. Buff BUcs declared, never stamped (the
+   AUcs/AOsh case never calls applyBuff).
+4. [LOW] A05R 제레슈레이더 (AOsh) -- CORRECT: 1500-long, 400-wide line for
+   1000/2000/3000, cooldown 70. Its trigger OK/RK (6660, 6663) is pure
+   cosmetics: camera shake plus three h027 OrbitalRay dummies, no damage
+   call. Buff BOsh declared, never stamped. PARTLY: the conclusion holds but
+   h027 is NOT attack-disabled -- attacksEnabled is 3, both weapons on. It
+   is harmless only because its weapon is empty (base damage, dice, sides,
+   range and cooldown all 0), so a future edit to that unit's weapon fields
+   would silently make a "cosmetic" unit lethal.
+5. [LOW] A05T 영력봉쇄 (ANsi) -- CORRECT: the one ability here with no trigger
+   at all (grep count 0). Pure engine silence, area 200..400, duration 6..15
+   (hero 2..10), and its buff B00Y IS correctly stamped (abilities.js:723).
+   DataA1 "Attacks Prevented" = 8 is never read, which matches how the
+   engine models silence as a timed spell lockout.
+6. [LOW] A05S 비염각 (AEbl) -- APPROXIMATE: the same blink case already
+   validated for two other heroes; Ebl1 400 max, Ebl2 50 min. The map-wide
+   guard at formatted.j 2879-2885 keeps all seven blinks out of two rects.
+   Minimum-range click-inside behaviour is UNESTABLISHABLE and the code says
+   so at abilities.js:449-454.

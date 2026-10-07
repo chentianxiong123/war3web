@@ -1,0 +1,23 @@
+{
+  "name": "war3web",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "description": "War3Web - Warcraft III browser port with authoritative Node server",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node tools/run_tests.mjs"
+  },
+  "dependencies": {
+    "three": "^0.185.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.43.1"
+  }
+}

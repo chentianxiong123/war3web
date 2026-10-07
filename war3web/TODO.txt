@@ -1,0 +1,2560 @@
+FOC Web -- outstanding work
+===========================
+
+Everything here is verified against the map, not speculative. Counts are
+measured, not estimated.
+
+EFFECTS (closing out the effects pass)
+--------------------------------------
+[x] Fractional alpha on geoset visibility  (FIXED)
+    Geoset visibility was binary -- render.js did `mesh.visible = a > 0.05`.
+    Warcraft III draws the geoset at the track's own alpha, so anything meant to
+    fade popped instead. Now the alpha reaches the material, and it is
+    multiplied into the authored opacity rather than replacing it, so a geoset
+    animation and a SetUnitVertexColor compose (0.5 x 0.5 = 0.25) instead of the
+    last writer winning.
+    18 of the 1105 converted models carry an alpha strictly between clear and
+    solid: the five auras, War Stomp's and Thunder Clap's caster rings, four
+    missiles, the three feathers, green smoke, the goblin sapper and the sand
+    wave. Trueshot Aura's ring is the plainest case -- authored to run
+    0.30 -> 0.535 -> 0.30 and never solid at any point, so it had been drawn at
+    full opacity for its entire life.
+    A model that never fades still pays nothing: materials are only cloned when
+    a geoset is actually part-way through one.
+    Found while fixing it: two of the eighteen -- Devotion Aura and the Voodoo
+    Aura -- have no glTF animation at all, because nothing on them moves and the
+    geoset alpha *is* the animation. No clip meant no mixer, no mixer meant no
+    time to sample, so they were frozen on their first frame, which for both is
+    fully transparent. They now get a clock of their own from the sequence's
+    duration. tools/geoset_test.mjs, 15 checks.
+
+[x] Corpses vanish instead of dissolving  (FIXED)
+    Reported from play. Warcraft III fades a body out over Decay Flesh
+    and Decay Bone through the *material's* alpha track (KMTA) -- a different
+    track from the geoset alpha above. mdx.py parsed it and mdx2gltf.py threw it
+    away, so the client had nothing to fade with and a corpse held full opacity
+    until its timer ran out.
+    Now exported per sequence off the layer pick_layer chose, so it is the alpha
+    of the surface actually drawn rather than of a team-colour underlay, and
+    multiplied into the same composition as the geoset track and any tint.
+    Worth keeping the scale honest: of 90 model/sequence pairs whose material
+    fades to clear, only 25 do it while the geoset wearing it is still drawn --
+    those are the corpses this visibly dissolves. In the other 65 the geoset
+    alpha has already culled the mesh by then, and there this changes nothing on
+    screen. 133 of 250 sampled unit models animate the track at all.
+    Found while fixing it: Trueshot Aura animates *both* tracks, and geoset_test
+    was asserting a raw opacity that only accounted for one. Its ring is
+    authored at 0.534 geoset x 0.8 material = 0.427, which is what the game
+    draws; the test now asserts the geoset factor it is actually about, plus the
+    product. tools/dissolve_test.mjs, 9 checks.
+
+EFFECTS (cont.)
+---------------
+[x] Buff art -- no buff ever shows its attached model  (FIXED)
+    Warcraft III gives a buff a Target Attachment model and an attachment point
+    (w3h fields ftat / fta0). No buff in the map has ever drawn its art.
+    Visible example: Ichigo's Hollow form (B001) and Vizard form (B000) both
+    attach Abilities\Spells\Undead\DeathCoil\DeathCoilMissile.mdl at "head".
+    That missing orb is the unchanged-model half of the report.
+
+    Measured 2026-08-27, and the old note here was wrong twice. It said "nothing
+    reads w3h" -- abilities.py already did -- and it called the job wiring, on a
+    count of 19 models. The real shape, layer by layer:
+      w3h buff art .................. 149 buffs carry a target model
+      distinct models ............... 88, of which 86 are converted; the two
+                                      that are not (SleepSpecialArt, WebTarget)
+                                      are absent from the archives entirely,
+                                      like the stale rows in the sound tables
+      ability -> buff id ............ ALREADY COMPILED: 545 of 1046 abilities
+                                      carry one per level, 87 of them naming a
+                                      buff that has art
+      attachment points ............. DONE now -- fta0..N and ftac compiled, and
+                                      ftat split on commas, because it is a
+                                      model *list*, one per point (Thorny Shield
+                                      hangs four, Bloodlust two). 11 buffs name
+                                      a point; 9 of those are reachable in play
+      server applies a buff by id ... MISSING. Across 130 casts the only buff
+                                      ever applied is an anonymous 'stun', 9x,
+                                      from the hand-written approximations in
+                                      abilities.js. Nothing ever says "unit U
+                                      now has B000"
+      buffs serialised to a client .. MISSING
+      client attach/detach .......... MISSING, but the renderer already resolves
+                                      attachment points and AddSpecialEffectTarget
+                                      already attaches the map's own 59 effects
+    DONE. The middle turned out to be half-built already: the AUfa/AUfu/ACfa
+    case in abilities.js was the one applyBuff call carrying `code: i.buff`, and
+    it is exactly the path this map uses -- it casts Frost Armor off a dummy
+    purely to stamp a named buff. So only two pieces were missing, and both are
+    in: the snapshot now carries the codes of buffs that draw something (and
+    only those -- a snapshot goes to everyone fifteen times a second), and
+    render.js syncBuffArt hangs the models through the same route
+    AddSpecialEffectTarget takes, so a buff model gets its emitters, ribbons and
+    texture animation like any other effect.
+    Ichigo's mask lands on Head_Ref, eight levels into the skeleton rather than
+    on the root, and comes down when the buff ends. removeView names the buff
+    effects explicitly: they hang off a bone, so the existing sweep for effects
+    parented to v.root could not see them.
+    tools/buffart_test.mjs, 11 checks, driven through the real cast rather than
+    through applyBuff -- the lesson from the hero-death warning, which passed
+    every check while the game stayed silent.
+
+[~] The ground meets the cliffs badly  (HALF FIXED)
+    Reported from play: at the seam between a cliff's floor and the
+    baked ground the two are visibly different resolutions and read as unblended.
+    Two causes found, both fixed:
+      - bake_ground.py baked at PX=32 while Blizzard's own tile variations are
+        64x64, so every ground tile was resampled to half size before it was
+        ever drawn. Now PX=64, the source art's own resolution: _ground.png goes
+        3072x2048 -> 6144x4096 (2.1 MB -> 8.3 MB), 0.25 -> 0.50 texels per world
+        unit. Going higher would only upscale -- more bytes, no more detail.
+      - the cliff textures ask for max anisotropy and the ground never did. At
+        an RTS camera angle the ground is seen edge-on, so it smeared while the
+        cliff beside it stayed sharp. It asks for the same now.
+    FIXED 2026-09-07: the boundary also ignored CliffTypes.groundTile. The
+    bake now uses the cliff's matching Ysqd tile at 697 boundary vertices and
+    blends into the surrounding painted terrain through the original masks.
+    Ramp interiors keep their painted ground. The source map is not modified.
+    STILL OPEN: the cliff surface carries 256 texels over a single 128-unit
+    cell -- 2.0 per unit against the ground's 0.50 -- so a 4x mismatch remains,
+    and matching it would mean baking at 4x the pixels from 64px source art,
+    which is upscaling, not detail. Whether that is worth it is a judgement
+    call and wants a look at the real thing first.
+
+[x] Two emitter flags nothing read, and one that is not established  (FIXED)
+    Asked the same way the unread ability fields were asked: which of the
+    fields tools/mdx2gltf.py exports does the renderer never read? Across the
+    1105 converted models, four particle flags and one light field came back.
+
+    Unfogged -- and the fog itself      2493 emitters carry the flag, 152 set it,
+        and not one particle was fogged at all, because the emitter shaders are
+        raw ShaderMaterials with no fog in them. That cost nothing while the
+        world's fog was a soft blue starting at 4200. It started costing the day
+        the fog became the map's own black starting at 3000: distant effects sat
+        bright against a black horizon. Now the 2341 that do not set the flag
+        fade into it and the 152 that do are left alone.
+        Two things worth writing down. An additive emitter cannot mix toward the
+        fog colour the way an opaque surface does -- adding grey to a spark
+        brightens it -- so it fades toward nothing instead, which is the same
+        thing whenever the fog is black. And three.js only refreshes fogColor,
+        fogNear and fogFar for the material types it ships, so `fog: true` alone
+        leaves a ShaderMaterial's uniforms wherever they were built; they are
+        copied from the scene each frame instead, which also means an emitter
+        follows a SetTerrainFogEx that arrives after it was created.
+        Only linear fog. The exponential styles carry a density rather than two
+        planes and this map asks for style 0.
+
+    SortPrimsFarZ                       220 emitters set it, and it only changes
+        the picture where blending is order-dependent: addition is commutative,
+        so the 186 additive ones look identical sorted or not and are left
+        alone, paying nothing. That leaves 32 blended point emitters, which now
+        get an index buffer sorted far to near each frame. Only the index is
+        reordered, never the attributes, so the slot pool spawn() and update()
+        share is untouched. The two blended TAIL emitters are left as they were:
+        their geometry is already indexed as quads and reordering it is a
+        different job for two models.
+
+    LineEmitter -- NOT established, 385 emitters in 128 models
+        The obvious reading is that the emitter is a line rather than a plane,
+        and the models say otherwise: of the 385 that set the flag, only 39 have
+        a zero width and 66 a zero length, against 558 and 555 of the 2108 that
+        do not set it. The footprint is if anything LESS degenerate on the line
+        emitters, and most carry equal non-zero width and length. So the flag is
+        about the emission direction rather than the shape, its meaning lives in
+        the game engine rather than in any file here, and it is left unread
+        rather than guessed at.
+
+    XYQuad                              carried by every emitter and set by NONE
+        of the 2493, so there is nothing to implement.
+
+    attStart on an omni light -- MEASURED AND NOT A DEFECT
+        114 of the 116 lights carry an attenuation start and nothing reads it,
+        which is true and turns out not to matter. Warcraft III holds a light at
+        full brightness to attStart and then falls linearly to zero at attEnd;
+        three.js gives a point light two knobs, distance and decay, and the
+        curve itself is fixed in the shader every lit material uses. With decay
+        at 0 that curve is (1 - (d/D)^4)^2, which is flat near the centre and
+        rolls off toward D -- the same shape, by luck rather than design.
+        Fitted against Warcraft III's curve for the 80/200 shape that 114 of the
+        116 lights carry:
+              d=80   (attStart)   wc3 1.000   ours 0.949
+              d=120               wc3 0.667   ours 0.758
+              d=160               wc3 0.333   ours 0.349
+              d=190               wc3 0.083   ours 0.034
+        Worst disagreement anywhere is 0.093 of full brightness, rms 0.046.
+        Refitting the one knob available moves D from 200 to 197 and improves
+        the worst case to 0.077 -- a 1.5% change in radius, not worth making.
+        An exact match needs our own light model, which means our own shader for
+        every lit material. Recorded so this is not reopened.
+        The thing in this area actually worth measuring is the POOL: it holds
+        eight slots and an effect that finds it full goes unlit. On a map where
+        a dozen effects appear a second that is a likelier cause of a missing
+        light than the falloff curve. Not measured yet.
+
+    tools/render_test.mjs, 26 checks, four of them new here -- read off the real
+    materials and the real index buffer in a browser, because a uniform that is
+    computed and never bound is exactly what a data-only check would pass.
+
+[x] Ramp transitions: the CliffTrans wedges are now placed (2026-09-07)
+    Reported from play -- the transition art at a cliff edge was absent.
+    CliffTypes.slk gives every cliff type a *second* model directory --
+    `rampModelDir`, CityCliffTrans for this map's CYsq -- holding the wedges
+    Warcraft III sets where a ramp meets a cliff. cliffs.py previously read
+    cliffModelDir only, so those cells got ordinary cliff walls and the ramp
+    mouth had a hard edge instead of a carried-down ground.
+    What is established, so the next attempt starts here rather than from
+    scratch:
+      - the art exists: 16 CityCliffTrans models, and Models.path() already
+        builds exactly the right filename for them
+      - their codes letter a ramped corner H or L by which layer it sits on
+        rather than A/B/C, which is why every one of the 16 has exactly one H
+        and one L
+      - this map has 4 fully-ramped cells and 20 cliff cells touching them
+    Resolved by measuring the models: each spans TWO cells. L is the
+    half-height midpoint, while H stays at the high flagged grid vertex.
+    The placement matcher checks the four outer corners against the layer
+    grid and declares both covered cells. Twelve wedges replace twelve cliff
+    cells and twelve adjacent flat cells; total coverage rises 498 -> 510.
+    Six ground vertices are raised by 64 to meet the walkable ramp ridges.
+    Internal wedge vertices no longer get compared to hidden raw ground;
+    the test checks exposed ground joins AND agreement between models.
+    Zero mismatched joins, zero conflicting model heights, zero coverage
+    differences. Rotation tests verify all four orientations. Browser tests
+    verify the actual drawn slope against unit height queries at both bases.
+    See docs/TERRAIN_PROVENANCE.md and THIRD_PARTY_NOTICES.md for measurements,
+    the consulted MIT reference, and its retained notice. Assets stay local.
+
+INTERFACE (the Warcraft III console)
+------------------------------------
+The frame, the slots, the selection circles and the health bars are in. What
+Warcraft III's own screenshot still has and we do not:
+
+[x] The camera does not know the console takes 29% of the screen  (FIXED)
+    The world is drawn across the whole window and the console covers the bottom
+    of it, so the middle of the window is not the middle of what can be seen.
+    The camera aimed at the window centre, 0.5, when the centre of the visible
+    strip is 0.3533 -- 14.7% of the screen too low, which crowded the hero
+    against the frame and wasted the room above him.
+
+    The projection is shifted rather than shrunk, which is what the game does:
+    the world still fills the screen and the console overlays it, so nothing is
+    cropped and only the optical centre moves (camera.setViewOffset). The
+    fraction is read off the console pieces themselves -- the tallest
+    BOTTOM-anchored tile, 0.2933 for this layout, which is ConsoleUI.fdf's 0.176
+    of the game's 0.6-tall screen box -- rather than written into the client.
+
+    The part that could have broken quietly: raycasting has to read the same
+    shifted projection or every click lands 14.7% of the screen from the cursor.
+    It does -- three's setFromCamera goes through projectionMatrixInverse -- and
+    the test asserts it by projecting each visible unit to its own screen point
+    and picking it back, 15 of 15.
+    tools/camfit_test.mjs, 6 checks.
+
+[x] The top strip is drawn and empty  (FIXED)
+    Warcraft III hangs Quests/Menu/Allies/Chat off the left of it and gold,
+    lumber and supply off the right. Both are frames ConsoleUI.fdf never
+    mentions, because the game anchors them to the screen rather than to the
+    console -- which is why the strip art was drawn and its contents were not.
+    uiframe.py now reads ResourceBar.fdf and UpperButtonBar.fdf alongside it.
+
+    Two indirections had to be followed rather than guessed. A button's
+    NormalTexture names a Texture *block* in the same file, not a skin alias:
+    the block carries the alias in File and the slice of the sheet in TexCoord,
+    and all four button states are bands of one buttonstates texture, so both
+    have to be resolved or the button draws the whole sheet. And every readout
+    is anchored to the resource frame's TOPRIGHT, not the screen's, so the
+    offsets only mean anything inside a box of the frame's own width.
+
+    Blizzard commented out the upkeep *icon* in their own ResourceBar.fdf and
+    left the text; that is reproduced rather than corrected, so upkeep is the
+    one item that resolves to no texture.
+
+    The numbers are the server's: the map spends gold (27 references in
+    war3map.j) and lumber (8) and never touches food, so supply reads what the
+    engine reports for it, which is nothing -- the same as the game would show.
+
+    Quests and Menu were drawn from the layout's own DisabledTexture and grey
+    disabled colour while QuestSetTitle and QuestSetDescription were no-ops --
+    a button that silently does nothing is worse than one the game itself
+    would grey out. CreateQuest/QuestSetTitle/QuestSetDescription keep real
+    quests now and the snapshot carries them, so all four buttons are live and
+    each opens the panel it names (F9 quests, F10 menu, F11 allies, and the
+    chat line). topbar_test asserts the click reaches a dialog that names
+    itself, not that a handler ran -- a button wired to the wrong dialog fails
+    it.
+
+    Our own centre score strip sat where the resource bar goes; the resource bar
+    is the game's layout, so ours is what moved down.
+    tools/topbar_test.mjs, 11 checks.
+
+[x] The command card's fourth column is clipped  (FIXED)
+    ConsoleUI.fdf ends Tile03 partway through the last column and the 0.04-wide
+    Tile04 carries the rest -- the same seam that cuts the portrait arch in half,
+    one axis over. Measured tile by tile, Tile03's fourth column came out 0.080
+    of the tile against ~0.155 for the other three and ran off its right edge, so
+    the card drew three full columns and a clipped one at 37px against 71px.
+
+    seamColumn() generalises seamArch to it. Tile04's own openings supply the
+    missing half: it resolves one per row for the rows whose art is unambiguous,
+    and since the column is vertical, the horizontal extent those rows agree on
+    is the column's -- a row Tile04 did not resolve takes the same one rather
+    than a guessed width. Both tiles are BOTTOMRIGHT, so it is all measured as a
+    distance from the right edge of the screen.
+
+    The joined width comes to 0.04935 of the screen against 0.0496 for the other
+    three columns, which is the check that the geometry is right rather than
+    merely plausible. All twelve cells now measure 71-72px on an even 78.3px
+    pitch.
+    tools/card_test.mjs, 7 checks, including that the portrait arch did not
+    regress while its helper was generalised.
+
+[x] Missing textures at the map's two city gates  (FIXED)
+    Reported from play: the doors at the top left and top right drew flat white
+    slabs where their pillars should be.
+
+    Not a 404 -- nothing failed to load. CityEnteranceGate.mdx has two geosets:
+    one takes Textures\\CityStructures.blp and draws the bars and beams, the
+    other takes texture 4, which is replaceableId 11 with an empty path.
+    Warcraft III's slot 11 is "this tileset's cliff texture", the same slot the
+    cliff meshes use. mdx2gltf.py's tex_uri handled ids 1 and 2 (team colour and
+    glow) and returned None for everything else with no path, so the material
+    got no texture and drew white.
+
+    tex_uri now resolves 11 the way tools/cliffs.py resolves it for the terrain:
+    TerrainArt\\CliffTypes.slk names the texture unqualified and every tileset
+    bar Lordaeron Summer ships its own recolour as <tileset>_<texFile>.blp.
+    Where a map declares more than one cliff type it takes the one the terrain
+    actually uses -- this map lists CYdi and CYsq, but cliffTex is CYsq on 4321
+    vertices against CYdi on 37, and taking the first entry instead gave the
+    gates Cliff0, a cliff that appears almost nowhere here. It now resolves to
+    Y_Cliff1.png, the same texture the cliff mesh draws.
+    Exactly 2 placements, which is the two gates. tools/doodadtex_test.mjs.
+
+[x] 27 tree destructables drew nothing at all  (FIXED)
+    Reported from play as the trees in the top left not rendering; found first
+    by doodadtex_test while fixing the gates. 17 LTlt (LordaeronTree) in the
+    top-left quadrant and 10 BTtw (BarrensTree) in the top-right. Not white but
+    invisible: their one material is filterMode transparent, so with no texture
+    it sampled nothing and every fragment went.
+
+    Same root cause as the gates -- a replaceable slot with no path -- but the
+    texture belongs to the destructable *type*, not the model, so the gates' fix
+    could not extend to it. Units\\DestructableData.slk carries texID and
+    texFile per type:
+      LTlt  31  ReplaceableTextures\\LordaeronTree\\LordaeronSummerTree
+      BTtw  33  ReplaceableTextures\\BarrensTree\\BarrensTree
+      YTcx  11  ReplaceableTextures\\Cliff\\Cliff1.tga
+    146 destructables name a texID, and 32 of the 52 models carrying one are
+    shared by types that disagree -- lordaerontree alone is used by five
+    destructables with five different tree textures.
+
+    Three things were missing, one per stage:
+      - extraction never pulled the art. grab_model follows the textures a
+        model's TEXS chunk names and a replaceable slot names none, so the BLPs
+        sat in war3.mpq untouched. extract_blizzard now follows texFile for
+        every placed type; 3 textures on this map.
+      - stage.py read DestructableData for file, defScale and Name and dropped
+        texFile. It now resolves it to the converted PNG and puts it on the
+        doodad type.
+      - the client had nothing to apply. addDoodads now does, and only to a
+        material with no texture -- the gate's cliff slot is already resolved by
+        mdx2gltf to the tileset's own recolour (Y_Cliff1), which is sharper than
+        the bare Cliff1 this table names, and overwriting it would undo that.
+
+    The materials are cloned and the clone shared by every instance of the type:
+    skeletonClone hands out the model cache's own materials, so writing to one
+    would repaint every doodad drawn from that model and every one after it --
+    the same trap the unit tinting fell into.
+    407 doodad meshes now, every one textured, none without.
+    tools/doodadtex_test.mjs, 8 checks. The KNOWN entry that carried this is
+    gone, which is how run_tests says an entry there should be retired.
+
+[x] Gates drew their closed doors and their own rubble at once  (FIXED)
+    Reported from play. A destructable model carries its wreckage as extra
+    geosets and hides them with a geoset-alpha (KGAO) track, so one model serves
+    both states: the elven gate stands as [1,0,1,0] and dies as [1,1,0,0], which
+    makes geoset 1 the debris and 2 the gate. Four of the five gate models do
+    this -- 3 to 5 tracks each -- and the city entrance gate has none at all,
+    which is why that one alone looked right.
+
+    Units sample those tracks through play(). A doodad is never animated, so
+    nothing sampled them and every geoset drew at full alpha.
+
+    addDoodads now applies the model's own "stand" geosetAlpha when it builds
+    one, hiding what that sequence hides. Visibility is per-object, so it is set
+    on the clone and never touches the material the model cache holds -- the trap
+    the unit tinting fell into. 35 of the 407 doodad meshes are wreckage.
+
+    Two things measured on the way, both of which killed a wrong first guess:
+      - three's Box3 reads the bind-pose vertex buffer and ignores skinning, so
+        comparing bounding boxes said posing changed nothing. Rendering the two
+        and diffing the pixels said the same, correctly: the bind pose *is* the
+        stand pose and no bone moves. It is the alpha track, not the skeleton.
+      - the glTF mesh order matches meta.geosets exactly -- checked by comparing
+        triangle counts element for element across all four models -- so a plain
+        traverse indexes the alpha array correctly.
+    tools/doodadtex_test.mjs, 11 checks.
+
+[x] Walls and gates were walked straight through  (FIXED)
+    Reported from play. war3map.wpm is the *terrain's* pathing and the World
+    Editor bakes ordinary doodads into it -- the 204 city low walls read 202,
+    no-walk, straight from the file. Destructables are not baked in, because
+    Warcraft III stamps their footprint at runtime and lifts it when they die,
+    so the 58 stone walls, all six gates and the 27 trees read 64 or 72, which
+    is walkable. 64 of 64 wall and gate centres were open.
+
+    The footprint is a TGA named per type in pathTex, one pixel per 32-unit
+    pathing cell -- the same grid war3map.wpm uses -- with the flags in the
+    colour channels: red unwalkable, green unflyable, blue unbuildable. Only red
+    is read; nothing here flies and nothing builds. Read off the art rather than
+    assumed: StoneWall1Path is a 10x2 solid bar (320x64 units), StoneWall3Path
+    the same rotated, GateLarge1Path a 28x4 bar, and Gate2Path a 22x22 diagonal
+    band, which is what the four diagonal gates need.
+
+    Two stages were missing. extract_blizzard pulled the models a placed type
+    names and not its pathTex, so 20 of the 22 footprints were never unpacked;
+    it follows pathTex now. stage.py then stamps them into walk.bin at each
+    placement, taking the rotation to the nearest quarter turn because Warcraft
+    III keeps a stamped footprint square to the grid.
+
+    361 placements stamped. The footprints went in a quarter turn off and this
+    only half worked -- see the next item.
+
+    Found while testing: camfit_test asserted a click always picks the unit it
+    was aimed at, and the creeps now path differently around the walls, so two
+    overlapped and the pick correctly returned the nearer one. The assertion was
+    wrong, not the pick; it now accepts a unit drawn in front.
+
+    STILL OPEN: the gates block permanently. Warcraft III lifts the footprint
+    when a destructable dies, and nothing here can die yet -- see the
+    destructables item below.
+
+[x] The stamped footprints were a quarter turn off  (FIXED)
+    Reported from play: heroes still walked through. Every wall and gate on this
+    map is placed at facing 270 -- 30 LTw0, 23 LTw2, all six gates -- and 270 is
+    the World Editor's default facing, so the path textures are authored in that
+    orientation. The quarter turn was measured from zero instead, which turned
+    every footprint 90 degrees: StoneWall3Path is a 2x10 bar for a wall running
+    north-south and it went in as a 10x2 bar running east-west, through the
+    wall's own middle. That blocks the centre and leaves an eight-cell hole to
+    either side, and the walls sit 10 cells apart, so a line of wall stamped as
+    a row of detached stubs.
+
+    The test passed the whole time because it asserted that each placement's
+    centre cell was blocked, which was true throughout. The check that fails is
+    measured: take the first open cell either side of each placement, skip the
+    pairs that are not separated at all, and path between the rest. 17 of 112
+    crossings had a detour under 1.2x -- straight through. Measuring the turn
+    from 270 gives 0 of 63 under 3x.
+
+    The blocked-cell count *falls*, 2456 to 2348, and that is the confirmation
+    rather than a worry: a bar aligned with its wall overlaps its neighbours, so
+    it claims fewer unique cells while actually forming a barrier.
+
+    With the walls continuous the six closed gates now seal what is behind them:
+    49724 cells reachable with their footprints lifted against 30204 with them
+    shut. The walls themselves seal nothing -- 96.9% of what the bare terrain
+    reaches -- and the fountain and all 28 shops stay reachable with every gate
+    closed. What is cut off is the creep ground, 51 map-placed creeps. That is
+    what a closed gate is for: war3map.j never touches a destructable, no
+    KillDestructable and no DestructableRestoreLife anywhere in it, so the only
+    thing that opens one is destroying it.
+
+    stage.py now also writes public/data/pathstamp.json, the cells each of the
+    361 placements claims, kept per placement rather than merged because
+    neighbouring walls share cells where their bars overlap -- a cell may only
+    reopen once nothing left standing still claims it. That is what lifting a
+    footprint on death needs, and the test uses it to flood the map with the
+    gates open. tools/pathblock_test.mjs, 11 checks.
+
+[x] Destructables were not entities  (FIXED)
+    Nothing could target or damage a gate: no destructable existed server-side
+    at all, so a closed gate blocked for ever. All 115 the map places are
+    entities now, because every one of them owns cells that have to be released
+    if it dies, but only the six gates can be clicked: DestructableData's own
+    selectable flag is 1 for them and 0 for the 58 stone walls, the 27 trees and
+    the 24 pathing blockers. They are 500 hit points at war3map.doo's life 100 --
+    shut and whole.
+
+    The map's script has no part in this. war3map.j names five destructable
+    functions and every one of them is dead Blizzard.j boilerplate -- the
+    filterEnumDestructablesInCircleBJ global and its filter. No KillDestructable,
+    no DestructableRestoreLife, no enumeration. A gate opens because a player
+    hit it, and for no other reason.
+
+    Two things the data settled that would otherwise have been guesses:
+
+      - pathTexDeath. A broken gate is not clear ground: the death footprint is
+        its two posts. Gate2PathDeath is 32 red pixels at the ends of the 124
+        the live one covers, so breaking a gate opens 92 cells and leaves 32 as
+        rubble. Those textures had never been unpacked -- extract_blizzard
+        followed pathTex and not pathTexDeath, the same gap that left the live
+        footprints missing.
+      - the range to a gate is measured to its footprint, not to its centre. A
+        gate is 896 units across and its centre is inside its own footprint,
+        where nothing can stand; measured to the centre a melee hero pressed
+        against one is over 400 units away from it and never swings.
+
+    A cell reopens only when nothing standing still claims it -- neighbouring
+    walls share cells where their bars meet -- and only if the bare terrain
+    allowed it in the first place, which is why stage.py records the
+    terrain-allowed subset per placement rather than the whole footprint.
+
+    World keeps its own copy of walk.bin rather than the module's array: a gate
+    broken in one match must not start the next one broken.
+    tools/destructable_test.mjs, 27 checks, including a hero ordered at a gate
+    from 460 units away walking to it and breaking it, and the crossing it seals
+    going from no route at all to 352 units.
+
+    The gates animate as they are hit and as they fall. Every gate model carries
+    a Stand Hit sequence -- three of the elven gate's fourteen bones take ten
+    rotation keyframes in it, and the geoset alphas match the stand pose, so it
+    is the doors shuddering and not a swap of what is drawn. Doodads never
+    animated at all here; the six that can be struck now get a mixer and the
+    other 357 stay static clones.
+
+    Death is not an instant swap either. The death sequences carry a geoset
+    alpha *curve* as well as held values -- the elven gate curves geoset 3 from
+    0 up to 1 across the first two thirds of the clip -- and reading only the
+    held alphas left that geoset hidden for good. It is ticked against the clip
+    now. Visibility rather than opacity: a doodad's materials are shared by
+    every placement of its type, which is what keeps a replaceable texture from
+    being cloned 27 times for the trees, so fading one instance would fade them
+    all. Four of the six gates gain a geoset as the clip runs; the two city
+    entrance gates have no geoset animation at all and are left standing rather
+    than hidden, which would leave a hole in the wall.
+
+    NOT DONE: deathSnd names a label (TreeWallDeath) and animsounds.json is keyed
+    by MDX event id, so there is nothing to resolve it against. Only the trees
+    carry one and nothing can hit a tree here. The field is compiled and carried
+    so it is ready when a label-keyed table exists.
+
+[x] Two test checks that could not fail  (FIXED)
+    Found while running the suite for the destructable work, not looked for.
+
+    run_tests reuses a server already answering on the port, and one had been up
+    since a previous session. Every browser test in that run was measuring code
+    from before the change. It is worth knowing before reading a green run.
+
+    render_test's GPU-memory checks then failed for real once they had a current
+    server, and both were wrong rather than the code being wrong:
+      - the counters were read off a lost WebGL context. Chromium drops this
+        page's first context and hands back another a few frames later, and
+        three no-ops its renders in between, so every reading was 0 and
+        "peak > base" compared 0 with 0. It now draws across frames until the
+        counter moves.
+      - the baseline was taken before the model cache was warm. loadModel keeps
+        the glTF it parsed, so the first spawn of a type uploads geometry that is
+        never given back -- the cache doing its job -- and "every cycle gives the
+        geometry back" was comparing against an empty renderer. Warming it first
+        gives 29 -> 55 -> 29, the same across three runs.
+
+[x] Orochimaru's revive did nothing  (FIXED)
+    Reported from play. A01K, his level-10 skill -- one level, no hotkey,
+    origin AOre -- is Reincarnation, and its entire trigger in war3map.j is one
+    line: PlaySoundBJ on EVENT_PLAYER_UNIT_SPELL_EFFECT. In Warcraft III the
+    revive is the engine's, not the map's, and nothing in server/ implemented
+    AOre, so the death path never looked for it and he died like anyone else.
+
+    The numbers are the ability's own. AbilityData gives A01K DataA 3 and Cool
+    120 against Blizzard's AOre at 7 and 240, and AbilityMetaData gives the Ore1
+    field to exactly AOre, ACrn and ANrn -- "Reincarnation Delay" in
+    WorldEditStrings. So: he dies, the death events fire and the kill is still
+    paid, and three seconds later the body stands up where it fell with
+    everything back. The cooldown starts when the ability fires and not when he
+    rises, so a second death inside two minutes is the end of him.
+
+    Found while writing it: reviveUnit had no already-alive guard, and the map
+    revives its heroes at their altar on a timer (ReviveHero/ReviveHeroLoc, 10
+    calls each). ReviveHero on a living hero does nothing in Warcraft III; here
+    it would have dragged the reincarnated hero to the altar and healed him a
+    second time. It now returns false and leaves him alone.
+    tools/reincarnate_test.mjs, 17 checks.
+
+[x] pickDoodad missed anything that had not been rendered yet  (FIXED)
+    Raycasting reads matrixWorld and does not compute it, and addDoodads adds
+    its group to the scene only once every type has loaded, so a gate clicked
+    before that first render was still carrying an identity matrix and sat at
+    the origin as far as the ray was concerned. It showed up as a flaky test and
+    was a real defect: the fix is one updateWorldMatrix before the cast.
+
+[ ] The info panel's bottom row clips against its arch
+    GOLD and K/D run out of the opening at 1440x900.
+
+GAMEPLAY / INPUT
+----------------
+[x] Senbonzakura spawned nothing and dealt its petal count as damage  (FIXED,
+    except the petals' burn -- see NOT DONE)
+    Researched 2026-08-30; every number below re-verified against the files
+    before being written here, because the audit entry this replaces was wrong
+    about the central one.
+
+    A00T 시해:천본앵, Byakuya H00N, slot W, ten levels from hero level 5 every
+    four levels, no mana cost at any rank. Base AUls, Crypt Lord's Locust
+    Swarm: N flying units are released from the caster over time, auto-attack
+    what is near, and return a fraction of their damage to him as life.
+
+    AbilityMetaData's Uls1..Uls5 resolve through WorldEditStrings to:
+      Uls1 data1  Number of Swarm Units        50 (rank 1-5) / 100 (6-10)
+      Uls2 data2  Unit Release Interval        0.05 s
+      Uls3 data3  Max Swarm Units Per Target   12
+      Uls4 data4  Damage Return Factor         0.1
+      Uls5 data5  Damage Return Threshold      20
+      Ulsu unit   Swarm Unit Type              uloc (1-5) / u000 (6-10)
+    with area 800/1000 and duration 5-25 s / 20-60 s.
+
+    AbilityAudit.txt read data3 as the petal count. It is the per-target cap;
+    corrected there. The live defect is worse than a missing animation:
+    abilities.js's AUls case passes d1 to w.damage, and d1 is Uls1, so casting
+    it deals one instant invisible pulse of 50 or 100 -- the petal count used
+    as a damage figure. The data-driven summon path (summonFrom, which already
+    reads count from data1 and the type from `unit`) is never reached because
+    the case pre-empts it.
+
+    The petals are fully present and need no invention: uloc and u000 are the
+    stock Blizzard locust with the map's edits, and the only differences
+    between them are attack damage (150 vs 600), the immolation they carry,
+    the name and the race. Both are Aloc, neither is invulnerable, both have a
+    real model and icon already converted.
+
+    NOT ESTABLISHED, and it is the number that decides the spell's whole
+    output: the tick interval of the petals' immolation (A02H 150 on uloc,
+    A02G 200 on u000, both radius 500). Apig's three fields are Damage per
+    Interval, Mana Drained per Second and Buffer Mana Required -- no period
+    among them. Blizzard's own tooltips call the field "damage per second",
+    which fits a hard-coded 1 s; but every retail immolation also carries
+    Dur = 1, which fits Dur being the interval just as well, and this map
+    overrode Dur to 10 on both petals. The two readings differ by 10x on 50 to
+    100 petals at once. Nothing in AbilityMetaData, WorldEditStrings, the
+    strings files or the map's own tooltips discriminates. Also unstated: the
+    life-return arithmetic behind Uls4/Uls5, and the petals' target-selection
+    rule beyond the 12 cap.
+    So the swarm was built exactly and the burn was not.
+
+    DONE: the AUls case now releases Uls1 petals of type Ulsu, one every Uls2
+    seconds, all expiring when the duration runs out, and the damage is the
+    petals' own attack out of their unit type -- no damage figure of ours
+    anywhere in it. Measured: 50 petals released over 2.43s against the 2.50s
+    the data implies, gone by the end of the 5s. releaseSwarm/stepSwarms in
+    world.js, beside the existing channel scheduler.
+    tools/swarm_test.mjs, 18 checks.
+
+    ONE APPROXIMATION, marked in the code at world.js isLocust: Warcraft III's
+    Locust makes a unit untargetable, and the extracted data does not say so --
+    Aloc has Name=Locust in CommonAbilityStrings and no Func entry, no tooltip
+    and no data fields. Without it, fifty petals are fifty valid targets and
+    every hero in the lane abandons what it was hitting to swing at them, which
+    is plainly not the map's behaviour either. So locusts are excluded from
+    auto-attack acquisition and from nothing else -- not from area damage,
+    because whether Warcraft III exempts them there is a second question the
+    files also do not answer.
+
+    NOT DONE: the petals' immolation (A02G/A02H), for the interval reason
+    above, and the Uls4/Uls5 life return, whose arithmetic is stated nowhere.
+    Both leave the swarm quieter than the real spell rather than wrong.
+    Worth watching: 50-100 extra units per cast, against a frame that already
+    costs 45 ms at 307 units. Not measured under load yet.
+
+[x] On-attack procs  (FIXED for two of the four bases; the other two cannot
+    be built from the data -- see below)
+    Researched 2026-08-30. ACct, ANdb, Alit and Aspo account for 10 of the
+    audit's 13 dead abilities, and the plan of "one on-attack hook covers all
+    four" does not survive the data.
+
+    ACct and ANdb share AOcr's field set, confirmed through AbilityMetaData's
+    useSpecific column and WorldEditStrings:
+      Ocr1 data1  Chance to Critical Strike (percent, 0-100)
+      Ocr2 data2  Damage Multiplier
+      Ocr3 data3  Damage Bonus          -- zero on every ability here
+      Ocr4 data4  Chance to Evade (fraction, 0-1)
+    Alucard's five hellhounds run 20%/x2 through 60%/x4. Itachi's A02W and
+    Shiki's A066 are ANdb and are crit-plus-evade, not an orb: 5/8/10% and
+    8/11/14% at x1.25/1.5/1.75, with 7/14/21% evade.
+
+    Two things that would have been got wrong by building the obvious thing:
+      - A051 블러디 어택 must be left alone. Its Ocr1 is overridden to exactly
+        0, because the map does that proc itself in war3map.j on
+        EVENT_PLAYER_UNIT_ATTACKED -- 50% for Alucard's agility -- and
+        world.js already fires that event. An engine crit would double it.
+      - Alit is not a damage ability at all. Its only two fields are Graphic
+        Delay and Graphic Duration; there is no damage and no chance anywhere
+        in it or in the map's overrides. It is a per-attack lightning strip,
+        and world.js can already emit one. Inventing a damage figure for it
+        would be inventing a mechanic.
+
+    Aspo has one live carrier (Orochimaru's n00A) and needs machinery that
+    does not exist: a per-buff damage-over-time tick, an attack-speed buff
+    channel, and a slow that works on non-heroes. Its damage (4/s) and
+    duration (5 s, 1 s on heroes) are solid; NOT ESTABLISHED is whether
+    Spo2 0.5 and Spo3 0.25 are multipliers or reductions, and whether
+    Spo4 = 1 is the enum index Movement or bitmask bit 0 Damage.
+
+    The hook site is settled: world.js's `land` closure inside stepAttack, the
+    one point both melee and missile attacks pass through, already hosting
+    cleave and lifesteal, with attacker, victim and the damage roll in hand
+    and no spell flag. Two constraints found with it -- recalc returns early
+    on non-heroes and every carrier here is a summon, so the recalc-stash
+    pattern used for lifesteal will not reach them; and auraEffects is
+    imported by world.js and never called, so it is not a model to copy.
+
+    DONE: ACct and ANdb, through attackProcs in abilities.js -- a fourth
+    passive table beside ATTR_SKILLS, AURA_BASES and ITEM_BONUS, but read at
+    attack time rather than stashed by recalc, because recalc returns early on
+    non-heroes and every carrier but Itachi and Shiki is a summon. The
+    multiplier goes on the swing inside stepAttack's `land` closure, the one
+    point melee and missile attacks share, before damage() reads armour -- a
+    crit is struck before armour, not after. Evade got a site at the same
+    place: it has to stop the hit entirely, so it short-circuits ahead of
+    cleave as well.
+    A051 needed no special case in the end. Its chance is zero and zero cannot
+    fire; the test pins that, so a later "fix" of the zero fails there rather
+    than double-critting in play.
+    The audit's dead list goes 13 -> 5 (ability_audit.mjs taught to count the
+    new table). tools/proc_test.mjs, 20 checks, driving the real attack path
+    with Math.random stubbed so the roll is a decision rather than a coin --
+    and with the damage dice taken out, since the same stub feeds them and
+    would otherwise be measured instead of the proc. A losing roll deals
+    exactly the plain swing, a winning one exactly x4.000.
+
+    NOT DONE, and neither can be built from the data:
+      - Alit. Its only two fields are Graphic Delay and Graphic Duration.
+        There is no damage and no chance in the ability, in the map's
+        overrides, or in AbilityMetaData. It is a per-attack lightning strip
+        and world.js can already emit one, but what the delay is measured from
+        and whether the strip runs attacker-to-target are unstated, so even the
+        graphic would be half invented.
+      - Aspo. Damage per second (4) and duration (5s, 1s on heroes) are solid,
+        but whether Spo2 0.5 and Spo3 0.25 are multipliers or reductions is
+        not stated, and Spo4 = 1 reads as enum index "Movement" or bitmask bit
+        0 "Damage" depending on how it is taken. It also needs a per-buff
+        damage-over-time tick, an attack-speed buff channel and a slow that
+        works on non-heroes, none of which exist. One live carrier.
+    The plain evasion family went in with it, and the note that used to sit
+    here calling A01W unbuildable was wrong. AbilityMetaData gives Eev1 to
+    exactly AEev, AIev, ACev and ACes and WorldEditStrings reads it "Chance to
+    Evade" -- the same label as Ocr4, one slot earlier. Its declared range is
+    0..10, which does not on its own settle whether 0.25 means a quarter or a
+    quarter of a percent; the map's own tooltip does, because A01W 맨트라
+    carries 0.25 and its ubertip reads "◎피할 확률 25%". So it is a fraction
+    here, like Ocr4. Live carriers: Eneru's god form (25%), Ichigo's 호로화,
+    and Blizzard's own Demon Hunter and creep evasions.
+    The audit's dead list is 4.
+
+[x] Craters did nothing -- Kisame's water prison left the ground flat  (FIXED,
+    with one approximated part, marked below and in the code)
+    Reported from play. The map makes six TerrainDeform calls and four are
+    craters: Gaara's A03O 사막의 수록 and Kisame's A069 개미 물지옥 each dig one
+    and cancel it about ten seconds later. TerrainDeformCrater was
+    `() => null`, so nothing moved.
+
+    What the files establish exactly, and what the code now does:
+      - the route. tft_supplement.j's native lines are NOT the hook: boot.js
+        loads the supplement only when common.j is the Reign of Chaos one, and
+        with the MPQs extracted it is TFT. The live path is war3map.j ->
+        Blizzard.j's real TerrainDeformationCraterBJ -> common.j's native ->
+        the engine. So the wrapper's arithmetic is the map's own script
+        running, not something reimplemented: duration reaches the native in
+        milliseconds.
+      - the arguments. All four calls are literals and none scales with level:
+        radius 400, depth +400 then -400 at the same point, 500 ms, permanent.
+      - the direction, which decides whether a water prison is a pit or a
+        hill. Blizzard states it rather than leaving it to be inferred:
+        UI/TriggerStrings.txt's TerrainDeformationCraterBJHint reads "Depth may
+        be negative for bumps", so a positive depth digs. That file is the
+        World Editor's own help text, shipped inside the MPQ -- the same class
+        of source that settled Ore1 for Reincarnation.
+      - which vertices move. The client terrain is a real heightfield, one
+        vertex per w3e grid vertex at 128 units, and render.js keeps the array
+        it was built from. heightAt and pickGround both read it, so units,
+        doodads, missiles and clicks follow the new ground for free.
+
+    APPROXIMATED, and the only part that is: the radial falloff curve.
+    TerrainDeformCrater is a bare `native` line in common.j and the shape it
+    applies is in Blizzard's engine binary, which is not in war3.mpq or any of
+    the three expansion archives -- the MPQs are data. render.js uses a raised
+    cosine (full depth at the centre, nothing at the rim, zero slope at both
+    ends) through a function named APPROX_CRATER_FALLOFF, with the reasoning
+    on it. It is not claimed to be Warcraft III's, and settling it needs a
+    measurement against the retail game rather than another reading of the
+    files. Nothing else in the crater is a guess.
+
+    What makes shipping the approximation safe: the map always cancels a
+    crater with an equal and opposite one at the same point and radius, and
+    displacement is linear in depth, so whatever curve is used the undo
+    restores the original heights exactly. The error is bounded to how the
+    hole looks for ten seconds; it cannot accumulate and dent the map.
+
+    Server-side there is nothing to keep in step. The engine's own heightfield
+    is read by exactly one native, GetLocationZ, and war3map.j never calls it
+    (0 occurrences), so the deformation is the client's alone and no
+    simulation state depends on it.
+    tools/crater_test.mjs, 17 checks, asserting the heightfield's own numbers
+    and the drawn mesh's vertex rather than that a function was called -- a
+    stub passes the latter. The check that matters is the last one: dig, then
+    undo, and the vertex has to come back to where it started to four decimal
+    places.
+
+    NOT DONE, deliberately:
+      - Ripple. The other two of the six calls, on Rob Lucci's A00H and Zoro's
+        A03H. Same transport, but its wave profile is unestablished the same
+        way the falloff is, and unlike the crater it is never cancelled, so an
+        approximation there is not self-correcting. FableAudit.TXT attributed
+        these two to Yusuke and Rock Lee and was wrong; corrected there.
+      - Temporary craters. The map only ever asks for permanent ones, and what
+        `duration` means for a temporary deformation (time to dig? whole
+        lifetime including the return?) is not stated anywhere.
+      - The water mesh bakes its shoreline alpha from the heights at build
+        time and is not rebuilt, so a crater dug into the moat edge will not
+        move the waterline. Neither spell targets water in any observed cast,
+        so this is noted rather than fixed.
+
+[x] An empty order string was read as proof of a passive  (FIXED)
+    Found by tools/ability_audit.mjs, not from play. isPassive returned on the
+    order line and the targets line under it was dead code:
+
+        if (ab.order !== undefined) return !ab.order;   // returned here
+        const t = (ab.targets || '').toLowerCase();     // never reached
+
+    The order string is the right signal in one direction only. It comes from
+    Order= in Units\*AbilityFunc.txt, and Blizzard writes that line for only
+    some abilities: Fire Bolt (Awfb), Finger of Death (ANfd), Cloak of Flames
+    (AIcf) and Neutral Regen (ACnr) each carry an Art= line and no Order= at
+    all. Measured: 462 of the 1046 abilities here have no order string, and the
+    map casts two of them -- A00H and A01G both raise
+    EVENT_PLAYER_UNIT_SPELL_EFFECT in war3map.j. So absence proves nothing, and
+    isPassive now falls through to the targets the ability declares. Presence
+    still decides, and the PassiveButtons icon still overrides both.
+
+    Six verdicts move, and only one of them was doing harm:
+      A00V  종경 백제검, Byakuya      5000 damage, Fire Bolt, no engine case and
+                                     no trigger -- it did nothing at all, and
+                                     now takes the data-driven damage fallback.
+                                     Note for anyone comparing it with Storm
+                                     Bolt: Awfb carries NO BuffID in its SLK
+                                     row (AHtb and ANsb both carry BPSE), so
+                                     there is no stun in the data to model for
+                                     this family, whatever Dur1 says.
+      A01O  하늘의 쇠사슬            60 damage, Finger of Death, on h02I
+      A01G, A00H                     the map's own triggers already ran them
+      AIrl, AIpr                     potions; useItem never calls execute
+    The audit's dead list goes 14 -> 13, the fallback list 18 -> 19, and nothing
+    becomes newly dead.
+
+    The dangerous half was the four that must NOT move. AIcf and ACnr carry a
+    damage figure and an area, so reaching the fallback would have fired a
+    500-damage nuke where the map wants a burn and a 40-damage one across 800
+    units where it wants a heal. They are named in PASSIVE_BASES on the map's
+    own use of them, not on the missing field: A05Y is handed to a
+    three-second o007 dummy by SetUnitAbilityLevelSwapped and never ordered,
+    A020 rides Eneru's Thunder God form and does not appear in war3map.j at
+    all, and A002 sits on the base structure hatw and targets allies.
+    tools/passive_test.mjs, 22 checks, asserting the victim's health rather
+    than the predicate's return value.
+
+    Two findings from the same measurement:
+      - the map's own aart override is not a reliable passive tell, so it is
+        deliberately not used. Two abilities here wear a PassiveButtons icon
+        and only one means it: A057 아이스타임 has cooldown 2, range 800 and a
+        five-second duration and is plainly active. The icon rule therefore
+        stays keyed to Blizzard's base art.
+      - tools/abilities.py did not read the map's own aord override, so an
+        ability that renames its order string was compiled with the base's.
+        A06D, the captured Monster Ball, is the only one: it answers to
+        'summoning' where its AIrr base says 'roar'. FIXED -- the compiled
+        table now prefers the map's field, and exactly one of the 1046 entries
+        changed. No behaviour moves today, because nothing consumes the value
+        of an order string: isPassive and itemSpell both only test whether one
+        exists. That is exactly why it would have gone unnoticed until
+        something did dispatch on the string, which is the reason to close it
+        now rather than file it.
+
+    NOT DONE: A020 and A05Y are correctly silent rather than correctly burning.
+    Cloak of Flames damages on its own clock, and what the data carries is
+    Area, the damage in Icfd (Blizzard 10; this map 500 on A020 and
+    1000/2000/3000 across A05Y's three levels -- the raw w3a does carry
+    Icfd:4 = 850 and Icfd:5 = 1000, but alev:0 = 3 makes those unreachable,
+    so the "850-3000 across five levels" this note used to say was wrong)
+    and a duration of 1. Whether that duration is
+    the interval between bursts is not stated anywhere in AbilityMetaData --
+    adur is the generic Duration field every ability shares, so its label
+    settles nothing the way Ore1's did for Reincarnation. Guessing it is a
+    one-second pulse is exactly the kind of plausible inference that has been
+    reverted here before, so the pulse is not written.
+
+[x] The Monster Ball caught nothing  (FIXED)
+    I006 몬스터볼, 1000 gold, one use, sold from a shop: aim it at a creep under
+    30% life and there is a 30% chance it is yours. The map writes the whole
+    mechanic itself across four triggers, and every one of them was landing on
+    an engine that could not carry it.
+
+    What the script does, verbatim, none of it reimplemented here:
+      SPELL_EFFECT / 'A03V'  the target must be owned by Player(12) -- creeps
+                             only -- and at GetUnitLifePercent <= 30. The roll
+                             is GetRandomInt(0,'d') <= 30; 'd' is a one-char
+                             literal, so it lexes to 100 and the odds are the
+                             30% the tooltip prints. On success the creep is
+                             hidden, paused, made over to the captor, and a
+                             captured ball I008 is stamped with its index by
+                             SetItemUserData.
+      USE_ITEM   / 'I008'    a toggle: out 150 units in front of the holder,
+                             unpaused and vulnerable, or back in.
+      DROP_ITEM  / 'I008'    puts it back in regardless.
+      PAWN_ITEM  / 'I008'    RemoveUnit -- selling the ball kills what is in it.
+    All four find their creep the same way: loop 1..count comparing
+    GetItemUserData against the stored index.
+
+    Three separate gaps, each silent:
+      - SetItemUserData/GetItemUserData were `() => {}` and `() => 0`. Every
+        ball reported index 0, so no loop iteration ever matched and use, drop
+        and sale all did nothing at all.
+      - pawnItem fired PAWN_ITEM without a soldItem key, so GetSoldItem()
+        returned null and the sale branch could not run even once the ids
+        matched.
+      - nothing could aim an item. useItem fired only USE_ITEM, with no target
+        and no spell events, so the capture trigger's own condition -- which
+        reads GetSpellTargetUnit -- was never reached.
+
+    The third is the only one that needed a design decision, and it is one
+    item's worth of behaviour rather than a system: of the map's 332 item
+    types exactly one carries an ability with both an order and a unit target,
+    and it is this ball. useItem now resolves that ability and fires the five
+    spell events before USE_ITEM; the client arms a crosshair for an item the
+    server marks `targeted` and sends the click's unit with it, and escape
+    lets go of it the same way it lets go of a pending cast.
+    tools/monsterball_test.mjs, 23 checks -- 17 through a real capture,
+    release, recall and sale, 6 in the browser for the aiming.
+
+[x] A transformation's active abilities are on the unit but not clickable
+    (FIXED)
+    A metamorphosis already granted its alternate form's ability list, so the
+    passive half worked -- the Super Saiyan attribute bonuses land -- but an
+    ACTIVE one had no slot, because sendHero and slotAbility both built the card
+    from the hero definition's own castable list rather than from what the unit
+    holds. Warcraft III builds the card from the UNIT, and a metamorphosis is a
+    genuine change of unit; room.js now does the same, through one cardSlots()
+    both of them read so the client and the server cannot disagree about what
+    slot N means.
+
+    The old note here was wrong about the count, in the way this file keeps
+    being wrong when a number is read rather than measured. Six of the sixteen
+    forms grant an ability with an order string, not five, and FOUR of those
+    grant one the hero's static list does not already carry:
+      O000 만해        Ichigo          A030  Black Getsuga
+      H01P 기어        Luffy           A04Y  기간트 피스톨, 1000 damage
+      H001 아이스사브르 Haku            A05C  아이스블록 파르티잔
+      Nbst CP9         Rob Lucci       A02D
+    Eneru's O003 and Gaara's O005 grant one each that was already on the card.
+    And "O003 grants four, which is more than q/w/e/r/d/f has room for" was
+    counting its passives: of AInv, A01W (AEev), A020 (AIcf) and A01U, only the
+    blink can be cast. No card gains more than one slot, so six is still enough.
+
+    Appending rather than inserting keeps every existing index where it was.
+    The same route closes the other end of the same gap: a hero's base (uabi)
+    abilities only reached `castable` when the map's script named them in a
+    GetSpellAbilityId comparison, which is a rule about triggers and not about
+    command cards. Exactly one hero is affected and it is a big one -- Majin
+    Buu's 기폭팔 (A00Z), a 5000-damage 500-radius nuke for 10 mana that no
+    trigger mentions, so it had no slot at all.
+    tools/carried_test.mjs.
+
+[x] Hotkeys  (FIXED)
+    The map assigns each hero ability its own key in war3map.w3a ('ahky'). The
+    client used a fixed Q/W/E/R/D/F row, so on most heroes the letter printed on
+    the button and the key that actually cast were different keys.
+
+    The old note here was wrong twice about the data. It said all 130 abilities
+    declare a hotkey -- 109 of the 130 do -- and it implied nothing compiled the
+    field. compile_game.py:206 already emitted it (`hotkey=clean(lvl_get(m,
+    'ahky', 0, ''))`) and had all along; abilities.py drops it deliberately as
+    presentation the *server* never needs, which is correct. The only real gap
+    was sendHero, which built the client's ability payload without it.
+
+    Measured before touching anything:
+      declared hotkeys .......... 109 of 130 hero abilities
+      distinct keys ............. Q 24, W 24, R 23, E 21, T 7, B 4, V 4, C 2
+                                  -- T, B, V and C were unreachable, and D and F
+                                  are declared by no ability at all
+      collisions ................ 0 heroes give two castable abilities the same
+                                  key, so binding needs no tie-breaking
+      slots with no hotkey ...... 16 of 125 castable (3 innate); they fall back
+                                  to their position, and only to a letter no
+                                  declared hotkey on that hero already holds --
+                                  3 heroes need that guard
+
+    Resolved once in main.js and written back onto the ability as `key`: the
+    command card labels from the same field the keydown handler binds, so the
+    printed letter is by construction the letter that casts. That single
+    resolution point is the fix -- the bug was two places deriving the key
+    independently.
+    tools/hotkey_test.mjs, 9 checks, driven through a real match: Byakuya
+    Kuchiki, whose six abilities are C Q W E B V, so every slot moves off its
+    old position and a regression cannot pass silently.
+
+[x] SetUnitTimeScale -- 36 calls, currently a no-op  (FIXED)
+    Blizzard.j's SetUnitTimeScalePercent divides by 100 first, so what the
+    native receives is already a multiplier; this map asks for 36 of them
+    between 0 and 2. The client sets it on the view's AnimationMixer, and holds
+    it per unit id rather than on the view, because a metamorphosis throws the
+    view away and builds another -- a hasted hero that morphs is still hasted.
+    Two of the 36 pass 0, which is a unit frozen mid-animation and a visible
+    state rather than an unset value, so zero is carried through rather than
+    falling back to 1. tools/cosmetic_test.mjs.
+
+[x] Text tags: no floating text renders at all  (FIXED)
+    Measured 2026-08-30, and that entry used to understate it as "text does not
+    drift" -- the text never appeared. CreateTextTag returned an inert handle,
+    the only native that emitted anything was DestroyTextTag -- backwards, since
+    22 of the map's 48 tags are permanent and are never destroyed -- and the
+    client's addFloater pushed into an array with no reader and no draw code.
+    Now: the natives keep a real tag, a tag touched during a tick is sent once
+    at the end of it with its finished state, and the overlay canvas ages, moves,
+    fades and expires it. Sent once rather than streamed, because the motion and
+    the fade are both functions of age alone.
+    Deferring to the end of the tick is what makes one message enough. Every one
+    of the map's 48 sites is the World Editor's action group -- create, then
+    velocity, permanent, lifespan, fadepoint -- so emitting at creation would
+    have sent 48 empty tags and 26 x 4 corrections.
+    The units are Blizzard.j's and are passed through as it converts them:
+    TextTagSize2Height is size * 0.023 / 10 and TextTagSpeed2Velocity is
+    speed * 0.071 / 128, both into Warcraft III's 0.8 x 0.6 screen box, which
+    the client divides through exactly as tools/uiframe.py does for the console.
+    Found while fixing it, each with its own check:
+      - GetObjectName read its id as a unit type only. Its one call site in the
+        map is GetObjectName(GetSpellAbilityId()), which is never a unit type,
+        so every spell shout in the game read " !!" with no spell in front of
+        it. It now falls back to the ability and item tables: "산혼철조 !!".
+      - The 22 permanent tags are the lane signboards beside each base (two
+        columns of five at x = +/-5088) and the two base markers. They are made
+        once at init and broadcast once, so a client that connects later saw
+        none of them; room.js now replays the live permanent ones on that
+        client's first snapshot. Tags with a lifespan are deliberately not
+        replayed.
+      - Colour codes are honoured rather than stripped, which the rest of the
+        client does to message text. Two of the map's own labels are
+        "|c00ff0000RED|r TEAM" and "|c000000ffBLUE|r TEAM"; stripped, they are
+        two identical white words.
+      - The bounty text is real after all. war3map.j sets
+        PLAYER_STATE_GIVES_BOUNTY true for Player(0..7) -- eight calls, not the
+        ten this entry used to claim -- and the world only stored gold and
+        lumber, so the flag was dropped on the floor. A kill now floats the gold
+        it paid, to the killing player alone.
+    One number here is reasoned rather than read, and is called out in
+    overlay.js: that a tag's height uses the same 0.6-tall box as a frame's.
+    Nothing states it outright. What supports it is that the game's own FDF
+    fonts are declared in that box at 0.009-0.015, so a default tag at 0.023
+    comes out about twice ordinary interface text -- which is what Warcraft III
+    looks like. A retail screenshot would settle it; that constant is the fix.
+    tools/texttag_test.mjs, 25 checks, half of them read pixels back off the
+    overlay canvas rather than asking whether a function was called.
+
+[x] The sweep's open HIGH rows: five spells, and three things under them
+    (FIXED)
+    HeroSweep.TXT's queue, worked top down. Every number below is the map's own,
+    quoted with the field id it comes from; the slot meanings resolve through
+    AbilityMetaData.slk's useSpecific column as usual, and every new case has a
+    CONTRACT entry in tools/slot_test.mjs. tools/spellshape_test.mjs casts them
+    and reads what happened (79 checks) rather than asserting the source.
+
+    Blink -- Ebl1 is the hop, `range` is not  (A01U Eneru, A04M Renji)
+        Ebl1 is "Maximum Range" and Ebl2 "Minimum Range"; the ability's `range`
+        is how far away the ORDER may be issued and is a different number.
+        Blizzard's own Warden settles it: Rng1 99999 against Ebl1 1000 and Ebl2
+        200. This map keeps the 99999 and writes Ebl1 400 on both blinks, so
+        reading the order range as the hop let Eneru and Renji cross the whole
+        map in one jump. The minimum is clamped rather than refused, which is a
+        reading and says so in the code: nothing in the data says what Warcraft
+        III does with a click inside it.
+
+    Flame Strike -- a burning circle, not a bolt  (A04F Akiha, A004 Sandaime)
+        Hfs1 Full Damage Dealt every Hfs2, then Hfs3 every Hfs4, inside aare,
+        capped at Hfs6. It shared Death Coil's case, which reads slot 1 as one
+        damage figure at one unit: 150 of 3000 at rank 10, and a click on bare
+        ground -- which is how the spell is cast -- returned 'need target' and
+        did nothing at all. The two durations are the two phases rather than a
+        hero/creep pair, because the spell targets the ground and there is no
+        unit to be a hero; Blizzard's row reads the same way, HeroDur1 2.67
+        inside Dur1 9.
+        Hfs6 is capped PER TARGET, and that is the one reading here that the
+        data does not settle. What supports it is the author's own arithmetic:
+        Hfs6 is exactly Hfs1 x 20.05 at every level (300 against 15, 3000
+        against 150), and 20.05 is the number of 0.2 s ticks in the 4.01 s full
+        phase. What argues against it is that Blizzard's own row does not follow
+        that rule -- DataF1 90 against a 121 full-phase total. Recorded in the
+        code as a reading, not as a fact.
+
+    Mana Shield -- nothing read it  (A00S Sandaime, A06S Nico Robin, A00P Orochimaru)
+        Nms1 "Mana per Hit Point", Nms2 "Damage Absorbed (%)". No damage path
+        in server/world.js had ever looked at either, so all three did nothing.
+        All three carry Nms2 = 1.0 and Nms1 = -0.01: a NEGATIVE rate, so
+        absorbing pays mana back instead of spending it. That is the author
+        writing "cancels all damage" in the fields, and A00S's own tooltip says
+        exactly that -- 모든 데미지 캔슬. The same code covers Blizzard's
+        reading, which spends 1 mana a point and drops when the mana runs out,
+        because the sign of the rate decides which way the mana moves. Warcraft
+        III makes this a toggle with no duration; this map gives all three an
+        ahdu of 5-10 s, so it is timed here and the toggle-off order is not
+        modelled.
+
+    Aerial Shackles -- Mls1 is per SECOND  (A04X Luffy)
+        300/600/900 a second for 20 seconds, and with no case at all it fell to
+        the damage fallback and spent the per-second figure as a single hit. The
+        buff code is deliberately not stamped: abuf lists two (Bmlc, Bmlt) and
+        nothing in the data says which rides the target. 82 abilities carry a
+        multi-buff list, so guessing an order would have been a rule rather than
+        a fix; the map removes Bmlt from the shackled unit itself and nothing is
+        gated on it.
+
+    A summon counted at zero summons nothing  (A03R Rock Lee, A055 Haku)
+        AbilityMetaData's Hwe2 is "Summoned Unit Count" and both set it to 0 at
+        every level -- the row is kept for its buff and its cooldown and the
+        spell comes from the map's own trigger. summonFrom floored it to one and
+        put a Quilbeast on the field the ability's data forbids. An ABSENT count
+        still means one; only the thirteen bases whose useSpecific list names
+        Hwe2 read slot 1 as a count at all.
+
+    Under those five, three engine-wide things the rows kept circling:
+
+    The dummies that never died -- and it was never RemoveUnit
+        Eight rows reported "dummy units never removed -- no timed life, no
+        RemoveUnit, keep attacking". The map does give them a life span, and not
+        with a timer: 102 of its unit types carry a NEGATIVE life regeneration,
+        84 of them with ten life or less, so they are written to bleed out in a
+        couple of seconds. world.js applied the regen and then never checked the
+        result, so they sat on negative life for the rest of the match. Warcraft
+        III kills a unit whose life reaches zero however it got there. No hero on
+        the roster carries a negative regen, so nothing a player controls can die
+        this way.
+
+    The dummies that should never have been swinging
+        UnitWeapons.slk's `weapsOn` -- the map's own `uaen` -- says how many of a
+        unit type's weapons are turned on, and tools/unittypes.py dropped it.
+        The map sets it to 0 on 103 unit types and 93 of those carry a real
+        damage figure inherited from their base, so every spell dummy in the
+        game stood around auto-attacking with it. None of the 93 is a hero
+        anyone can play. It defaults to 1 rather than 0, so a unit type with no
+        weapons row keeps the attack it has always had: only a table saying 0
+        ever takes one away.
+
+    Cloak of Flames only ever reached the game on an item
+        AIcf's Icfd is "Damage Per Duration" over the ability's own duration in
+        its own area. ITEM_BONUS read it for a carried item and nothing read it
+        for a unit ability, so Eneru's Thunder God form -- 500 damage a second in
+        a 200 radius, A020 on O003 -- burned nobody. It is still passive, which
+        it is: it has no order string and is never cast. Only a burn this code
+        granted is ever taken away again, so a cast Immolation survives a recalc
+        and the form's burn ends with the form.
+
+    Also closed by earlier work, verified rather than assumed:
+      A03P 하늘의 쇠사슬 and A06O 베인떼플루르 -- both were waiting on the AEer
+      case and on ANfd reading Nfd3. A03P now roots for its 10 s and stamps
+      B00V; A06O's payload A06P roots and stamps B00H; and A01O's swords deal
+      the 0 the map wrote rather than 60 read out of "Graphic Delay".
+
+[x] Four more from the sweep's MEDIUM queue: a field the engine had a constant
+    for  (FIXED)
+    Found by re-verifying half 1's medium rows against the repaired engine
+    rather than against the notes. Seven of them turned out to be already closed
+    -- A042, A062, A04I, A04N, A04R, A044 and A06J all reported a phantom
+    `d1 || N` default, and a cast of each now deals 0, which is the explicit zero
+    the map wrote. Four were live:
+
+    Bash was filed as a rage buff  (A016..A01A, Sandaime Hokage's five 강타)
+        AbilityMetaData names ACbh's slots "Chance to Bash", "Damage Multiplier",
+        "Damage Bonus", "Chance to Miss" and "Never Miss", and AHbh is the only
+        other base carrying them. It is a passive on-attack proc, and it was
+        sitting in the roar case reading a bash chance as a rage percentage.
+        All five ranks carry passiveArt, so the wrong case never actually ran in
+        play -- the real cost was that ACbh was in HANDLED_BASES, which kept
+        ability_audit reporting five abilities green that nothing implemented.
+        Now read at attack time out of BASH_BASES, like AOcr before it: 20-40%
+        for a x3 hit and a 1-3 second stun, both the ability's own numbers. Cbh4
+        "Chance to Miss" is left alone because all five carry 0.
+        It also lights the `bash` floating-text family, which UI/MiscData.txt has
+        always carried and nothing could fire.
+
+    The alternate form was 3000 life short  (A040 InuYasha, A01Y Eneru)
+        Eme5 is "Alternate Form Hit Point Bonus" and AbilityMetaData gives it to
+        AEme alone -- Chemical Rage's fifth slot is a "Move Speed Bonus (Info
+        Panel Only)", a different thing that must not be spent as life. Both of
+        this map's Metamorphoses write 3000 into it and nothing read it. AEme is
+        split out of the shared morph case for that one field, the way Starfall
+        was split out of Blizzard, so slot_test can hold each to its own meaning.
+
+    Thunder Clap slowed by a constant of ours  (A01P Eneru 뇌격)
+        Htc3 is "Movement Speed Reduction (%)" and Htc4 "Attack Speed Reduction
+        (%)", written as fractions: Blizzard's own Mountain King carries 0.5 and
+        0.5, this map's 뇌격 0.4 and 0.4. The case applied a hardcoded 0.25 that
+        matches no field on any of them, and spent neither field. War Stomp
+        shares the case and declares neither, which is why it takes the stun
+        branch and never reaches this one.
+
+    A mirror image was a fifth of a hero  (A02N Sandaime 그림자 분신)
+        Omi2 is "Damage Dealt (%)" and Omi3 "Damage Taken (%)". Blizzard's Blade
+        Master carries 0 and 2, an image that deals nothing and takes double;
+        this map writes 1 and 1.5. The port gave the image 0.2 of the hero's life
+        instead, a factor that appears in no field of either, and read neither
+        multiplier. Images now keep the hero's own life and carry the two
+        multipliers the ability states.
+
+    tools/carried_test.mjs, 57 checks.
+
+[x] Ask the other question: which fields does the engine never read?
+    (tools/unread_test.mjs)
+    slot_test asks whether a slot the engine READS means what the engine thinks.
+    This asks the question that has cost more -- a field the map filled in that
+    NOTHING reads. Every defect fixed on 2026-09-03 had that shape: Eme5's 3000
+    life, Htc3's slow, Omi2 and Omi3, Nms1 and Nms2. None was visible to any
+    check we had: ability_audit asks whether a case EXISTS, slot_test asks
+    whether the slots a case reads are named right, and a player sees the spell
+    go off either way.
+
+    It is worth saying why this is a test and not another sweep. Sweep 1 spent
+    about 5M subagent tokens to cover 13 of 26 heroes and hit a spend limit
+    before the other 13; this covers all 26 for nothing, and unlike a written
+    note it re-derives its answer from the map every run, so it cannot go stale.
+    Agents are worth spending on what it cannot see -- whether a map trigger
+    delivers a payload -- and one or two heroes at a time.
+
+    It found 53 abilities a player can reach declaring a field nothing read.
+    Six were worth fixing and are:
+
+      ACt2 -> AHtc     Sandaime's five 내려치기 ranks carry Thunder Clap's four
+                       slots in Thunder Clap's order -- Damage, Extra Damage To
+                       Target, Movement Speed Reduction, Attack Speed Reduction.
+                       With no case they fell to the damage fallback, which
+                       spends slot 1 and cannot see the other three, so a 0.2 to
+                       1.0 movement and attack reduction went unapplied at every
+                       rank.
+      ANbf             Breath of Fire carries Carrion Swarm's own four: Nbf2 Max
+                       Damage, Nbf3 Distance, Nbf4 Final Area. The cone read
+                       none of them, taking its length from the ORDER range and
+                       its spread from a flat 0.45 radians. Ichigo's 검은
+                       월아천충 is a 600 cone ordered at 800 and reached 800;
+                       InuYasha's 폭류파 is 800 ordered at 900. The spread now
+                       comes from the same two fields -- a cone `len` long
+                       ending `d4` wide subtends atan(d4/len), 34 degrees for
+                       Ichigo against the 26 this used for everything -- and
+                       Itachi's Nbf5 burn is dealt.
+      ANst             Stampede had no case at all, so Gaara's 유사폭류, a
+                       ten-second bombardment, dealt its FIVE BEASTS PER SECOND
+                       as five damage once, and Kisame's 수둔-대 폭포술 dealt
+                       two. The 25 and the 1000 they carry are in Nst3 and were
+                       read by nothing. Now Nst1 x the duration waves of Nst3 in
+                       the Nst4 radius.
+      ANbr / ACro      Roa2 Defense Increase and Roa3 Life Regeneration Rate
+                       were dropped. Byakuya's 섬경 천본앵경엄 handed out its
+                       1000 damage and not the 100 armour and 150 life a second
+                       beside it, and Rob Lucci's 『철괴』 -- zero damage
+                       increase, a hundred points of armour -- did nothing at
+                       all.
+      AUin             Uin2 is the summon's life and five abilities carry one,
+                       so every infernal lived the 60 seconds of our fallback
+                       instead of the 0.01 to 5 the map wrote.
+
+    The other 61 unread fields are written down one by one in
+    tools/unread_accepted.json with a reason each, the way slot_test's ACCEPTED
+    works: the test fails on anything not on that list, and the count only goes
+    down. Most are honest non-numbers -- Morphing Flags is a bit-flag, Graphic
+    Delay and Animation Delay are presentation, a Damage Interval of 0.001 is
+    below one tick at 30 Hz, and four Max Damage caps are set above any total
+    their spell can reach. The ones that are real gaps say so: Slow Poison has
+    no on-attack hook, Frenzy is unimplemented, windwalk is not modelled so
+    Alucard's backstab has nothing to trigger on, and Silence's "Attacks
+    Prevented" needs an attack-block buff the port does not have.
+
+    One is left deliberately unread. Apig's "Damage per Interval" names no
+    interval field of its own, and the immolation case next door reads the same
+    label as damage per SECOND. Across the 50 to 100 petals Byakuya releases,
+    200 a second and 200 over the ability's ten seconds are different spells by a
+    factor of ten, and nothing in the data settles which. Recorded rather than
+    guessed at.
+
+[ ] What the sweep's HIGH rows still leave open
+    Three of them are not data-slot defects and are recorded rather than
+    guessed at:
+
+    A01J 소환술-예토전생 -- the summoned Hokage cannot be commanded
+        The summon itself is right. Two things around it are not: acas = 5.0,
+        the five-second ritual, is never honoured by castAbility, and a player
+        has no way to select or order a unit they summoned, so the revived
+        Hokage's four abilities can never be cast. The second is a control
+        feature rather than a fix.
+
+    castDummy runs the first ability the dummy holds, not the one ordered
+        (STILL TRUE for a dummy, but no longer reaches a HERO -- see below)
+        The map spawns a dummy carrying two abilities and orders it to cast one
+        of them by numeric order id (852171 and the like). world.order treats
+        any numeric order as "cast your one ability" and castDummy takes the
+        first non-passive it finds, so Rock Lee's 취권 fires A057 where the map
+        asked for A046 and buff B011 is never stamped. Resolving it needs
+        Blizzard's order-id -> order-string table, and that table is not in the
+        MPQs: OrderId() here is a string hash of ours, which cannot match a
+        literal id the script passes. Not establishable from the data we have.
+
+    Every spell event fires at once  (FIXED 2026-09-08 -- see THE CAST
+        TIMELINE below)
+
+[x] THE CAST TIMELINE  (FIXED 2026-09-08)
+    castAbility resolved a spell on the frame it was ordered and fired all five
+    spell events back to back in one call. Warcraft III does neither: a spell
+    is an ORDER. The caster walks into range, turns, starts its spell
+    animation, and the effect lands at the unit's cast point; a channelled
+    spell then holds the caster until it is done or broken off. The five
+    events mark those moments, and the map's own triggers sit on them.
+
+    Measured off the script, so this is what the map expects rather than what
+    a manual says. TriggerRegisterAnyUnitEventBJ appears once per event; the
+    per-spell triggers hang off those four:
+      EFFECT   ~120 triggers, one per spell -- the work
+      CHANNEL  5: A01G, A00W, A00L, A03K, A060. Four of them CREATE the ritual
+               (A00L raises 24 h009 around the caster, A060 raises 30 dummies,
+               A03K two pairs of e006/e007, A01G a peasant and pauses the
+               target) and then WAIT -- A01G's action is BO(3.) against its
+               own acas of 3.0
+      ENDCAST  6: A01G, A00L, A03K, A060, A04C, A04X. Five of them REMOVE what
+               CHANNEL created (ForGroupBJ over KO(type) -> RemoveUnit); the
+               sixth, A04X, sets udg_integer11 = 1 to stop a spin loop
+      FINISH   1: A022 pauses, hides and invulnerables the caster
+    So with everything fired at once the cleanup ran before the ritual, and
+    A04X (Amls, Luffy's 고무고무 바람개비) is the visible case: its EFFECT
+    trigger enables a 0.01s loop that pulls the target in, spins it three
+    turns while copying the turn count into udg_integer12, then throws it for
+    200 x udg_integer12 and 500 x udg_integer12 around; ENDCAST sets the stop
+    flag, and the stop landed before the first turn, so the throw was 500 x 0.
+
+    What is now in the engine (server/world.js castAbility and the step*Cast
+    family under it, tools/casttime_test.mjs, 38 checks):
+      - the order is refused up front for level, silence, cooldown, mana and a
+        dead target, as the game refuses it; a new cast replaces a cast in
+        progress
+      - approach: an ability with a range is walked into it, measured edge to
+        edge for a unit target; a range of 0 casts where the unit stands.
+        Nothing fires while walking, and a target that dies on the way drops
+        the order silently
+      - begin: face the target, CHANNEL then CAST, the 'cast' animation event
+      - EFFECT after the unit's cast point -- UnitWeapons.slk castpt, which the
+        compiled table had never carried (only the ten w3u overrides; every
+        other type had none). 0.3s for 20 of the map's 26 heroes, 0.4 for two
+        and 0.5 for four. Mana and cooldown are spent HERE, not at the
+        order. An ability with a Casting Time (acas: 47 of 1046, five of them
+        on this roster's castables -- A01G 3.0, A00L 5.0, A060 5.0, A03K 3.1,
+        A027 0.2) lands after that instead; that is the number the map's own
+        CHANNEL triggers wait for
+      - channel: a base in CHANNEL_HOLDS keeps the caster until its waves are
+        done (AHbz ANrf ACbz ACrf AEsf ANst ANcs -- the bases whose engine
+        case queues waves, less AOww, whose caster walks while it spins) or,
+        for Amls, until the hold ends. Amls now returns its hold -- the
+        target, the buff, the burn -- so ending the channel lets the target go
+      - FINISH then ENDCAST when it ran its course; ENDCAST alone on an
+        interrupt: any order() (the script's IssueImmediateOrder included), a
+        stun, death, the shackled target dying, or the map stripping one of
+        the ability's own buff codes from it (UnitRemoveAbility(target,
+        'Bmlt') is how A04X's loop lets go, so that had to end the channel or
+        the caster stood holding nothing for the rest of the 20s)
+      - the client loops the cast animation for a casting time or a channel
+        and drops back to stand on 'castEnd'
+
+    Traced for A04X with the target at 300: EFFECT at +0.30s, the engine's
+    Mls1 burn of 300 at +1.0/+2.0/+3.0, udg_integer12 1 -> 2 -> 3 a second
+    apart, the map's own UnitRemoveAbility at +3.93s and ENDCAST with it, the
+    throw's 600 (200 x 3) at +4.20s. The three-turn spin is the map's; the
+    engine only stopped ending it early.
+
+    Engine behaviour rather than data, and said so in the code: that mana and
+    cooldown go at the effect rather than the order; that a Casting Time
+    stands in for the cast point rather than adding to it (the map's 3.0 wait
+    against 3.0 acas says replace; the difference would be one cast point);
+    which bases hold their caster. The cast BACKSWING (castbsw) is compiled
+    and not yet used -- the game keeps the animation running that long after
+    the effect, and the client already lets a one-shot clip finish.
+
+    Tests that cast back to back had to change: a second castAbility now
+    interrupts the first, as a second order does in the game, so match_test
+    and audit.mjs cast one at a time; lightning_test reads the bolt off the
+    step that draws it rather than the order's tick; texttag_test takes the
+    shout's position at the effect rather than the order, since the caster
+    may have walked; spell_targets.mjs waits each ability's own casting time.
+    Left as they were: the item-spell path in useItem and startReincarnation,
+    which still fire all five at once -- the map's item spells and A01K have
+    no trigger on anything but EFFECT.
+
+    spell_targets.mjs, found on the way. Its table moved by 13 rows on the
+    first re-run, and the reasons were two, neither of them the timeline:
+      - a trigger that WAITS (A03H's BO) resumed inside the next ability's
+        window and read the target on its behalf. The classifier now drains
+        the sleeping trigger threads between abilities (the map keeps two of
+        its own asleep for good, jD and wD; those are the resting set).
+        A03H is back to "unit", which is what its trigger reads.
+      - udg_trigger24's CONDITION asks RectContainsLoc(base, GetSpellTargetLoc())
+        of EVERY spell effect, to keep seven blinks out of the bases, so
+        nearly every spell reads as "point". The old table's eight "none" rows
+        (Rain of Fire and Carrion Swarm among them, which need a point) were
+        an accident of some earlier state: the previous world.js trips the
+        same guard. Attributing reads to the spell's own trigger alone was
+        tried and turned 36 point spells -- Inferno, Stampede, Blink,
+        Shockwave -- into "none", because the point there is the ENGINE's
+        need and no table in the data names a base's target kind. So every
+        read counts, "point" is the honest default (a ground click carries the
+        unit under it too), and the table is now 94 point / 21 unit with three
+        real corrections: A05A and A05R read the target point, A05H the unit.
+        Open: a self-cast base (AEme, AOws, AHtc, AOmi, AOwk) still prompts
+        for a click. Closing that needs the base's own target kind written
+        down, which is Blizzard engine knowledge rather than a column.
+
+    Open under the same heading: castDummy (the script's numeric orders) still
+    runs the dummy's ability directly with no events, as before.
+
+[ ] The stub natives, ranked  (measured 2026-08-31, tools/stub_audit.mjs)
+    A native the engine has never heard of is reported -- boot_test prints the
+    list, and it is empty. A native that exists with an empty body is not: it
+    takes the call, returns, and nothing says a word. That is how the text tags
+    hid, and this is the rest of that class.
+    Was 244 of 515 natives stubbed, 71 reached across 442 call sites. After the
+    camera, time scale and cinematic filter below: 233 of 511, 63 across 336.
+    After the music, the fog and the three below: 222 of 509, 58 across 328.
+    After the five of 2026-09-12 below: 200 of 507, 44 across 291. Run the tool
+    for the full table; what follows is what a player would notice, with the
+    false alarms named so nobody spends an evening on them twice.
+
+    DONE 2026-09-12, tools/stubs_test.mjs (27 checks, no server) and
+    tools/cinemode_test.mjs (11, browser):
+      SelectUnitForPlayerSingle  4 sites, and not the cosmetic "auto-reselect"
+                               the old row below called it. All four hand a
+                               player a hero the script has just swapped or
+                               brought back, and one of them is a NEW unit:
+                               Yusuke (H00T) at 250 STR and 250 AGI creates an
+                               Eidm, copies the stats, level, XP and six item
+                               slots onto it, removes the old unit, and selects
+                               the new one for its owner. Nothing in the port
+                               re-pointed a player at a new hero once a match
+                               was running -- buyHero does it only when a
+                               player has no unit -- so the demon form left
+                               the player holding a removed unit: no hero
+                               card, no orders, for the rest of the match.
+                               Blizzard.j's body is gated on GetLocalPlayer,
+                               which answers Player(0) here, so the BJ is
+                               overridden with the player still known (the
+                               PanCameraToTimedLocForPlayer pattern) and the
+                               room takes it from there: the unit selected for
+                               a player is the unit that player controls.
+                               Ownership and hero-ness are checked; the room
+                               test tries to hand across another player's
+                               hero and a creep, and neither moves.
+      CinematicModeBJ          2 sites, and they bracket every match: (true)
+                               before the 3-2-1 countdown, (false) after
+                               "Fight !!". Same GetLocalPlayer gate, same
+                               override. The client fades the interface out
+                               over bj_CINEMODE_INTERFACEFADE (0.50 s), closes
+                               letterbox bars in, and ignores orders, hotkeys,
+                               wheel and drag until it lifts. The global half
+                               of the BJ -- speed lock, fog off, dawn/dusk
+                               off, a fixed random seed -- has nothing to act
+                               on here. The bars' height (12% of the view) is
+                               a figure of ours; no file states it. Every
+                               sub-native the BJ reaches (ShowInterface,
+                               EnableUserControl, EnableUserUI, EnableOcclusion,
+                               ClearTextMessages, CameraSetSmoothingFactor,
+                               SetGameSpeed, SetMapFlag, VolumeGroupReset,
+                               FogEnable, FogMaskEnable, IsFog*) is subsumed by
+                               the override and stays a stub on purpose.
+                               Asserted end to end: a two-seat match stepped
+                               in-process opens cinematic mode at 294 s and
+                               closes it 7.5 s later.
+      QueueUnitAnimation       2, the duel winner's flourish: "spell", then a
+                               queued "stand". Found something larger on the
+                               way: a clip the script asked for by name
+                               (SetUnitAnimation, 53 sites) played once and
+                               HELD its last frame, because playClip never
+                               changed the state the per-frame loop compares
+                               against. Warcraft III returns to stand when the
+                               sequence ends. Now a scripted one-shot returns
+                               to the unit's own stand, or to what was queued.
+      SetSoundParamsFromLabel  3, all in the countdown: ChatroomTimerTick and
+                               QuestNew are 80 of 127 in UISounds.slk, and
+                               CreditsMusic is 120 -- in DialogSounds.slk, not
+                               UISounds. tools/soundsets.py now compiles every
+                               SoundInfo row's volume and pitch (3934 labels)
+                               into data/soundlabels.json, since the labels
+                               come from the map's script at run time. The
+                               ticks and the sting were playing at 127.
+      GetFloatGameState        4, via GetTimeOfDay -- which the engine answers
+                               by name, so in practice unreached; made to read
+                               the same clock so a raw caller cannot get a
+                               second answer.
+
+
+    DONE since this was written:
+      PanCameraToTimed         39 sites, one per trigger. The map never calls
+                               the native: all 39 go through Blizzard.j's
+                               PanCameraToTimedLocForPlayer, whose body is
+                               wrapped in `if GetLocalPlayer() == whichPlayer`.
+                               There is no local player on a shared server --
+                               GetLocalPlayer answers Player(0) -- so that gate
+                               drops 38 of the 39 before the native is reached,
+                               and implementing the native alone would have
+                               looked done and shown nothing. The engine
+                               overrides the BJ instead, where the player is
+                               still known, and the client shows the pan to that
+                               player only. Works because vm.call() checks
+                               natives before JASS bodies.
+      SetUnitTimeScale         36. Its own item above.
+      DisplayCineFilter        5 displays over 41 setter calls. State
+        + SetCineFilter*       accumulates over the setters and DisplayCineFilter
+                               sends it, which the BJs put last so nothing has
+                               to be deferred. Three of the five are over
+                               White_mask, a plain white square and so exactly
+                               the flat colour the client draws; the other two
+                               name a shaped mask (DiagonalSlash, and a
+                               command-button icon). FIXED 2026-09-07: the
+                               client now resolves the staged PNG and multiplies
+                               its RGB by the filter tint, preserving texture
+                               alpha and the scripted fade. All five map filters
+                               use normal alpha blending and full-image UVs;
+                               other blend modes / animated UVs remain unported.
+                               The slash's own 100% transparency is preserved.
+                               tools/cinefilter_test.mjs checks rendered pixels,
+                               tint, transparency, elapsed time and loading races.
+
+    DONE 2026-09-03, tools/atmosphere_test.mjs (14 checks):
+      SetMapMusic             2 sites. The argument is the string "Music",
+                              which is not a row in any of the SoundInfo tables:
+                              it is the label for the standard playlist, which
+                              Warcraft III keeps in UI\WorldEditData.txt under
+                              [MusicFiles] and which is what the World Editor's
+                              own music dropdown lists. tools/gameplay.py
+                              carries those 43 paths into gameplay.json; all 43
+                              resolve through the same sound index every other
+                              sound uses, and all 43 are already converted and
+                              served -- the conversion had been producing them
+                              all along with nothing to ask for them.
+                              The whole list goes to the client rather than one
+                              file, because the call names a list: `random` picks
+                              freely from it and the client moves on when a track
+                              ends. It streams through an <audio> element rather
+                              than the effects mixer's decoded buffers, since a
+                              five-minute mp3 decodes to tens of megabytes of raw
+                              samples. A browser will not make noise before the
+                              page is touched and the map sets its music inside
+                              config(), so the first click starts it.
+                              PlayMusic, PlayThematicMusic, StopMusic,
+                              ResumeMusic and SetMusicVolume came with it.
+
+                              CORRECTED, reported from play the same day as two
+                              songs at once. SetMapMusic SETS the list and does
+                              not start it, because this map runs a score of its
+                              own and does it through the SOUND system rather
+                              than the music system: udg_sound41 is
+                              Sound\Music\mp3Music\HumanX1.mp3, created with
+                              looping true and a duration of 284646 ms, started
+                              with PlaySoundBJ when a mode begins and stopped
+                              with StopSoundBJ when a team wins so that
+                              NightElfVictory (udg_sound40) can play. Blizzard's
+                              standard playlist over that is a second stream.
+                              The list is still sent, so ResumeMusic has it.
+      the score itself        Two things under the same report, both real. A
+        StartSound loop       sound created LOOPING was played once and stopped:
+        + StopSound 8         the client dropped the `loop` the event already
+                              carried, so a 4 minute 44 score ran once and never
+                              came back. And StopSound was a stub, so the map
+                              could not silence it when a team won -- the one
+                              thing its own trigger does at that moment. Sound
+                              handles now carry an id to the client so a stop can
+                              name the sound it is stopping.
+      SetTerrainFogEx         2. The map asks for style 0, 3000 to 5000, black.
+                              render.js was drawing 0x0b1018 from 4200 to 9000 --
+                              a constant of ours where the map has seven fields,
+                              the same class as Thunder Clap's slow. Style and
+                              density are carried but not yet drawn: style picks
+                              linear against exponential falloff, and density
+                              only applies to the exponential ones.
+
+      SetDayNightModels       2, and they are not scenery. Each of the two MDX
+                              files holds ONE light, FDirectSun, whose colour
+                              (KLAC, 8 keys) and ambient colour (KLBC, 9) are
+                              animated across a sequence that IS the day --
+                              333 to 60333 ms mapping onto 0 to 24 hours. Warm
+                              orange at midnight (0.80, 0.53, 0.31), white from
+                              about 06:00 to 17:20, back to orange by 24:00.
+                              render.js had been lighting the whole world with
+                              three numbers of its own: a hemisphere at
+                              0xa9c2e8/0x2a2620 and a directional at 0xfff0d8,
+                              all at intensity 1.15.
+                              tools/daynight.py carries the curves for all four
+                              DNC models into data/daynight.json. Only the
+                              colours and the two intensities are taken: the
+                              light's rotation is a single static key and the
+                              axis convention that would turn that quaternion
+                              into a world direction is not stated in the file,
+                              so the sun keeps the position it had.
+                              The CLOCK does not advance, and that is deliberate.
+                              How long a full day takes is in none of the files
+                              the archives gave us -- not MiscGame.txt, not
+                              MiscData.txt -- and the DNC sequence's own 60
+                              seconds is the length of the animation, not of the
+                              day. The map never touches the clock either: zero
+                              calls to SetTimeOfDay, SuspendTimeOfDay,
+                              SetTimeOfDayScale or GetTimeOfDay in the whole
+                              script. So the hour stays where Warcraft III starts
+                              a melee map and the light is sampled there, which
+                              is a figure out of the map's own model rather than
+                              a colour of ours. SetTimeOfDay, SetTimeOfDayScale,
+                              GetTimeOfDayScale and SuspendTimeOfDay are real
+                              now, so a map that does drive the clock works.
+      the late-joiner gap     Found while doing the above and worth its own line.
+                              The fog, the music list and the day/night models
+                              are all set once inside config() and main(), and a
+                              client that connects after that -- a reconnect, a
+                              second window -- got none of them, so it was lit
+                              and fogged by the renderer's constants while
+                              everyone else was not. They are scenery in exactly
+                              the way the permanent text tags are, and are now
+                              replayed alongside them.
+
+      the ambient themes      DONE, and the note that said it could not be done
+        SetAmbientDaySound    was wrong twice. Worth writing down how, because
+        SetAmbientNightSound  both mistakes are the same mistake.
+                              The labels are not rows in AmbienceSounds.slk, and
+                              that much was right: they are rows in
+                              UI\SoundInfo\MIDISounds.slk, whose columns are
+                              MIDIFileName and DLSFileName -- CityScapeDay.mid
+                              against CityScape.dls, under Sound\Ambient\
+                              CityScape.
+                              The first error was to conclude the files were
+                              absent. `find war3_extracted -iname '*.mid'`
+                              returns nothing, and that was read as "the archives
+                              do not have them". war3_extracted/ is what our
+                              extractor PULLED OUT, not what the archives hold;
+                              the listfile has all fifteen .mid and their banks,
+                              and gd.read() returns them: CityScapeDay.mid is
+                              19708 bytes of MThd out of war3.mpq, CityScape.dls
+                              1219608 bytes of RIFF.
+                              The second error was to conclude a browser cannot
+                              play MIDI, which is true and beside the point: the
+                              pipeline transcodes everything else already, and
+                              MIDI plus a bank is just another thing to render
+                              once. fluidsynth 2.x loads a DLS directly, so
+                              tools/ambience.py extracts the pair, renders it and
+                              encodes it to ogg like every other sound -- 4:28 of
+                              real audio for the day theme, 4:30 for the night.
+                              The labels come from the map's own script rather
+                              than from a list here, so this stays map-agnostic.
+                              Two things named rather than hidden. FluidSynth's
+                              rendering is not DirectMusic's, so it is the map's
+                              own score on the map's own instruments but not bit
+                              for bit what the game produces. And the render uses
+                              -g 1.0: FluidSynth's default gain is 0.2, a
+                              synthesiser setting rather than a figure from the
+                              game, and it puts the day theme's peak at -28.6 dB
+                              against -14.6 at unity, with no clipping either way.
+                              The row's own Volume of 80/127 is what the client
+                              plays it at. Day and night both go to the client
+                              and the hour picks between them, so the crossfade
+                              is there for whenever the clock is allowed to turn.
+                              NewSoundEnvironment("Default") is the EAX reverb
+                              preset that goes with them and stays a no-op: there
+                              is no reverb model here to set.
+
+    Player-visible, still open:
+      TerrainDeformRipple      2, via TerrainDeformationRippleBJ: a 1 s ring
+                               wave, radius 300, depth 100, under two spells.
+                               The crater half of this is done; the ripple is
+                               not, and it has the crater's problem twice over
+                               -- the wave's profile is in no extracted file.
+      SetCameraBounds          2, and correct as a stub: tools/compile_game.py
+                               reads the bounds out of that very call and the
+                               client clamps the camera to them. GetCameraMargin
+                               answers 0 where the game insets the playable
+                               area by a margin; the margin values are not in
+                               the archives we read.
+    Subsumed, not stubs in practice:
+      VolumeGroupSetVolume, PauseGame, EndGame, DialogSetMessage,
+      DialogDisplay, EnableUserUI, EnableUserControl  -- all reached only
+      through CustomVictoryBJ and CustomDefeatBJ, which the engine overrides
+      with the port's own game-over flow. The audit counts them statically.
+
+    Not cosmetic, and all three DONE 2026-09-03:
+      UnitStripHeroLevel       2, via SetHeroLevelBJ, which calls it whenever the
+                               level asked for is LOWER than the one the hero
+                               has. It returned true and did nothing. It is not
+                               setHeroLevel in reverse: going up grants a skill
+                               point and refills life and mana, and Warcraft III
+                               strips the level without healing anyone, so only
+                               the skill points come back off.
+      SetUnitPathing           1. The unit now leaves collision entirely, which
+                               is how a map parks something others must walk
+                               through.
+      SetPlayerHandicapXP      1. Scales what a hero of that player gains,
+                               alongside the ExperienceMod items already there.
+
+    CHECKED AND NOT A DEFECT -- do not re-investigate:
+      SetPlayerAllianceStateAllyBJ  40 sites, and the highest count in the
+        table, which is why it looks alarming. The outcome is right anyway:
+        config() also calls SetPlayerTeam, isAlly falls back to team equality,
+        and 66 explicit alliances are recorded through the real SetPlayerAlliance
+        during init. Measured after boot: isAlly(0,10) true, isAlly(0,11) false,
+        isAlly(4,11) true -- which is what matters, because players 10 and 11
+        own the two guard towers. Latent only: an alliance that crossed teams
+        would be missed, and this map sets none.
+      SetSoundVolumeBJ  33 sites, and it does drop the volume the map asked
+        for. It costs nothing: 32 of the 33 ask for 100%, which is the default
+        the sound already plays at. Exactly one site asks for 80%.
+      MultiboardReleaseItem 37, RemoveLocation 9  -- handle cleanup, and this
+        port garbage-collects.
+      Quest* 12  -- real now, and the Quests button opens the log; see the top
+        strip's item.
+      lobby and meta  -- SetStartLocPrio 24, SetPlayerRacePreference 10,
+        SetPlayerRaceSelectable 10, SetMapName/Description, SetTeams,
+        SetGameSpeed, SetGameDifficulty, GetCameraMargin 18. Correct as no-ops.
+
+[ ] The engine's other floating text: shadow strike and mana burn
+    CORRECTED 2026-09-03: the title said "miss, crit, bash, mana burn" and three
+    of those four now fire. `grep` for the tag constants in server/world.js
+    returns BOUNTY_TEXT, MISS_TEXT, CRIT_TEXT and BASH_TEXT, two references
+    each -- bash arrived with the Bash proc, which had nothing to fire it while
+    nothing implemented Bash. Two families are left, shadowStrike and manaBurn,
+    and neither ability is implemented, so this is a "when there is something to
+    announce" item rather than a gap in what draws.
+    UI/MiscData.txt carries eight text-tag families and the port now draws four
+    of them. Each is a colour, a velocity, a lifetime and a fade start, in the
+    units the text tag natives already take, and tools/gameplay.py compiles all
+    eight into gameplay.json -- so the data side is done and only the trigger
+    for each is missing:
+      gold, lumber   a harvester delivering; this map has no harvesting
+      bounty         DONE
+      miss           on an attack that misses
+      criticalStrike, shadowStrike, manaBurn, bash   on the ability firing
+    The four ability ones are worth having: this map's heroes carry crit and
+    bash widely, and the number is the only feedback that either fired.
+
+[x] Fourteen abilities had a blank button on the command card  (FIXED)
+    Reported from play as "are abilities supposed to have custom icons". They
+    are: the map sets `aart` on 173 of them, two of which point at art shipped
+    inside the .w3x (textures\HeroBuuChocolate.blp, on Buu's A02Z and A02V) and
+    the rest at Blizzard's own BTN/PASBTN buttons.
+    compile_game.py read the icon straight off the map's mods --
+    `find_icon(lvl_get(m, 'aart', 0))` -- so an ability the map does not rename
+    got nothing, even though Warcraft III's icon for it is sitting in
+    Units\*AbilityFunc.txt as `Art=`. 116 of the 130 hero abilities resolved,
+    14 came out blank: Blink for Eneru's 전광 and Goku's 순간이동, Mirror Image
+    for both 분신술, Reincarnation for Orochimaru's revive, Blizzard for
+    Gilgamesh's 보구의 비, and eight more.
+    The comment three lines below that call already described this same fix
+    being made for the effect *models* -- "Reading only the map's mods here saw
+    art for 13 of 130" -- so the models were routed through the table that lays
+    overrides on Blizzard's own art and the icon line was left as it was.
+    Two halves, and the first alone still left three blank:
+      - the ability table now carries `icon` as an art slot (abilities.py,
+        ART_FUNC 'art' and ART_W3A 'aart'), so Blizzard's is there with the
+        map's override on top, and compile_game falls back to it. 14 -> 3.
+      - the last three were named but had never been *extracted*: nothing had
+        ever referenced BTNBlizzard, BTNSilence or PASBTNReincarnation, so they
+        were not in war3_extracted and had no PNG. extract_blizzard.py already
+        harvests every art slot out of data/abilities.json, so adding the slot
+        was enough to pull them; no change was needed there. 3 -> 0.
+    Now 130 of 130, each pointing at a file that is staged and serves.
+    tools/icon_test.mjs, 9 checks -- coverage, that the file exists rather than
+    only being named, the four specific fallbacks, and that Buu keeps the map's
+    own imported art rather than being handed a stock button.
+
+[—] Fog of war — out of scope
+    The map turns it off (confirmed by the user, 2026-09-07). Full-map
+    visibility is intentional here; do not add fog of war as a fidelity fix.
+
+[x] The four buff seams the audit has been printing  (FIXED)
+    war3map.j gates real trigger chains on UnitHasBuffBJ, and four of the eight
+    codes it reads could never be true: 13 of the 14 applyBuff call sites passed
+    no `code`, so server/world.js:720 (the engine's answer to
+    GetUnitAbilityLevel on a buff id) and the buff-art path at :2071 could never
+    see them. 클러치 (A06Q) filters for units carrying B00H and 사폭장송 (A05Q)
+    for B00X -- both filters were permanently empty, and both spells are also on
+    the deliberate-zero list, so neither half of them did anything.
+    Every buff-applying case now passes the code the ability declares. A w3a
+    `abuf` field can name several at once -- Gilgamesh's A027 carries
+    "B00I,BHbz" -- so the lookup matches a stored code as a list rather than a
+    string.
+    Seams 4 -> 0. Asserted on the unit rather than in the source
+    (tools/spellshape_test.mjs): A059 stamps B00S on the enemies it stomps,
+    A03S stamps B00N on the caster because a roar buffs its own side, and the
+    two AEer abilities stamp B00X and B00H on what they root.
+    ability_audit.mjs only recognised the long form `code: i.buff` and reported
+    a seam on A059 that runtime said was closed; it now also sees the shorthand.
+
+[x] Entangling Roots had no case at all  (FIXED)
+    AEer -- A00O, A000, A05K, A03P, A06P -- fell to the damage fallback. Eer1 is
+    "Damage per Second" and the base holds the target in place while it burns;
+    it can still attack, so this is a total movement slow rather than a stun.
+    Gilgamesh's A03P is the one HeroSweep.TXT row under the phantom-default
+    pattern that the deliberate-zero fix did not close, and this closes it.
+    world.dotUnit puts damage on ONE unit over time. The area channel next door
+    is the wrong shape: a radius small enough to fake a single target still
+    catches whatever shares the tile.
+    Warcraft III carries two durations and picks by what it hit; the rest of
+    abilities.js takes heroDuration whenever there is one, which shortens every
+    effect on a creep -- 사박궤 should hold a hero 2s and a non-hero 10s, and
+    read the other way both get 2. The AEer case picks by target type. The other
+    twelve sites still do not.
+
+INTERFACE -- THE SHOP
+---------------------
+[x] A spent item still worked, for ever  (FIXED 2026-09-13)
+    `uses` is the map's own count -- a Potion of Greater Healing says 1 -- and
+    an item's charges are seeded from it. But useItem applied the effect BEFORE
+    spending a charge and never refused an item already at zero, so a potion
+    healed its full 1000 on every use however many it had left.
+    It compounded: spending the last charge DROPS the item rather than
+    destroying it, so the empty potion lay on the ground to be picked up and
+    drunk again. Measured before the fix: four uses, four heals.
+    Applying a one-use item twice contradicts the number the map wrote, which
+    is what settles it. The type decides, not the instance: an item whose type
+    declares no uses is not a consumable, and charges 0 there means "no limit"
+    rather than "spent" -- 128 of the item types carry a use count and 204 do
+    not.
+    NOT FIXED, and deliberately: whether an exhausted item should be DESTROYED
+    rather than dropped. The item table carries a `perishable` flag, nothing in
+    server/ reads it, and the archives never say what it means --
+    WorldEditStrings has WESTRING_UEVAL_IPER=Perishable, a label and no
+    statement. So the drop stays, and an empty item now lies on the ground
+    doing nothing instead of being removed. Worth settling with a source.
+    tools/spentitem_test.mjs, 11 checks, including that an unlimited item still
+    works twice and that the archives really are silent on the flag.
+
+[ ] An item's ability never executes
+    Surfaced by the targets fix, not caused by it. useItem fires the five spell
+    events and draws the art, which is what the Monster Ball's capture trigger
+    needs, but it never calls execute(), so an item ability with real numbers
+    delivers none of them. A Throwing Dagger carrying Storm Bolt now plays its
+    cast art and deals nothing.
+    Not a small fix, and the measurement says why: of 400 item-ability pairs
+    over 299 items, only 2 have an engine case at all. 383 would fall to the
+    generic damage fallback, and 15 are the heal/mana/xp family that itemUse
+    already delivers -- so executing them wholesale would double the potions
+    and turn every stat tome into a damage spell (a Tome of Intelligence's
+    AIim would run the immolation case). The item bases are their own family
+    with their own meanings, and which of them the engine should run is a
+    question per base, not one switch.
+
+[x] The shop is the command card now, not a floating list  (FIXED)
+    Warcraft III does not open a window for a shop. Selecting the building
+    replaces what the bottom bar shows: the portrait becomes the shop's model,
+    the name and bars become the shop's, and the command card -- the same
+    measured cells the hero's abilities sit in -- fills with its stock. Clicking
+    a cell buys. The inventory stays up, which is the only way to see whether
+    there is room for what you are buying.
+    The shops are the buildings inside each base: five types, two of each,
+    mirrored at x = +/-4000. n000 스텟 상점 (7 items), n001 아이템 상점 (10),
+    n00H 전용템 상점 (11), n00N 전용템 상점2 (11), n013 아이템& 전용템 상점
+    (8 items and 1 unit). data/game.json keys its shop list by that unit type,
+    so an entity is a shop when its type id is one of the five.
+    What it replaced was a floating panel on the 'b' key, which was wrong twice.
+    It is not what the game does, and the keydown handler consults the ability
+    hotkey table first -- 4 of the 26 heroes bind an ability to 'b', so on those
+    heroes the key was swallowed before the shop saw it, and if the ability was
+    not yet learned the handler returned without doing anything at all. The
+    shop simply could not be opened. Shopping now needs no key.
+    tools/shop_test.mjs, 20 checks: the buildings are on the field and are
+    buildings, the card becomes the stock with a price and icon per cell laid
+    into distinct measured cells, the panel and portrait follow, clicking sends
+    the right buy, clearing restores the hero, and pressing 'b' does nothing.
+
+[x] The shop's stock stayed on the card after leaving it  (FIXED)
+    Coming back from a shop showed 17 cells: the twelve that belong to the hero
+    and five items still for sale underneath. renderCard keeps buttons attached
+    between snapshots by keying the existing children on data-command, and the
+    shop lays its stock into the same cells with no command at all -- so a
+    `new Map` over every child collapsed the whole stock onto one `undefined`
+    key and removed only the last of them. Anything without a command is not
+    the card's and is dropped now.
+    shop_test was counting cells with a printed hotkey letter, which the
+    classic console does not draw, so it passed on the leftover stock keeping
+    the count above zero. It counts cells that carry a command now, and asserts
+    the stock is gone. hotkey_test had the same dead check -- the letter lives
+    in the tooltip, and that is what it reads.
+
+[x] Three files the deploy bundle left out  (FIXED)
+    tools/make_serve.py did not carry public/fonts (FRIZQT__.TTF, the face the
+    whole UI is set in -- a 404 there is not an error, so the browser fell back
+    to a system font), data/buffart.json (world.js filters the snapshot's buff
+    art through it with no fallback to public/data, so a bundle without it
+    drew no buff icon on any unit) or data/ambience.json (engine.js does fall
+    back for that one; the pack now carries the copy it prefers).
+
+[x] The heroes ran at the shop as if to attack it  (FIXED)
+    Reported from play. Nothing was ever damaged -- shops sit on player 15,
+    Neutral Passive, and world.hostile refuses that outright, so stepAttack
+    never swung. What happened is that the client offered the order and the hero
+    walked over to deliver it.
+    Cause: the right-click handler compared TEAMS. A shop is on player 15's
+    team 2 while the heroes are on teams 0 and 1, so `te.t !== me.t` was true
+    and it sent an attack. relationTo had the same fault, so a shop was also
+    being coloured as an enemy.
+    Right-clicking a shop now walks to it, which is what Warcraft III does with
+    that click -- you approach a shop to trade with it. server/room.js converts
+    an attack order on any non-hostile unit into a move as well, so a client
+    that sends one anyway gets the same answer.
+    Measured while fixing: world.damage itself is NOT filtered by hostility, so
+    a direct call does take health off a shop (5000 -> 2500 after armour). Left
+    alone deliberately -- the map's own triggers call UnitDamageTarget on
+    whatever they please and the engine has to obey. Every spell path already
+    goes through enemiesInRange or hostile() first.
+    Asserted at both layers: tools/spellshape_test.mjs checks the shop is never
+    returned as an enemy in range and that ordering an attack takes nothing off
+    it over six seconds; tools/shop_test.mjs checks the client reads it as
+    neutral, and that this is not vacuous because the teams really do differ.
+
+[ ] Buying has no range check
+    server/room.js:310 sells from anywhere on the map -- the hero never has to
+    walk to the shop. Warcraft III requires the buyer to be in range. Left
+    alone deliberately: it is a gameplay change rather than an interface one.
+
+[ ] Selling back is still a gesture of ours
+    shift+right-click on an inventory slot. The comment at client/js/ui.js says
+    Warcraft III sells by dragging the item onto the shop, "which a single
+    canvas cannot offer" -- but now that a shop can be SELECTED, dropping an
+    item while one is up is a closer match and is available if wanted.
+
+TESTS AND THE END-TO-END HALF
+----------------------------
+[x] The five skipped tests now run and assert  (FIXED)
+    sound, spell, match, wincond and victory were skipped by run_tests.mjs for
+    hardcoding hero ids H004/E00T. That was true and it was not the whole
+    story: they were written for a different map. This one has no 'H004' and
+    no 'E00T'; no unit 'N007' ("Boss Mulder", 0 references in war3map.j); and
+    none of '@duel', '@tome', '@nocool', '@fight', '@ar' -- it registers
+    exactly two chat commands, both on a '-' prefix.
+    Worse than the ids: all five only PRINTED. They exited 0 whatever came
+    out, so "CustomVictoryBJ called for players: NONE" and "died 0 times" were
+    passing runs. Fixing the ids alone would have re-enabled five tests that
+    cannot fail.
+    They now take their pair from tools/testheroes.mjs, which ranks the map's
+    own hero table by learnable count instead of naming anyone, and throws
+    rather than resolving to something absent. Players 0 and 5: this map
+    allies 0-3 (and 10) against 4-9 (and 11), so 0 and 1 would be teammates
+    and every spell would report a clean zero.
+    victory 10 checks, wincond 9, match 9, spell 6, sound 6. STALE in
+    run_tests.mjs is now empty and should stay that way.
+    Two measurement traps found while writing them, both of which had produced
+    a confidently wrong number:
+      - sellUnit seats a hero at its team base, and this map puts a healing
+        fountain there. 산혼철조's 433 damage landed and was regenerated away
+        before the measurement, reading as a spell that does nothing. The
+        heroes are moved to the middle of the map first.
+      - Inflating a target's maxHp to survive a run does not work: recalc
+        rebuilds a hero's maximum from its attributes and clamps hp back down,
+        which the first cast then reports as millions of damage. Top the target
+        up to its own maximum between casts instead.
+
+[~] The script's every non-ASCII byte was replaced with '_'  (COMMANDS
+    RECOVERED, MESSAGES NOT)
+    extracted/war3map.j contains ZERO bytes above 127 across 446098 bytes, and
+    8209 underscores. extracted/war3map.wts, from the same map, contains
+    151736. So it is the .j specifically: the string table kept its Korean and
+    the script did not.
+    What that costs, measured: 59 string literals in the script are underscore
+    runs with their punctuation and colour codes intact -- '____ _____.',
+    '|c00fed101gold|r|c00ff8040_ __.' -- so every message this map displays
+    from its own triggers is unreadable. And both of its chat commands are
+    registered as '-____' and '-__', which no player can type.
+    The trigger plumbing is fine: firing the mangled literal reaches the
+    trigger and the map acts on it (tools/wincond_test.mjs asserts this). Only
+    the text is gone.
+
+    CORRECTED 2026-09-03. The old note ended "the fix is in extraction, and it
+    means re-running that step of the pipeline". It does not. The .w3x holds one
+    war3map.j, block 3, and reading it straight out of the archive gives 446098
+    bytes with ZERO above 127 and the same 8209 underscores -- byte for byte the
+    file already on disk, same SHA. tools/extract_final.py writes the block
+    verbatim (open(p,'wb').write(d)) and mangles nothing, and the script
+    decompressed correctly, which the boot proves: a corrupted inflate would not
+    parse as JASS at all. So the stripping was done to the map before we ever
+    saw it, by whatever protected it, and re-extracting cannot bring the text
+    back.
+    RESOLVED IN PART 2026-09-03. The commands are recovered; the messages are
+    not, and now there is a measurement saying why rather than a plan.
+
+    The commands. The old note said "no player can type them", which is wrong --
+    `-__` is three ASCII characters and anyone can type it; the problem is that
+    nobody would ever guess to. They are recoverable because the map documents
+    them in its OWN quest text, which lives in war3map.wts and kept its Korean.
+    STRING 9563 lists four commands, and the protection replaced one underscore
+    per CHARACTER rather than per byte, which the counts prove: `-__` is two and
+    `-____` is four. That alone names '-조합', the only two-character command.
+    Three candidates remain for the four-character one and what the trigger DOES
+    decides it: `-____` is registered to Player(0) alone and its action destroys
+    the duel's timer dialog, re-enables the triggers the duel switched off and
+    unpauses everything, against a quest line reading "if RED types -듀얼제거,
+    the duel is removed". `-__` displays TRIGSTR_8680, the item combination
+    list, against "type -조합 and the combination list appears".
+    server/chatalias.js carries the two with that evidence, and world.chat
+    translates a typed command back to the literal the script registered. The
+    mangled forms still work for anyone who knows them. It is in source rather
+    than in data/, which is gitignored and regenerated.
+    The other two commands the quest text lists are not registered by this
+    version of the script at all.
+
+    The messages are gone. The obvious recovery is to match each destroyed
+    literal's skeleton -- every character above ASCII as one underscore, all
+    punctuation and colour codes kept -- against the string table, which did keep
+    its Korean. Measured: of the 20 destroyed literals, 3 have ANY string in the
+    table with the same skeleton and 0 have exactly one. The table holds object
+    data and quest text, not the messages a trigger prints, so there is nothing
+    in the archives to recover them from. Someone who has the text would have to
+    supply it. tools/chat_test.mjs asserts all of the above, including that the
+    skeleton match still recovers none, so the day it does the test says so.
+
+[x] Melee produces no sound  (FIXED)
+    Two separate faults, and the note above had both of them wrong. It guessed
+    the map might not supply soundsets for its custom heroes; it does, and the
+    real causes were elsewhere.
+
+    THE DATA. Warcraft III takes a weapon's impact from the ATTACKER's combat
+    sound and the material of what it hit -- MetalHeavyChopFlesh,
+    WoodHeavyBashFlesh -- out of UI\SoundInfo\UnitCombatSounds.slk.
+    UnitMetaData.slk settles which w3u field carries it: ucs1 is `weapType1`,
+    type combatSound. tools/unittypes.py was mapping ua1w instead, which is
+    `weapTp1`, type weaponType -- normal / missile / artillery, how the weapon
+    BEHAVES. So the map's own combat sound was overwritten by the word "normal",
+    and there is no 'normalFlesh' row to find.
+    The map sets a real combat sound on 42 of its unit types: WoodHeavyBash on
+    16, MetalHeavyChop on 11, MetalHeavySlice on 4, MetalHeavyBash on 2. Reading
+    the right field takes the heroes with no impact sound from 16 of 26 to 3,
+    and the three that remain carry '_' in both the map and the base, which is
+    Warcraft III's way of saying a unit has no impact sound.
+
+    THE TEST. It could never have seen this either way. A sound the map's SCRIPT
+    starts goes through the StartSound native onto the ENGINE's event list; a
+    sound the SIMULATION makes -- a weapon landing -- is emitted by the world and
+    comes back from w.step(). sound_test read only the engine's, so "thirty
+    seconds of swinging is silent" was measured on a queue those events never
+    reach. It reads the right one now and asserts on it rather than reporting:
+    133 swings and 110 impacts over thirty seconds, all of them from
+    sounds/units/combat/. Its two heroes were also on players 0 and 5, which
+    this map allies together.
+
+ABILITY DATA SLOTS
+------------------
+[x] `targets` was compiled from a column that does not exist  (FIXED
+    2026-09-13)
+    tools/abilities.py fell back to the SLK's `targs`; the column is
+    targs1..targs4, one per level. So the fallback never fired and `targets`
+    came out empty for 971 of the 1046 abilities.
+    Not cosmetic: isPassive falls through to `targets` when an ability
+    declares no order string, and Blizzard writes Order= for only some
+    abilities, so an ability with neither was read as PASSIVE and execute()
+    returned before doing anything. Zoro's A03H is the one a player meets --
+    alone among the map's three Awfb abilities it sets no atar:1 of its own,
+    so it was the only one that never reached the damage fallback its two
+    siblings do, and it silently dropped its own Htb1 = 100 at ranks 2 and 3.
+    MEASURED BEFORE CHANGING, because this field decides whether an ability
+    runs at all: 121 rows gain a target list, none loses one, and no other
+    field moves. 118 isPassive verdicts flip, every one of them passive ->
+    active, and only ONE is a hero castable (A03H). Of the 45 unit types
+    whose castDummy pick would change, exactly one is ever created by this
+    map (n00T, Zoro's tornado), and nothing ever orders it -- so no unit's
+    cast behaviour actually changes.
+    '-' and '_' are Blizzard's empty markers here and go through text(), or
+    every passive in the file would turn castable. An explicit 'none' is
+    different and is kept: the map writes it itself on A06D.
+    CONSEQUENCE, recorded rather than hidden: two more items now report as
+    aimed -- a Throwing Dagger carrying Storm Bolt and 해루석 carrying Soul
+    Burn, both of which Warcraft III really does aim. No trigger listens for
+    either, so the only visible change is that using them plays their cast
+    art. Their damage still does not land, because useItem never calls
+    execute() for an item ability -- a pre-existing gap this fix makes
+    visible rather than causes. monsterball_test asserted "the only aimed
+    item on the map", which was true only because of this bug; it now asserts
+    what it actually needs, that the Monster Ball is aimed and is the only
+    aimed item the map has a spell trigger for.
+    tools/targets_test.mjs, 13 checks.
+
+[x] IsUnitIllusion was declared and implemented nowhere  (FIXED 2026-09-13)
+    A different species from a missing case, and the one PORTING.md calls the
+    real danger: a JASS condition gated on an unimplemented BOOLEAN native is
+    false for every unit forever, and fails closed without a word.
+    Itachi's 사륜안 (A03Y) is built entirely on it. Its trigger enumerates
+    units near the target point through a filter that is "enemy AND illusion"
+    and marks each one overhead. With the native false the group was always
+    empty, so a 30-second-cooldown ability marked nothing. It was not quite
+    dead -- the cast succeeded, set the cooldown and played two effects, which
+    is why nothing ever looked wrong -- but its whole payload was gone.
+    The answer needed nothing from the archives: this engine makes illusions
+    itself. world.summon takes { image: true } for the Mirror Image family
+    (AOmi) and stamps u.isImage there, with the Omi2 and Omi3 damage-dealt and
+    damage-taken factors that are the only difference between an image and the
+    hero. So the native reads our own model.
+    Worth remembering how it hid: tools/stub_audit.mjs ranks natives with
+    EMPTY BODIES, and this one had no body at all -- it was never declared to
+    the engine, only to the script. The interpreter does count it (engine.js
+    pre-registers a counted no-op and reports the list), so the information
+    was there; nothing was reading it against the map's own conditions.
+    tools/illusion_test.mjs, 12 checks, including that the interpreter no
+    longer counts it and that an enemy which is NOT an illusion still fails
+    the filter.
+
+[x] A numeric order force-cast a hero's first ability  (FIXED 2026-09-13)
+    The script orders by raw id and OrderId() here is a hash of ours that can
+    never match a literal the script passes, so the port cannot tell one
+    numeric order from another -- the table that would settle it is not in the
+    MPQs, as the row above records. castDummy is the standing answer: run
+    whatever ability the unit holds. That is right for a dummy and wrong for a
+    hero, and it fired BEFORE order() ever looked for a stop.
+    What settles it is the map's own usage, measured over all 188 numeric-order
+    sites: 175 order a unit the trigger CREATED a line or two above, and every
+    one of those is a cast. The other 13 use three ids -- 851972, 851983 and
+    851986 -- and none of them is a cast: six 851972 sites are aborts that
+    print a refusal, the rest move or attack. No hero is ever ordered by id to
+    cast anything. So the gate is "not a hero", derived from the map rather
+    than from a guess about which id means stop.
+    What it cost: every abort aimed at a hero ran his first ability instead.
+    Byakuya is granted Blink at creation, before any skill point is spent, so
+    all three of his script gates -- Bankai exclusivity, the recast lock and
+    the map-wide blink-into-base block -- teleported him 50 units due east
+    instead of refusing. It read as a stray hop rather than a broken spell
+    because interruptCast had already broken off the cast in progress, which
+    it still does.
+    tools/numorder_test.mjs measures the map's usage rather than asserting it,
+    then checks that the abort stops the hero and moves him nowhere, that a
+    cast in progress is still interrupted, and that a dummy still casts.
+
+[x] A unit-target spell clicked at bare ground cost its cooldown  (FIXED
+    2026-09-13)
+    Warcraft III refuses the ORDER: the cursor will not take a ground click for
+    a spell that needs a unit, so nothing is spent and the map's own
+    SPELL_EFFECT trigger never runs. Here the cast was accepted, walked its
+    cast point, reached castEffect, spent the mana and started the cooldown,
+    and only then did the case return 'need target' and do nothing -- silently,
+    because nothing reads that result past the hold.
+    It was reachable because the target classifier calls almost everything
+    'point'. That is not a bug in the classifier and tools/spell_targets.mjs
+    says so itself: one map-wide trigger reads GetSpellTargetLoc on EVERY
+    spell's effect, so almost nothing looks unit-only from the script. The
+    engine's own case is the authority on what it needs, and now says so --
+    NEEDS_UNIT_TARGET in server/abilities.js, one entry per case that opens
+    with a `!t` guard.
+    Fixed at both layers. The room reports targetMode 'unit' for these
+    whatever the classifier said, so the client demands a target and warns;
+    castAbility refuses the order before spending anything, as a backstop for
+    any client. Four hero spells were reachable: Yusuke's A025, Gaara's A05K,
+    Rob Lucci's A009 and Byakuya's A011 -- and, since the ANsb alias above,
+    Shiki's A05H would have been a fifth.
+    tools/needtarget_test.mjs derives the list from the source so a case that
+    grows a guard without declaring it fails, and asserts the refusal costs no
+    mana and no cooldown, that the same cast on a real unit still works, and
+    that the hero card the client reads says 'unit' where the classifier says
+    'point'.
+
+[x] Two more bases were in no routing table at all  (FIXED 2026-09-13)
+    AbilityData.slk's `code` column is the map editor's own answer to "whose
+    fields does this row use", and where it differs from `alias` the row IS
+    the other ability. That is what justified the ANcf -> ANbf line; the
+    second half of the hero sweep found two more of the same shape, both
+    reaching the generic damage fallback, which spends slot 1 and cannot see
+    the rest.
+      ACca -> AUcs   code AUcs, "Carrion Swarm (creep)", and AbilityMetaData
+                     lists ACca on Ucs1..Ucs4 itself. Uryu's 은령호작 fires
+                     about 60 dummies over 3 s, each casting A04L; every one
+                     was a 100-radius blast at a random point 250-600 units
+                     away instead of an 800-long, 125-wide line from the
+                     caster. The per-unit damage was never wrong -- the SHAPE
+                     was, and anything past ~700 units was unhittable.
+      ANsb -> AHtb   code AHtb, "Rexxar - Storm Bolt". Shiki's ultimate
+                     극사나나야 landed its 7000/10000/13000 and silently
+                     dropped the stun the map kept (Dur 5/7/9, HeroDur 3/4/5)
+                     and its B00R buff. Its own trigger pauses the victim for
+                     about 1.8 s, so a hero walked 1.2 to 3.2 s early.
+    tools/slot_test.mjs validates both aliases against the map's own slot
+    labels (115 checks). tools/aliasfix_test.mjs asserts the SHAPE rather than
+    the number, since the number was never what differed: a target 600 units
+    down the line now takes damage, one 400 units to the side does not, and
+    the Storm Bolt stun and buff land.
+
+[x] 34 abilities could never be levelled past rank 1  (FIXED 2026-09-13)
+    'alev' is what a map author writes when they want a level count of their
+    own, and when they want a single rank they write 1 -- 16 abilities do.
+    When the field is absent Warcraft III falls back to the BASE ability's own
+    count, and tools/abilities.py has always done that (:301). The game table
+    did not: tools/compile_game.py read `lvl_get(m,'alev',0,1) or 1` with no
+    fallback, so it stamped maxLvl 1 on every ability whose author left the
+    field alone -- and server/room.js gates skill points on THAT number
+    (learnCap, :91-99), not on data/abilities.json.
+    Measured: 34 abilities across 20 of the 26 heroes, 11 of them ultimates.
+    A player could not spend a second skill point on any of them, and every
+    trigger that copies a rank onto a dummy always read 1. Kimimaro's
+    고사리싹의 춤 is a level-20 ultimate that fires twelve spikes of
+    2000/4000/6000 and was frozen on the first row.
+    The fallback now reads the count abilities.py already resolved rather than
+    re-deriving it, so the two tables cannot drift apart again. Recompiled and
+    staged: exactly 34 rows moved, all 1 -> 3, nothing moved down or above its
+    own compiled count.
+    This was NOT new -- HeroSweep.TXT:2878 recorded it for Rock Lee's A06J and
+    repeats it for A02N and A03R. What was missing was the scope.
+    tools/ranklock_test.mjs drives the real LEARN handler through a real room
+    rather than reading the table.
+
+[x] A carried burn never reached a non-hero  (FIXED 2026-09-13)
+    Cloak of Flames is not a hero ability -- Warcraft III burns whatever holds
+    it -- but the only path to a carried burn ran through world.recalc, which
+    returns immediately for anything that is not a hero. Ace's 불의장벽 is
+    twelve fire emitters whose entire payload is a carried AIcf, and it dealt
+    nothing: a wall of flames that hurt no one.
+    recalc now computes that one thing for a non-hero and nothing else. The
+    rest of the function derives life, mana, armour and damage from a hero's
+    attributes and items, and running it for every creep would rewrite the
+    roster's stats.
+    DELIBERATELY NOT WIDENED past AIcf: Byakuya's petals carry Apig, whose
+    damage interval names no field of its own, and tools/unread_accepted.json
+    already records leaving that unread rather than inventing one. It stays
+    unread. Two other sightings of the same gate are recorded in
+    HeroSweep2.TXT and are not closed by this.
+    Asserted by standing an enemy in the fire and watching its life reach zero,
+    not by checking that a function was called.
+
+------------------
+[x] The engine now has to name every data slot it reads  (tools/slot_test.mjs)
+    Warcraft III stores no "damage" field. It stores DataA..DataF, and what each
+    one means depends on the base ability. server/abilities.js necessarily reads
+    them positionally as d1..d4, and nothing in the source recorded which
+    meaning it believed it was reading -- which made a wrong slot invisible to
+    every check we had. ability_audit.mjs asks whether a case EXISTS; the render
+    tests ask whether art draws; a player sees a spell go off either way.
+
+    The map ships the answer and always has. AbilityMetaData.slk's useSpecific
+    column says which bases use each field and which slot it occupies, and
+    WorldEditStrings.txt turns the field id into the label a map author reads.
+    tools/slotmeta.mjs resolves the two into base -> slot -> label.
+    tools/slot_test.mjs then runs three checks, in order of how much
+    hand-written material each needs:
+      1. GROUPING  bases sharing one `case` are read through the same d1..d4,
+         so they must agree on what those slots mean. Fully derived from the
+         SLK -- nothing to maintain and no way for it to drift.
+      2. ALIAS     BASE_ALIAS claims one base IS another's behaviour; then
+         their slots have to line up too.
+      3. CONTRACT  what the engine believes each slot is, written out in the
+         test and checked against the map. The only hand-written part, so the
+         test also fails if a case group reads a slot with no contract entry.
+
+    78 checks. The ACCEPTED list in that file is the debt: 5 entries, every one
+    of them a base this map never builds an ability on, so none can reach a
+    player today. The count only goes down.
+
+[x] Nine slot and routing defects the check found, all fixed
+    Each is quoted with the field it comes from; none is an inference.
+
+    Blizzard family (A027 보구의 비, A06R 시엔플루르)
+        Hbz1 is "Number of Waves" and Hbz2 "Damage" -- the case had them the
+        other way round. Total damage came out right, which is why nothing ever
+        caught it, and the shape did not: Nico Robin's rank-3 ultimate is 30
+        waves of 1100 and ran as 1100 waves of 30, bombarding a 600 radius for
+        eighteen minutes. The wave INTERVAL is not a field anywhere in the w3a,
+        the SLK or AbilityMetaData; the case now spreads the waves across the
+        ability's own duration and says so in a marked comment.
+    Starfall (AEsf)
+        Never used the Hbz fields at all -- Esf1 "Damage Dealt", Esf2 "Damage
+        Interval", no wave count. It had been sharing Blizzard's block. Unused
+        by this map; split out so it stays honest.
+    Finger of Death (A01G 금술오의-시귀봉진, A01O 하늘의 쇠사슬)
+        Nfd1 Graphic Delay, Nfd2 Graphic Duration, Nfd3 Damage. It was aliased
+        to Death Coil, whose single slot IS its damage, so slot 1 was spent as
+        the damage figure: A01G carries 10000 in Nfd3 and 0.25 in Nfd1, and
+        dealt the 0.25. Sandaime's ultimate was four orders of magnitude short.
+    Breath of Fire (A01N 폭류파, A02T 화둔-호화구의 술, A04A 은령호작)
+        ANcf names no fields of its own; AbilityData.slk gives it code = ANbf
+        and the comment "Chen - Breath of Fire", and every field the map writes
+        onto it is a Ucs/Nbf one. It was reaching the Fan of Knives case, so
+        InuYasha's 800-long cone became a 100-radius ring at his own feet.
+        Now aliased to ANbf.
+    Battle Roar (A00C 『철괴』, A01I 소환술-초지검, A03S 섬경 천본앵경엄)
+        ANbr's slots are Nbr1 "Damage Increase" then Roa2..Roa6, and it targets
+        friend and self. It was in the cone-damage case, pointing a hostile
+        breath at three abilities that are friendly buffs.
+    Impale (A04T 고사리싹의 춤)
+        Uim1 Wave Distance, Uim2 Wave Time, Uim3 Damage Dealt, Uim4 Air Time --
+        not Carrion Swarm's Damage/Max/Distance/Area, which it had been sharing.
+        Read positionally it ran a 2000-long, 1-wide sliver capped at 0.3 total
+        damage, so it hit nothing at all.
+    Cluster Rockets (A00R 숏건, A02L 숏건, A03A 소기탄)
+        Ncs1 Damage Amount, Ncs2 Damage Interval, Ncs3 Missile Count, Ncs4 Max
+        Damage. It is a barrage into an area, not a line. Read as a line, Ncs2
+        became a total damage cap of 0.3 and the spell stopped after one unit.
+    Frost Nova (AUfn)
+        Ufn1 is "Area of Effect Damage" and Ufn2 "Specific Target Damage", so
+        the unit clicked takes slot 2 and the splash takes slot 1. The block had
+        them reversed -- the retail Lich carries 50 and 100 in that order, and a
+        nova that splashes harder than it hits is the wrong way round. Latent
+        here: the map's only user, A06J, zeroes both.
+    ANcl aliased to Chain Lightning
+        Its slots are Follow Through Time / Target Type / Options and the SLK
+        comments it "Illidan - Channel". Unused by this map, so the alias was a
+        trap waiting for a port that does use it. Removed.
+
+    Behaviour is asserted in tools/spellshape_test.mjs, 22 checks, which casts
+    each of these and reads what arrived -- wave counts and per-wave damage off
+    the queued channel, damage taken by dummies placed along the line and the
+    cone. Asserting the source instead of the outcome is the mistake this
+    project has made three times.
+
+    Also fixed while in there: ability_audit.mjs read handled-ness off the case
+    labels alone, so routing a base through BASE_ALIAS read as a regression.
+    It now resolves aliases, and the fallback count is 28 either way.
+
+[x] The phantom `d1 || N` defaults -- 27 abilities  (FIXED)
+    Where the map explicitly wrote 0 into a data slot, the engine substituted a
+    literal: `d1 || 100`, `d1 || 80`, `d1 || 40`. These are not absent fields
+    coerced to zero. Every one is an explicit mod in data/war3map.w3a.json --
+    Htb1:1=0.0, Ocl1:1=0.0, Ucs1:1=0.0 -- written by the author because the
+    ability's own trigger carries the payload. Two prove the intent outright:
+    A04R writes Osh1:1..5=0 and then Osh1:6..10=1800..3000 in the same field,
+    and A007 does the same at Ucs1:4.
+    `execute` now keeps d1..d4 undefined when the map set nothing and reads
+    them through `slot(v, default)`, so a zero survives and only a genuinely
+    absent field falls back. 29 substitution sites.
+    Count is measured over all 1046 compiled abilities against the case that
+    reads each: 27 of the map's own ability ids carry an explicit all-level zero
+    at a defaulted site. HeroSweep.TXT names 18 of them; the other 9 are ones it
+    never saw -- A00K (Itachi's 츠쿠요미), A02M, A03F, A047, A04A, A04B, A04P,
+    A056 and A05Q.
+    Worth knowing, measured while fixing it: across every ability this map
+    builds, exactly TWO levels reach one of those sites with the slot genuinely
+    absent, and both are retail rows the map never uses. The defaults were never
+    doing the job they look like they are doing. They are kept, because a base
+    row can still reach the site.
+
+[x] War Stomp floored a 0.01 duration to a full second  (FIXED)
+    `Math.max(1, dur)` in the AOws case. A duration of 0.01 is this map saying
+    the base ability does nothing and the trigger does the work -- the silence
+    case in the same file already reads it that way and says so in a comment.
+    Four abilities carry adur = ahdu = 0.01 and were stunning for a second
+    anyway: 초콜릿이 되라, 적주함발, 드래곤회오리 치기, 만뇌.
+    The other five `Math.max(n, dur)` floors were measured too and no ability in
+    this map reaches them with a near-zero duration, so they are left alone.
+
+    Both are asserted in tools/spellshape_test.mjs (32 checks), which casts four
+    zeroed abilities from four bases and four heroes -- one of them, Itachi's
+    츠쿠요미, from the unswept half -- and then casts one that DOES declare its
+    damage, so a blanket "everything deals zero" cannot pass.
+
+PERFORMANCE
+-----------
+[x] Off-screen units were skinned, uploaded and drawn every frame  (FIXED)
+    The suspect was skinning; the measurement says it was skinning done many
+    times over for units nobody could see. Three things stacked, all measured
+    in tools/fps_test.mjs (new rows: skeleton updates, scene matrices, views
+    off screen; MOBS=300 fills the field through a new debugSpawn message):
+      - Every geoset is loaded with frustumCulled off, and in three.js the
+        skeleton update and its bone-texture upload sit *inside* that test
+        (WebGLRenderer.projectObject -> objects.update -> skeleton.update). So
+        every skinned unit in the match was re-skinned, re-uploaded and drawn
+        whether or not it was near the screen. The frustum test render() was
+        already doing per view only gated the mixers.
+      - SkeletonUtils.clone makes a Skeleton per SkinnedMesh even when the
+        source shared one (every converted glb has exactly one skin). A unit
+        of four skinned geosets carried four skeletons over the same bones and
+        paid four bone-matrix passes and four texture uploads a frame: 1412
+        skeleton updates a frame for 397 units.
+      - The 387 scenery doodads are skinned models too (city walls, plants),
+        never animate, and were re-skinned, re-uploaded and had every bone
+        recomposed every frame regardless.
+    Now: a unit's model object is hidden while its bounding sphere is outside
+    the frustum, with the radius taken from the MDX's own extents (model plus
+    every sequence, the same bounds Warcraft III culls with; median 370 model
+    units across the 588 unit models, against the 220 the old test guessed),
+    and its matrix walk is skipped while hidden. cloneModel folds the clones'
+    skeletons back onto one per model. Static doodads are frustum-culled by
+    the same bounds, have their skeleton computed once, and their holder's
+    matrix walk runs once. The geosets keep frustumCulled off on purpose:
+    their bind-pose bounds say nothing about where an animation reaches.
+    Measured, headless SwiftShader, 397 units on the same 300-mob layout:
+                                 before      after
+      draw calls                   2045       1232
+      skeleton updates / frame     1412        281
+      skeleton CPU                 5.3 ms     2.0 ms
+      scene matrix walk            9.1 ms     6.5 ms
+      renderer.render CPU         32.0 ms    18.5 ms
+      textures held               1613        668
+    The GPU side of the bone uploads is invisible under SwiftShader and is the
+    part a real card would have felt most; worth a look at the ` readout on
+    the 4080 that started this. The 273 units that layout leaves in frame are
+    what the remaining matrix walk and the 5 ms of mixers are; a real match
+    has far fewer on screen at once.
+
+[x] GPU texture handles are never released  (FIXED -- they were bone textures)
+    The nine per unit were never the texanim clones: those share the cache's
+    source and sampler key, so disposing one moves the counter by nothing,
+    exactly as measured. They were one bone DataTexture per skinned geoset --
+    made by the renderer the first time it draws the mesh, held by a Skeleton
+    nobody disposed, one Skeleton per geoset because of the clone bug above.
+    releaseGPU now disposes the holder's skeletons (units, effects and
+    missiles all go through it). render_test asserts it: textures 8 -> 8 -> 8
+    -> 8 over three spawn/remove cycles, 0.0 per unit, where it used to note
+    the growth and move on.
+
+[x] o00D has no entry in unittypes.json  (FIXED -- it never should have had one)
+    The entry assumed a compiler gap. It is not one. A05N is a summon, not a
+    morph, and it names a different unit per level: o000, o00D, o00E, o00F,
+    o00B. The raw war3map.w3u contains none of the five in any case -- the
+    map's own ids there are O000-O008 and one o007 -- so these are stale
+    references the author left behind, and Warcraft III cannot summon a unit
+    type that has no definition either.
+    What was wrong was ours: world.summon called createUnit, which builds a
+    unit even with no type record, so a nonexistent id became a real modelless
+    unit on the client. summon now refuses an undefined type, which is what the
+    game does. ghost_test reports "none" and `npm test` has no known-failing
+    row left.
+
+[x] tools/ghost_test.mjs prints raw format specifiers  (FIXED)
+    Its console.log used %-6s and friends: Node's format understands %s and %d
+    but none of printf's width flags, so the specifier printed itself and
+    shifted every argument after it by one (hence the "xNaN"). padEnd instead.
+
+SOUND
+-----
+[x] Warcraft III's own hero-death warning  (FIXED)
+    "Our hero has fallen!" is the engine's, not the map's: nothing in
+    war3map.j mentions it, which is why it had never been ported. UISounds.slk
+    carries HeroDies<Race> for your own hero and AllyHeroDies<Race> for an
+    ally's, all 11 rows already converted to ogg by the existing audio step.
+    Three details that make it more than "play a sound on hero death": the
+    voice is the *listening* player's race rather than the dead hero's, so the
+    row is chosen per client and the server only reports the death; there is no
+    enemy row in the table at all, so Warcraft III is silent when the other side
+    loses one, and so are we; and it is not a 3D sound -- it plays at its own
+    volume wherever the hero fell, because the voice is yours and not the
+    battlefield's. 25 of the 26 heroes are race human and one is orc, so the
+    race is read from unittypes rather than assumed.
+    The rows also carry Flags, and every one of them is NODUPLICATES: Warcraft
+    III will not start the warning while it is already playing, which in a map
+    where heroes die constantly is the difference between a warning and a
+    pile-up. Honoured. CHANNELFULLPREEMPT is deliberately not -- it decides what
+    to evict when a mixer channel is full, and there is no channel model here.
+    The premise was checked rather than assumed: mapmakers ask how to *remove*
+    this sound, so it fires in custom maps by default, and FOC never suppresses
+    it -- zero VolumeGroupSetVolume, zero SetSoundVolumeBJ, no VOLUME_GROUP_*
+    anywhere in war3map.j. What is still unverified is the exact firing rule in
+    a 10-player free-for-all; worth a listen in the real client.
+    tools/warnsound_test.mjs, 18 checks, covering all four branches.
+    Shipped broken first time and caught in play: the client passed
+    `/assets/${file}` to playUI, but audio.load prefixes /assets/ itself, so the
+    URL doubled, 404'd, and the game stayed silent. Every check still passed --
+    they asserted that playUI was *called*. The test now drives a real hero
+    death through a debug kill and asks the mixer whether the clip decoded,
+    which is the only assertion that could have failed.
+
+[ ] The rest of the UISounds warning family is still unported
+    The same table drives TownAttack<Race>, AllyUnderAttack<Race> and a dozen
+    others on the same pattern. Only the hero-death rows are compiled into
+    data/uisounds.json so far. Nothing else is wired to fire them yet, so this
+    is a "when there is something to warn about" item, not a gap in what plays.
+
+SERVER
+------
+[x] Room lifecycle  (FIXED)
+    Two bugs stacked. reset() kept players who had left during a match, so every
+    finished match left its pair behind and after five the ten slots were gone.
+    Then the fallback for a full room walked PLAYER_SLOTS, ran off the end, and
+    used the loop *index* as the slot -- which at a full room is 10, itself a
+    real slot on team 0 and already taken. Two late joiners both became player
+    10 on team 0, and the duel they were meant to fight had one side empty.
+    Now: reset() drops anyone with no socket, and a genuinely full room refuses
+    the join instead of inventing a seat. tools/room_test.mjs drives twenty
+    match cycles through one room and checks both.
+
+[x] Ichigo's near-death transformation  (FIXED -- both halves)
+    FIXED: he respawns, and the Hollow form grants its AGI x3 attack bonus.
+    The art half is done too and this entry was stale: data/buffart.json
+    carries B001 and B000 with their DeathCoilMissile target art at the head
+    attachment, the snapshot's per-unit buff list reaches syncBuffArt on the
+    client, and tools/buffart_test.mjs asserts the B001 mask attaches at
+    "head". Corrected 2026-09-13 while sweeping the roster.
+
+FIXED -- metamorphosis (kept for the reasoning; delete once it has bedded in)
+----------------------------------------------------------------------------
+[x] An alternate form drew as the unit it transformed from
+    Warcraft III has no native that changes a unit's model. A metamorphosis
+    swaps the unit for another *type*, and where both types name one model file
+    the difference is carried by Required Animation Names: the alternate type
+    asks for "alternateex" and the model's geoset animations show a different
+    body in its "... Alternate" sequences. Three things were in the way:
+      - tools/unittypes.py never mapped 'uani', so a map that set the field
+        itself lost it. O000 (Bankai) reached the client with an=null.
+      - pickClip treated a unit's declared tokens as a tiebreak used only when
+        nothing matched exactly, so a model carrying both "Stand" and "Stand
+        Alternate" always drew the plain one. 57 unit/animation pairs across 22
+        unit types were wrong: the Castle drew as a Town Hall, the Fortress as a
+        Great Hall, the swimming penguin as a walking one, the Obsidian
+        Destroyer as the statue, Illidan's demon form as Illidan.
+      - "alternateex" names no sequence in any of the 1101 converted models
+        while "alternate" names 214, and every unit type declaring it is the
+        morphed form of another, so it asks for "alternate".
+    Covered by tools/morph_test.mjs (needs FOC_DEBUG=1: Bankai is a level-10
+    skill and the level-to-cap key is the only way there without playing).
+
+[x] A metamorphosis left the form's own abilities behind
+    world.morph swapped the stat block and nothing else, but the alternate type
+    is where a transformation's power usually sits. Goku's three Super Saiyan
+    forms are +50/+100/+150 to all attributes and granted none of it; Ichigo's
+    Bankai carries the Black Getsuga. 16 forms are reachable through morph();
+    none of them declares Locust, Invulnerable or Permanent Invisibility, so
+    granting the list wholesale is safe. Hero abilities are deliberately not
+    granted -- an alternate form declares the same ones so they carry across,
+    and granting them would hand the player ranks they chose not to learn.
+
+[x] Attribute skills did nothing until something else recalculated
+    learnSkill changed u.abilities and never called recalc, so Attribute Bonus
+    and its kin sat inert until the next level-up, item or buff happened to run
+    one. Now every path that changes a unit's ability list recalculates.
+
+[x] ATTR_SKILLS knew one of the 24 bases that can carry an attribute bonus
+    AbilityMetaData.slk names them on the useSpecific column of Iagi/Istr/Iint.
+    We had 'Aamk', so every transformation built on AIx2 granted nothing.
+    Deriving the set from the data instead would have been wrong: AInv's data1
+    is how many inventory slots it opens and AIcf's is a damage figure.
+
+NETWORK
+-------
+[x] No rejoin, only a reload  (FIXED 2026-09-13)
+    Both halves the old note named. WELCOME carries a seat token; a socket
+    closing mid-match leaves the seat held for FOC_REJOIN_GRACE_MS (60 s -- a
+    figure of ours, Warcraft III has no rejoin at all) with the hero standing
+    where it was and the script told nothing. HELLO with the token inside that
+    window reclaims the seat: same player id, same hero, the permanent tags and
+    the atmosphere replayed as for any late arrival, and the next full snapshot
+    reconciles the world the client already has -- the terrain and models are
+    not reloaded, and the client's second WELCOME says "reconnected" rather
+    than booting. Only when nobody comes back does the drop become
+    EVENT_PLAYER_LEAVE for the map's triggers, the token is voided, and a match
+    nobody is in or coming back to is reset. In the lobby a drop is still a
+    leave at once. The client reconnects on its own with backoff (1 s to 8 s,
+    twelve tries) and the Refresh button stays for the case where the seat is
+    gone. tools/rejoin_test.mjs, 21 checks: the room in-process with fake
+    sockets and a 400 ms grace for the expiry, then a real client's socket
+    closed against a live server.
+
+HOUSEKEEPING
+------------
+[x] Five tests are stale, not one  (FIXED -- see TESTS AND THE END-TO-END HALF)
+
+[x] No licence on the repo.  (FIXED)
+    MIT, and the reasoning is worth keeping because copyleft was the tempting
+    alternative and the argument against it here is specific rather than
+    general. GPLv3's usual weakness for a hosted game -- that running a service
+    is not distributing -- barely applies, since the client is shipped to every
+    player's browser and that IS distribution; AGPLv3 would close even that gap.
+    What settles it is that neither buys protection against a risk that exists:
+    nobody can run this commercially whatever the licence says, because running
+    it at all needs Blizzard's archives and the map author's file. So copyleft
+    would add friction for the readers this repository is actually for, and
+    would guard a door that copyright on other people's material already holds
+    shut. Nothing in the dependency tree constrained the choice either way --
+    three and ws are MIT, puppeteer-core is Apache 2.0.
+    LICENSE carries a scope section naming what the terms do NOT cover, the
+    README links it beside the "source only" section that already said the same
+    thing about the assets, and package.json declares it so tooling stops
+    reading the project as unlicensed.
+
+NOT BUGS -- recorded so they are not re-investigated
+-----------------------------------------------------
+- Byakuya Kuchiki (H00N, war3mapImported\Byakuya2.mdl) has no team glow.
+  The source MDX collapses geoset 3 -- the TeamGlow geoset -- into a
+  0.034 x 0.031 x 0.008 speck while keeping a stale extent of radius 234.
+  Its two bones carry no KGSC scale track, so nothing expands it at runtime.
+  Geosets 6 and 8 are collapsed the same way. Warcraft III renders it exactly
+  as we do: nothing. 1 of 243 models with a team glow is affected.

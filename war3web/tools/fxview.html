@@ -1,0 +1,125 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>spell fx check</title>
+<style>html,body{margin:0;height:100%;background:#0a0c12}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<canvas id="view"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { Renderer } from '/js/render.js';
+
+// The renderer, on its own, with nothing in the scene but ground. Feed it the
+// effect events a spell actually emitted on the server and see whether anything
+// lands in front of the camera. A spell can name perfectly good art and still
+// draw nothing -- an empty model, a clip that never plays, a mesh that loads
+// below the floor -- and none of that is visible from the server side.
+const view = new Renderer(document.getElementById('view'));
+window.THREE = THREE; window.view = view;
+
+const [terr, heightsBuf] = await Promise.all([
+  fetch('/data/terrain.json').then(r => r.json()),
+  fetch('/data/heights.bin').then(r => r.arrayBuffer()),
+]);
+await view.buildTerrain(terr, new Float32Array(heightsBuf), null);
+
+const SPOT = { x: 0, y: 0 };
+function aim() {
+  view.camTarget.set(SPOT.x, view.heightAt(SPOT.x, SPOT.y) + 90, -SPOT.y);
+  view.camDist = 420; view.camPitch = 0.35; view.camYaw = 0.6;
+  view.updateCamera();
+}
+
+// read the frame back off the GPU rather than round-tripping a PNG
+const RT = new THREE.WebGLRenderTarget(320, 240);
+const buf = new Uint8Array(320 * 240 * 4);
+function frame() {
+  view.renderer.setRenderTarget(RT);
+  view.renderer.render(view.scene, view.camera);
+  view.renderer.readRenderTargetPixels(RT, 0, 0, 320, 240, buf);
+  view.renderer.setRenderTarget(null);
+  return Uint8Array.from(buf);
+}
+function diff(a, b) {
+  let n = 0;
+  for (let i = 0; i < a.length; i += 4)
+    if (Math.abs(a[i] - b[i]) + Math.abs(a[i+1] - b[i+1]) + Math.abs(a[i+2] - b[i+2]) > 24) n++;
+  return n;
+}
+
+function clear() {
+  for (const k of [...view.effects.keys()]) view.endEffect(k);
+  for (const k of [...view.missiles.keys()]) view.endMissile(k);
+}
+
+let seq = 0;
+window.ready = false;
+aim();
+
+// swiftshader drops the context while the ground texture uploads, and a lost
+// context reads back solid black -- which looks exactly like "every spell is
+// invisible". Wait it out, then prove the empty frame has ground in it before
+// any of this is allowed to count as a measurement.
+await new Promise((r) => setTimeout(r, 2500));
+for (let i = 0; i < 40; i++) {
+  if (!view.renderer.getContext().isContextLost()) break;
+  await new Promise((r) => setTimeout(r, 500));
+}
+frame(); frame();
+let BASE = frame();
+function lit(b) { let n = 0; for (let i = 0; i < b.length; i += 4) if (b[i] + b[i+1] + b[i+2] > 24) n++; return n; }
+for (let i = 0; i < 20 && lit(BASE) < 1000; i++) {   // ground still not on screen: give it longer
+  await new Promise((r) => setTimeout(r, 500));
+  BASE = frame();
+}
+window.baseLit = lit(BASE);            // the bench is only valid if this is large
+window.ready = true;
+
+/**
+ * Spawn one spell's art and report how much of the frame it changed.
+ * Effects are animated, so sample a few moments rather than one.
+ */
+window.testFx = async (paths) => {
+  clear();
+  view.renderer.render(view.scene, view.camera);
+  const ids = [];
+  await Promise.all(paths.map((p, i) => {
+    const fx = -(++seq + 100000);
+    ids.push(fx);
+    return view.spawnEffect({ fx, path: p, x: SPOT.x, y: SPOT.y, ttl: 0 }, false);
+  }));
+  // Particle sprite sheets load asynchronously and an emitter with no texture
+  // yet draws nothing, so give them a moment or the bench times its own texture
+  // fetches rather than the effect.
+  for (let w = 0; w < 40; w++) {
+    const pending = ids.some((f) => (view.effects.get(f)?.emitters || [])
+      .some((e) => !e.mat.uniforms.map.value?.image));
+    if (!pending) break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const spawned = ids.filter((f) => view.effects.has(f)).length;
+  let best = 0, tris = 0;
+  for (const f of ids) {
+    const e = view.effects.get(f);
+    if (!e) continue;
+    e.obj.traverse((o) => { if (o.isMesh && o.geometry) tris += (o.geometry.index?.count || o.geometry.attributes.position?.count || 0) / 3; });
+  }
+  // Particle emitters are driven by the render loop, which this bench bypasses,
+  // and they start empty: an emitter at 40 particles a second has nothing on
+  // screen until it has been ticked. Advance both clocks together and sample as
+  // the effect actually plays out.
+  for (let step = 0; step < 14; step++) {
+    const dt = 0.06;
+    for (const f of ids) {
+      const e = view.effects.get(f);
+      if (!e) continue;
+      e.mixer?.update(dt);
+      for (const p of (e.emitters || [])) p.update(dt, true);
+    }
+    best = Math.max(best, diff(frame(), BASE));
+  }
+  clear();
+  return { spawned, asked: paths.length, tris: Math.round(tris), pixels: best };
+};
+</script>

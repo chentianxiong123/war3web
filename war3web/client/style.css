@@ -1,0 +1,332 @@
+/* Warcraft III's own typeface, staged out of war3.mpq by tools/stage.py.
+   UI\war3skins.txt names it for every font role the game has, TextTagFont
+   included, so the floating text is set in the face the game sets it in. */
+@font-face {
+  font-family: "Friz Quadrata";
+  src: url("/fonts/FRIZQT__.TTF") format("truetype");
+  font-display: swap;
+}
+
+:root{
+  --bg:#08090d; --panel:#12141c; --panel2:#1a1d28; --line:#2b3040;
+  --gold:#e8c76a; --red:#e2564d; --blue:#5aa9e6; --green:#63c98a;
+  --txt:#dfe3ee; --dim:#8b93a7;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+  font:14px/1.45 "Segoe UI",system-ui,sans-serif;overflow:hidden;user-select:none}
+/* Only the world canvas fills the viewport; portraits keep their panel layout. */
+canvas#view{position:fixed;inset:0;width:100%;height:100%;display:block}
+.hidden{display:none !important}
+.dim{color:var(--dim)}
+button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+  padding:7px 14px;border-radius:6px;cursor:pointer;font:inherit}
+button:hover{background:#242938;border-color:#3b4258}
+button.primary{background:linear-gradient(180deg,#b8892b,#8c6414);border-color:#d9ad4e;color:#fff;font-weight:600}
+button.on{outline:2px solid var(--gold)}
+input{background:#0d0f15;border:1px solid var(--line);color:var(--txt);
+  padding:7px 10px;border-radius:6px;font:inherit}
+
+/* ---------- loading ---------- */
+#loading{position:fixed;inset:0;display:grid;place-items:center;background:#05060a;z-index:50}
+#loading .box{text-align:center;width:min(420px,80vw)}
+#loading h1,#lobby h1{font-size:44px;margin:0 0 4px;letter-spacing:2px;font-weight:800}
+#loading h1 span,#lobby h1 span{color:var(--red)}
+#loading .bar{height:6px;background:#181c26;border-radius:99px;overflow:hidden;margin-top:14px}
+#loading .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--red),var(--gold));transition:width .2s}
+
+/* ---------- lobby ---------- */
+#lobby{position:fixed;inset:0;display:flex;flex-direction:column;background:
+  radial-gradient(1200px 600px at 50% -10%,#1b2030,#07080c);z-index:40}
+#lobby header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;
+  align-items:baseline;gap:18px;flex-wrap:wrap}
+#lobby h1{font-size:26px}
+#lobby h1 small{font-size:12px;color:var(--dim);font-weight:400;letter-spacing:0}
+#objective{color:var(--dim);font-size:12px;max-width:640px;white-space:pre-line}
+.lobby-main{flex:1;display:grid;grid-template-columns:220px 1fr 300px;gap:1px;
+  background:var(--line);min-height:0}
+.lobby-main>*{background:#0b0d13;padding:12px;overflow:auto;min-height:0}
+#teams h3{margin:4px 0 8px;font-size:12px;text-transform:uppercase;color:var(--dim);letter-spacing:1px}
+.pslot{display:flex;gap:8px;align-items:center;padding:5px 7px;border-radius:5px;background:#11141c;margin-bottom:5px}
+.pslot.me{outline:1px solid var(--gold)}
+.pslot .rd{width:8px;height:8px;border-radius:99px;background:#444}
+.pslot .rd.on{background:var(--green)}
+.pslot small{color:var(--dim);margin-left:auto}
+#tavtabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+#heroGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
+.hcard{background:#11141c;border:1px solid var(--line);border-radius:7px;padding:6px;
+  cursor:pointer;text-align:center;transition:.12s}
+.hcard:hover{border-color:#4a5270;transform:translateY(-2px)}
+.hcard.sel{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold) inset}
+.hcard img{width:56px;height:56px;object-fit:cover;border-radius:5px;background:#05060a;display:block;margin:0 auto 4px}
+.hcard .nm{font-size:11px;font-weight:600;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hcard .ti{font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hcard.nomodel{opacity:.55}
+#heroSpin{width:100%;max-width:280px;aspect-ratio:1;display:block;margin:0 auto 8px;
+  border-radius:7px;background:#0b0e15;border:1px solid var(--line)}
+#heroDetail h2{margin:2px 0 0;font-size:19px}
+#heroDetail .sub{color:var(--dim);font-size:12px;margin-bottom:10px}
+.statgrid{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;font-size:12px;margin-bottom:12px}
+.statgrid span{color:var(--dim)}
+.ab{display:flex;gap:8px;margin-bottom:8px;background:#11141c;padding:7px;border-radius:6px}
+.ab img{width:34px;height:34px;border-radius:4px;background:#05060a;flex:none}
+.ab b{display:block;font-size:12px}
+.ab p{margin:2px 0 0;font-size:11px;color:var(--dim);white-space:pre-line;
+  max-height:56px;overflow:hidden}
+#lobby footer{padding:12px 22px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center}
+#lobbyMsg{color:var(--gold);font-size:12px}
+
+/* ---------- HUD ---------- */
+#hud{position:fixed;inset:0;pointer-events:none;z-index:20;transition:opacity var(--cinefade,.5s)}
+/* Cinematic mode (CinematicModeBJ): the interface fades and letterbox bars
+   close in over the same time. The bars are the game's own cinematic framing;
+   their height is a choice of ours -- no file states it. */
+body.cinematic #hud{opacity:0}
+body.cinematic #hud>*{pointer-events:none}
+#letterbox{position:fixed;inset:0;pointer-events:none;z-index:25}
+#letterbox .bar{position:absolute;left:0;right:0;height:12vh;background:#000;transition:transform var(--cinefade,.5s) ease}
+#letterbox .top{top:0;transform:translateY(-100%)}
+#letterbox .bottom{bottom:0;transform:translateY(100%)}
+body.cinematic #letterbox .bar{transform:none}
+#hud>*{pointer-events:auto}
+/* Below Warcraft III's own top strip, not under it: the resource readout is
+   the game's layout and takes the top-right corner, and this score strip is
+   ours, so ours is what moves. */
+#topbar{position:absolute;top:3.7%;left:50%;transform:translateX(-50%);display:flex;
+  align-items:center;gap:18px;background:rgba(8,9,13,.85);border:1px solid var(--line);
+  border-top:none;border-radius:0 0 10px 10px;padding:7px 20px}
+.score{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)}
+.score b{font-size:22px;color:var(--txt);font-variant-numeric:tabular-nums}
+.score-mid{font-size:11px;color:var(--dim)}
+#minimap{position:absolute;left:10px;bottom:10px;border:1px solid var(--line);
+  border-radius:8px;overflow:hidden;background:#05060a}
+/* Once the console places the minimap in its own opening the panel is sized by
+   the art, so the canvas has to follow it rather than keep its attribute size. */
+#minimap{border:0;border-radius:0}
+#mmcanvas{width:100%;height:100%;display:block}
+#portrait{position:absolute;left:222px;bottom:10px;width:290px;background:rgba(8,9,13,.88);
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+#pname2{font-weight:700;font-size:14px;margin-bottom:6px}
+.bars .bar{position:relative;height:15px;background:#0a0c11;border:1px solid var(--line);
+  border-radius:4px;margin-bottom:4px;overflow:hidden}
+.bars .bar i{display:block;height:100%;width:0;transition:width .15s}
+.bar.hp i{background:linear-gradient(180deg,#7ad48f,#2f9f52)}
+.bar.mp i{background:linear-gradient(180deg,#6fb6ec,#2b6fae)}
+.bar.xp{height:6px}
+.bar.xp i{background:linear-gradient(180deg,#e8c76a,#a5872f)}
+.bar span{position:absolute;inset:0;text-align:center;font-size:10px;line-height:15px;
+  text-shadow:0 1px 2px #000;font-variant-numeric:tabular-nums}
+#stats{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 8px;font-size:11px;
+  color:var(--dim);margin-top:6px}
+#stats b{color:var(--txt)}
+#abilities{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
+/* RTS 命令面板: 右下角技能格右侧一排 — 建造/训练按钮, 不占技能格 */
+#commands{position:absolute;right:44px;bottom:10px;display:flex;gap:5px;flex-wrap:wrap;
+  justify-content:flex-end;max-width:340px}
+#commands .cmd-btn{height:28px;padding:0 9px;font-size:11px;line-height:26px;border:1px
+  solid var(--line);border-radius:4px;background:#10141d;color:#c8d2e6;cursor:pointer;
+  white-space:nowrap;box-shadow:0 1px 2px #000}
+#commands .cmd-btn.has-ic{padding:0 8px 0 4px}
+#commands .cmd-ic{width:22px;height:22px;border-radius:3px;vertical-align:-6px;margin-right:5px;
+  image-rendering:auto}
+#commands .cmd-btn:hover{border-color:var(--green);color:#fff}
+.slot{width:56px;height:56px;border:1px solid var(--line);border-radius:7px;position:relative;
+  background:#11141c center/cover;cursor:pointer;overflow:hidden}
+.slot.unlearned{opacity:.85;filter:grayscale(.5)}
+/* Warcraft III shows an ability you cannot use yet in full, just without the
+   ready border -- at a third opacity on a near-black console it reads as an
+   empty slot instead. */
+.slot.gated{opacity:.72;filter:grayscale(1) brightness(.7)}
+.slot.ready{opacity:1;filter:none;border-color:var(--green);
+  box-shadow:0 0 0 1px var(--green),0 0 10px -2px var(--green)}
+.slot .req{position:absolute;inset:0;display:grid;place-items:center;font-size:11px;
+  font-weight:700;color:#c8d2e6;background:rgba(6,9,14,.62);text-shadow:0 1px 2px #000}
+.skillnote{width:100%;text-align:center;font-size:11px;font-weight:700;color:var(--green);
+  margin-bottom:2px;letter-spacing:.2px;text-shadow:0 1px 3px #000}
+.skillnote.idle{color:#8b93a6;font-weight:600}
+.slot .key{position:absolute;top:1px;left:3px;font-size:10px;font-weight:700;text-shadow:0 1px 2px #000}
+.slot .lv{position:absolute;bottom:1px;right:3px;font-size:10px;color:var(--gold);text-shadow:0 1px 2px #000}
+.slot .cd{position:absolute;inset:0;background:rgba(0,0,0,.68);display:grid;place-items:center;
+  font-weight:700;font-size:15px}
+.slot .up{position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);
+  min-width:20px;height:18px;padding:0 4px;border:1px solid var(--green);border-radius:9px;
+  background:#12301f;color:var(--green);font-weight:800;font-size:12px;line-height:1;
+  cursor:pointer;z-index:2}
+.slot .up:hover{background:var(--green);color:#06120b}
+#log{position:absolute;left:10px;top:10px;width:330px;max-height:34vh;overflow:hidden;
+  font-size:12px;display:flex;flex-direction:column;gap:2px}
+#log div{background:rgba(8,9,13,.7);padding:3px 7px;border-radius:4px;border-left:2px solid var(--line)}
+#log div.kill{border-left-color:var(--red)}
+#log div.lvl{border-left-color:var(--gold)}
+#respawn{position:absolute;inset:0;display:grid;place-items:center;font-size:34px;
+  font-weight:800;text-shadow:0 3px 12px #000;background:rgba(120,10,10,.18)}
+#gameover{position:absolute;inset:0;display:grid;place-items:center;background:rgba(5,6,10,.86)}
+#gameover .box{text-align:center}
+#gameover h2{font-size:42px;margin:0}
+#hint{position:absolute;right:10px;bottom:10px;font-size:11px;color:var(--dim);
+  background:rgba(8,9,13,.7);padding:5px 9px;border-radius:5px}
+/* A shop's stock now goes into the command card's own cells, so it needs no
+   panel of its own -- the .slot rules below already size and skin them. The
+   price sits in the corner the ability rank uses. */
+#abilities .slot.shopitem .lv{color:var(--gold)}
+#abilities .slot.shopitem.tooldear{filter:grayscale(.7);opacity:.55}
+#disconnected{position:fixed;inset:0;display:grid;place-items:center;
+  background:rgba(5,6,10,.9);z-index:60}
+#disconnected .box{text-align:center}
+#disconnected h2{font-size:32px;margin:0 0 8px;color:var(--red);letter-spacing:1px}
+#disconnected p{color:var(--dim);margin:0 0 14px}
+#score{position:fixed;inset:0;display:grid;place-items:center;background:rgba(5,6,10,.9);z-index:30}
+#score table{border-collapse:collapse;background:var(--panel);border:1px solid var(--line)}
+#score th,#score td{padding:6px 14px;border-bottom:1px solid var(--line);font-size:13px;text-align:left}
+.fl{position:absolute;font-weight:700;text-shadow:0 2px 4px #000;pointer-events:none}
+
+.slot .noicon{position:absolute;inset:0;display:grid;place-items:center;font-size:22px;font-weight:800;color:#5d6a86}
+
+#score caption{color:var(--gold);font-weight:700;padding:8px 0;font-size:15px}
+
+/* inventory: six slots beside the ability bar */
+#inventory { position: absolute; bottom: 96px; right: 18px; display: grid;
+             grid-template-columns: repeat(3, 34px); gap: 4px; }
+#inventory .islot { width: 34px; height: 34px; border: 1px solid #2b3346;
+                    border-radius: 4px; background: #12161f; position: relative;
+                    cursor: pointer; overflow: hidden; }
+#inventory .islot.empty { opacity: .35; cursor: default; }
+#inventory .islot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#inventory .islot .chg { position: absolute; right: 2px; bottom: 1px; font-size: 10px;
+                         color: #ffe9a8; text-shadow: 0 0 3px #000; }
+
+/* Warcraft III shows a timer dialog in the top-right corner; this map uses one
+   for the duel countdown, and it is the only clock a player has -- the map
+   never touches the day/night cycle. */
+#gameclock{position:absolute;top:10px;right:10px;display:flex;align-items:center;gap:10px;
+  background:rgba(8,9,13,.85);border:1px solid var(--line);border-radius:8px;
+  padding:7px 14px;font-size:13px;color:var(--dim)}
+#gameclock b{font-size:20px;color:var(--gold);font-variant-numeric:tabular-nums;
+  letter-spacing:.5px}
+#gameclock.soon b{color:var(--red)}
+
+#overlay{position:fixed;inset:0;pointer-events:none;z-index:10}
+
+/* ---- Warcraft III console ---- */
+/* The pieces are chrome, not controls: clicks pass through to whatever panel
+   sits in the slot, and to the world through the transparent parts of the top
+   strip. */
+#console{position:absolute;inset:0;pointer-events:none}
+/* The dark bed behind an opening. The skin names UI\Console\ConsoleBackground.blp
+   for this and no archive ships it, so it is a flat colour -- and it is drawn
+   per opening, never as a band across the console: the tiles are transparent
+   above their stonework and a band shows through there as a black bar. */
+#console .cbed{background:#05070b}
+/* The art in silhouette, behind itself: the battlements along the top edge are
+   soft, and without this the world reads through their fringe. Alpha survives
+   brightness(0), so the notches between them stay open. */
+#console .cshade{filter:brightness(0)}
+/* the console's info panel: the unit's own portrait, then its bars and stats */
+/* In the console the opening's own bed is the background, so the panel drops
+   its box: a second rounded card inside a stone arch reads as a bug. */
+#portrait{display:flex;gap:8px;align-items:stretch;overflow:hidden;
+  background:none;border:0;border-radius:0;padding:6px 8px}
+#portrait #pname2{font-size:12px;margin-bottom:3px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+#portrait .bars .bar{height:12px;margin-bottom:3px}
+#portrait #stats{font-size:11px}
+#portrait .pinfo{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center}
+#unitPortrait{position:absolute;display:block;background:#05070b}
+#console .cpiece{position:absolute;background-repeat:no-repeat;image-rendering:auto}
+
+/* ---- build tag -------------------------------------------------------- */
+/* Bottom-left, except in a match, where the minimap already owns that corner
+   and it sits just above instead. #hud precedes #build, so the sibling
+   combinator can ask whether a match is up. */
+#build{position:fixed;left:11px;bottom:9px;z-index:40;pointer-events:none;
+  font-size:10px;letter-spacing:.4px;color:#5a6478;text-shadow:0 1px 2px #000;
+  font-variant-numeric:tabular-nums;user-select:none}
+/* Two things already own the bottom-left: the lobby's footer strip and, in a
+   match, the minimap. The tag steps over whichever is up. */
+#lobby:not(.hidden) ~ #build{bottom:72px}
+#hud:not(.hidden) ~ #build{bottom:320px}
+#build b{color:#8792a8;font-weight:600}
+#build .dbg{color:#e0a13a;font-weight:700}
+/* The map on its own line under the number: the number says which code is
+   running, the name says which map it was pointed at, and only both together
+   identify a server when several are up. */
+#build .map{display:block;color:#4a5364;letter-spacing:.2px}
+
+/* ---- top strip: resources and menu buttons ----------------------------- */
+/* Warcraft III anchors these to the screen, not to the console, so the host is
+   a full-width band pinned to the top; the pieces position themselves inside it
+   from the offsets in ResourceBar.fdf and UpperButtonBar.fdf. */
+/* inset:0 like #console: every offset in the layout is a fraction of the
+   viewport, so the host has to be the viewport for percentages to mean it */
+#uitop{position:absolute;inset:0;z-index:5;
+  pointer-events:none;user-select:none;font-size:11px}
+/* the resource frame is pinned to the top right and the readouts sit inside
+   it, which is how ResourceBar.fdf anchors them */
+#uitop .rbframe{position:absolute;top:0;right:0}
+#uitop .rbicon{position:absolute;background-repeat:no-repeat;background-size:contain}
+#uitop .rbtext{position:absolute;color:#f2e4b8;text-shadow:0 1px 2px #000;
+  text-align:right;min-width:52px;font-variant-numeric:tabular-nums}
+#uitop .ubbtn{position:absolute;top:0;background-repeat:no-repeat;
+  border:0;padding:0;color:#fff;text-shadow:0 1px 2px #000;font:inherit;
+  font-size:10px;letter-spacing:.3px;cursor:pointer;pointer-events:auto;
+  border-radius:0}
+#uitop .ubbtn.off{color:#666;cursor:default}
+
+/* Classic in-game typography and frames; the custom lobby has its own style. */
+#hud,#score,#wcTooltip,#wcDialog{font-family:"Friz Quadrata",serif;color:#fff;text-shadow:1px 1px #000}
+#hud{font-size:clamp(10px,1.3vh,16px)}
+#uitop .ubbtn{font-family:inherit;font-size:clamp(9px,1.25vh,15px);letter-spacing:0}
+#uitop .rbtext{font-size:clamp(10px,1.35vh,16px);color:#fff}
+#portrait{padding:1.2% .8% .3%;text-align:center}
+#portrait .pinfo{justify-content:flex-start;position:relative}
+#portrait #pname2{font-size:clamp(11px,1.55vh,19px);font-weight:400;margin:0;line-height:1.1}
+#heroClass{font-size:clamp(9px,1.25vh,15px);margin:.6vh 0 1vh;position:relative;z-index:1}
+#portrait .bars{position:static}
+#portrait .bar.xp{position:absolute;top:2.15vh;left:0;right:0;height:1.65vh;border:1px solid #766332;background:#080808}
+#portrait .bar.xp i{background:#6637ac url('/assets/textures/UI/Feedback/XpBar/human-bigbar-fill.png') center/100% 100%;background-blend-mode:multiply}
+#portrait .bar.hp,#portrait .bar.mp{position:fixed;left:var(--portrait-left);width:var(--portrait-width);height:1.6vh;margin:0;border:1px solid #655829;border-radius:0;z-index:2;background:#000}
+#portrait .bar.hp{bottom:3vh}#portrait .bar.mp{bottom:1.15vh}
+#portrait .bar.hp i{background:#21bd20 url('/assets/textures/UI/Feedback/HPBarConsole/human-healthbar-fill.png') center/100% 100%;background-blend-mode:multiply}
+#portrait .bar.mp i{background:#2348ed url('/assets/textures/UI/Feedback/ManaBarConsole/human-manabar-fill.png') center/100% 100%;background-blend-mode:multiply}
+#portrait .bar span{font-family:"Friz Quadrata",serif;font-size:clamp(9px,1.2vh,14px);line-height:1.5vh}
+#portrait #stats{display:flex;justify-content:space-between;align-items:flex-start;margin-top:1.2vh;font-size:clamp(10px,1.35vh,16px);text-align:left;color:#ffcc00;gap:1vw}
+.combat-stats{line-height:2.8vh}.combat-stats b{font-weight:400;display:inline-block;margin-left:1vw}
+.hero-attributes{display:flex;flex-direction:column;gap:.2vh;color:#fff}
+.hero-attributes>div{display:flex;align-items:center;gap:.5vw;min-width:5vw}
+.hero-attributes img{height:2.7vh;width:2.7vh;object-fit:contain}.hero-attributes b{font-weight:400}
+#abilities .slot,#inventory .islot{border:0;border-radius:0;padding:0;background-color:#000;box-shadow:none;filter:none;opacity:1;overflow:hidden}
+#abilities .slot{background-size:100% 100%}
+#abilities .slot:hover,#inventory .islot:not(.empty):hover{outline:1px solid #ffdf64;outline-offset:-2px}
+#abilities .slot:active{filter:brightness(.7)}
+#abilities .slot.unavailable{filter:grayscale(1) brightness(.55);cursor:default}
+#abilities .slot.learnable{box-shadow:inset 0 0 8px #ffcc00}
+#abilities .slot .key,#abilities .slot .lv{font:inherit;color:#fff}
+#abilities .cooldown-sweep{position:absolute;inset:0;pointer-events:none}
+#inventory .islot.empty{background:transparent;cursor:default}
+#inventory .islot .chg{font-size:clamp(9px,1.3vh,15px);color:#fff}
+#wcTooltip{position:fixed;right:1vw;bottom:28vh;width:min(32vw,460px);z-index:45;pointer-events:none;
+ white-space:pre-line;padding:14px 17px;background:#080808 url('/assets/ui/tooltip_background.png') repeat;
+ border:2px solid #ac9256;box-shadow:inset 0 0 0 1px #332b16,0 0 3px #000;font-size:clamp(11px,1.5vh,18px);line-height:1.4}
+#wcTooltip::first-line{color:#ffcc00}
+#topbar{left:auto;right:1%;top:7%;transform:none;border-radius:0;border:1px solid #9c864e;background:#080808;padding:3px 9px;gap:9px}
+.score b{font-size:inherit}.score,.score-mid{font-size:clamp(10px,1.3vh,16px);color:#fff}
+#gameclock{top:3.8%;right:1%;padding:3px 9px;border:1px solid #9c864e;border-radius:0;background:#080808;font-size:clamp(10px,1.3vh,16px);color:#fff}
+#gameclock b{font-size:inherit;color:#fff;font-weight:400}
+#log{top:8%;left:1%;width:45%;font-size:clamp(11px,1.6vh,18px)}
+#log div{background:none;border:0;padding:0;border-radius:0}
+#build{display:none}
+#score{background:rgba(0,0,0,.45)}
+#score table{background:#080808;border:2px solid #9c864e}
+#score th,#score td{font-size:clamp(11px,1.5vh,18px);border:0}
+#wcChat{position:absolute;left:2%;bottom:31%;width:45%;font:inherit;color:white;background:#000b;border:1px solid #9c864e;border-radius:0}
+#wcDialog{position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:#0008}
+#wcDialog section{width:min(640px,85vw);max-height:75vh;overflow:auto;padding:24px;background:#111 url('/assets/ui/tooltip_background.png');border:2px solid #9c864e}
+#wcDialog h2,#wcDialog h3{color:#ffcc00;font-weight:400}
+#wcDialog p{white-space:pre-line}
+#wcDialog button{font:inherit;color:#ffcc00;background:#101010;border:2px ridge #9c864e;border-radius:0;display:block;margin:20px auto 0}
+#wcDialog input[type=range]{display:block;width:100%;margin:14px 0;accent-color:#ffcc00}
+
+.selection-group{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;width:100%}
+.selection-group button{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;padding:3px;font-size:11px;color:#ffcc00;background:#15191c;border:1px solid #827145}
+
+.selection-group button.active-subgroup{border-color:#ffe180;background:#39331b;color:#fff5b5;box-shadow:inset 0 0 0 1px #b89a44}
