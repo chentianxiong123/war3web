@@ -124,6 +124,7 @@ const posArr = geo.attributes.position.array;
 for (let v = 0; v < W * H; v++) posArr[v * 3 + 1] = surfH[v];
 geo.attributes.position.needsUpdate = true;
 geo.computeVertexNormals();
+window.__surfH = surfH;   // 暴露给游戏系统 (单位贴地移动)
 const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.0 }));
 scene.add(mesh);
 
@@ -274,7 +275,7 @@ const controls = new OrbitControls(cam, renderer.domElement);
 controls.target.set(0, 200, 0);
 
 log('✅ 渲染中...');
+
+log('✅ 渲染中...');
 renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, cam); });
 </script>
-</body>
-</html>

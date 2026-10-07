@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WC3 地图渲染 - M2</title>
+<style>
+  body { margin: 0; background: #111; overflow: hidden; font-family: monospace; color: #aaa; }
+  #status { position: fixed; top: 8px; left: 8px; z-index: 10; background: rgba(0,0,0,.7); padding: 6px 10px; border-radius: 4px; font-size: 12px; white-space: pre; }
+  #info { position: fixed; bottom: 8px; left: 8px; z-index: 10; font-size: 11px; color: #666; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="status">loading...</div>
+<div id="info">WC3 地图地形 · WASM(StormLib) 读 MPQ + three.js WebGPU 渲染 · 拖拽旋转 / 滚轮缩放</div>
+
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.webgpu.js",
+               "three/addons/": "./node_modules/three/examples/jsm/" } }
+</script>
+
+<script src="./mpq_reader.js"></script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { WebGPURenderer } from 'three';
+import { parseW3E } from './w3e.js';
+import { parseW3DO } from './w3do.js';
+import { parseW3UNITS } from './w3units.js';
+
+const status = document.getElementById('status');
+const log = (s) => { status.textContent += '\n' + s; };
+
+// ---------- 1. WASM 读地图 ----------
+log('加载 WASM (StormLib)...');
+const m = await MPQLoader({ locateFile: f => './' + f, print: () => {}, printErr: () => {} });
+
+const mapResp = await fetch('./terenas.w3x');
+const mapBuf = new Uint8Array(await mapResp.arrayBuffer());
+m.FS.writeFile('/map.w3x', mapBuf);
+log(`地图写入: ${mapBuf.length} 字节`);
+
+const open  = m.cwrap('mpq_open', 'number', ['string']);
+const read  = m.cwrap('mpq_read', 'number', ['string']);
+const getSize = m.cwrap('mpq_get_buf_size', 'number', []);
+const getBuf  = m.cwrap('mpq_get_buf', 'number', []);
+
+if (!open('/map.w3x')) { log('❌ MPQ 打开失败'); throw new Error('open failed'); }
+const rd = (f) => {
+  const n = read(f);
+  if (n <= 0) throw new Error('read fail: ' + f);
+  return new Uint8Array(m.HEAPU8.buffer.slice(getBuf(), getBuf() + n));
+};
+const w3eData = rd('war3map.w3e');
+log(`WASM 读出 war3map.w3e: ${w3eData.length} 字节`);
+const dooData = rd('war3map.doo');
+const unitsData = rd('war3mapUnits.doo');
+log(`WASM 读出 war3map.doo: ${dooData.length} | units: ${unitsData.length}`);
+
+// ---------- 2. 解析地形 ----------
+const t = parseW3E(w3eData);
+log(`地形: ${t.width}x${t.height} 格 | tileset=${t.tileset}`);
+const doo = parseW3DO(dooData);
+const units = parseW3UNITS(unitsData);
+log(`装饰物: ${doo.items.length} 个 | 单位: ${units.units.length} 个 (金矿 ${units.units.filter(u=>u.id==='ngol').length})`);
+
+// ---------- 3. 生成几何 (高度用 foc 真实 surface 高度场, 与装饰物/单位同坐标系) ----------
+const W = t.width, H = t.height, TS = t.tileSize;
+const positions = new Float32Array(W * H * 3);
+const uvs = new Float32Array(W * H * 2);
+
+for (let y = 0; y < H; y++) {
+  for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    const px = t.offX + x * TS;           // worldX = left + col*128
+    const py = -(t.offY + y * TS);        // worldY: w3e 行0=北, 世界y北为正 → 取负 (foc-web 同款)
+    positions.set([px, 0, py], i * 3);    // Y 稍后用 foc surface 高度填充
+    // UV: 对应 96x96 格的 _ground.png 纹理
+    uvs.set([x / (W - 1), 1 - y / (H - 1)], i * 2);  // v 翻转: w3e 行0=北
+  }
+}
+
+// 网格索引（每格两个三角形）
+const indices = [];
+for (let y = 0; y < H-1; y++) {
+  for (let x = 0; x < W-1; x++) {
+    const a = y*W + x, b = a+1, c = (y+1)*W+x, d = c+1;
+    indices.push(a, b, c, b, d, c);
+  }
+}
+log(`网格: ${positions.length/3} 顶点 / ${indices.length/3} 三角`);
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+geo.setIndex(indices);
+geo.computeVertexNormals();
+
+// ---------- 4. WebGPU 渲染 ----------
+log('初始化 WebGPU...');
+const renderer = new WebGPURenderer({ antialias: true });
+await renderer.init();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a2a3a);
+
+// 平行光（伪太阳）
+const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+sun.position.set(200, 400, 100);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x8090a0, 0.6));
+
+const tex = await new THREE.TextureLoader().loadAsync('./ground_tex.png');
+tex.colorSpace = THREE.SRGBColorSpace;
+// 真实 surface 高度场 (foc 管线: (raw-8192)/4 + layer*128 + raised*64, 与装饰物 z 同坐标系)
+const hb = await fetch('./foc/data/heights.bin').then(r => r.arrayBuffer());
+const surfH = new Float32Array(hb);
+const posArr = geo.attributes.position.array;
+for (let v = 0; v < W * H; v++) posArr[v * 3 + 1] = surfH[v];
+geo.attributes.position.needsUpdate = true;
+geo.computeVertexNormals();
+window.__surfH = surfH;   // 暴露给游戏系统 (单位贴地移动)
+const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.0 }));
+scene.add(mesh);
+
+// ---------- 5. 真实装饰物渲染 (foc-web 管线资产: 真树/真岩石/真建筑) ----------
+const H0 = 0, SC = 1;   // 统一 foc surface 坐标系: y = z 直接使用
+const yOf = (z) => (z - H0) * SC;
+const mineGeo = new THREE.CylinderGeometry(40, 44, 30, 8);
+const mineMat = new THREE.MeshStandardMaterial({ color: 0xc8a832, roughness: 1, emissive: 0x554400 });
+const unitGeo = new THREE.BoxGeometry(30, 30, 30);
+const unitMat = new THREE.MeshStandardMaterial({ color: 0xaa4444, roughness: 1 });
+const slocGeo = new THREE.SphereGeometry(45, 12, 12);
+const slocMats = [new THREE.MeshStandardMaterial({ color: 0xff2020, emissive: 0x550000 }),
+                  new THREE.MeshStandardMaterial({ color: 0x2020ff, emissive: 0x000055 })];
+const mineMeshes = [], unitMeshes = [], slocMeshes = [];
+
+async function renderRealDoodads() {
+  log('加载真实装饰物模型 (foc-web 管线资产)...');
+  const [doodads, meta] = await Promise.all([
+    fetch('./foc/data/doodads.json').then(r => r.json()),
+    fetch('./foc/data/doodadmeta.json').then(r => r.json()),
+  ]);
+  const hb = await fetch('./foc/data/heights.bin').then(r => r.arrayBuffer());
+  const heights = new Float32Array(hb);
+  const terr = { width: 97, height: 97, tileSize: 128, offsetX: -6144, offsetY: -6144 };
+  const heightAt = (wx, wy) => {
+    const W = terr.width, H = terr.height;
+    const fx = (wx - terr.offsetX) / terr.tileSize, fy = (wy - terr.offsetY) / terr.tileSize;
+    const i = Math.max(0, Math.min(W - 2, Math.floor(fx)));
+    const j = Math.max(0, Math.min(H - 2, Math.floor(fy)));
+    const r = j * W + i;
+    const a = heights[r] || 0, b = heights[r + 1] || 0;
+    const c = heights[r + W] || 0, d = heights[r + W + 1] || 0;
+    const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fy - j));
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  };
+  const loader = new GLTFLoader();
+  loader.setResourcePath('./foc/assets/');
+  const texLoader = new THREE.TextureLoader();
+  const groups = new Map();
+  for (const d of doodads) {
+    const m = meta[d.id];
+    if (!m || !m.visible) continue;
+    const hasVar = m.v && m.v.length;
+    const model = (hasVar ? m.v[d.variation % m.v.length] : null) || m.m;
+    if (!model) continue;
+    const key = d.id + '|' + (hasVar ? d.variation % m.v.length : 0);
+    if (!groups.has(key)) groups.set(key, { d, m, items: [] });
+    groups.get(key).items.push(d);
+  }
+  const t0 = Date.now();
+  let placed = 0, drawn = 0;
+  for (const [key, g] of groups) {
+    const model = (g.m.v && g.m.v.length ? g.m.v[g.d.variation % g.m.v.length] : null) || g.m.m;
+    if (!model) continue;
+    let glb;
+    try { glb = await loader.loadAsync('./foc/assets/models/' + model + '.glb'); }
+    catch (e) { log('  模型缺失: ' + model); continue; }
+    const protoScene = glb.scene;
+    // 原型: 无贴图材质 -> 贴 doodadmeta 的替换贴图 (foc-web applyRepl 同款)
+    if (g.m.tex) {
+      const t = await texLoader.loadAsync('./foc/assets/' + g.m.tex);
+      t.colorSpace = THREE.SRGBColorSpace;
+      const patched = new Map();
+      protoScene.traverse(o => {
+        if (!o.isMesh || !o.material) return;
+        const arr = Array.isArray(o.material) ? o.material : [o.material];
+        const out = arr.map(mm => {
+          if (!mm || mm.map) return mm;
+          let c = patched.get(mm);
+          if (!c) {
+            c = mm.clone(); c.map = t; c.transparent = true;
+            c.alphaTest = mm.alphaTest || 0.5; c.needsUpdate = true;
+            patched.set(mm, c);
+          }
+          return c;
+        });
+        o.material = Array.isArray(o.material) ? out : out[0];
+      });
+    }
+    const s = (g.m.s || 1);
+    const Y = new THREE.Vector3(0, 1, 0);
+    for (const d of g.items) {
+      // 完整克隆场景(含树干+树冠+骨骼), z=绝对放置高度 (Terenas 官方图)
+      const obj = cloneSkeleton(protoScene);
+      obj.position.set(d.x, d.z || 0, -d.y);
+      obj.rotation.y = d.rot || 0;
+      obj.scale.set((d.sx || 1) * s, (d.sz || 1) * s, (d.sy || 1) * s);
+      scene.add(obj);
+      placed++;
+    }
+    drawn++;
+  }
+  log(`真实装饰物: ${drawn} 组模型 / ${placed} 个摆放完成 (${(Date.now()-t0)/1000}s)`);
+}
+
+// 真实单位/金矿/建筑模型渲染 (unitmodels.json 映射, 复用 foc-web 管线模型)
+async function renderRealUnits() {
+  const um = await fetch('./foc/data/unitmodels.json').then(r => r.json());
+  const loader = new GLTFLoader();
+  loader.setResourcePath('./foc/assets/');
+  const cache = new Map();
+  const getModel = async (name) => {
+    if (!name) return null;
+    if (cache.has(name)) return cache.get(name);
+    try {
+      const glb = await loader.loadAsync('./foc/assets/models/' + name + '.glb');
+      cache.set(name, glb.scene);
+      return glb.scene;
+    } catch (e) { cache.set(name, null); return null; }
+  };
+  const Y = new THREE.Vector3(0, 1, 0);
+  let real = 0, fallback = 0;
+  for (const u of units.units) {
+    if (u.id === 'sloc') {  // 出生点: 保留红/蓝球
+      const mm = new THREE.Mesh(slocGeo, slocMats[u.player % 2]);
+      mm.position.set(u.x, u.z, u.y);
+      slocMeshes.push(mm); scene.add(mm);
+      continue;
+    }
+    const info = um[u.id] || {};
+    const proto = await getModel(info.m);
+    const s = (info.s || 1);
+    if (proto) {
+      const obj = cloneSkeleton(proto);
+      obj.position.set(u.x, u.z, -u.y);
+      obj.rotation.y = Math.random() * Math.PI * 2;  // 野怪随机朝向
+      obj.scale.setScalar(s);
+      scene.add(obj);
+      real++;
+    } else {
+      const mm = new THREE.Mesh(unitGeo, unitMat);
+      mm.position.set(u.x, u.z, u.y);
+      unitMeshes.push(mm); scene.add(mm);
+      fallback++;
+    }
+  }
+  log(`单位: 真实模型 ${real} 个 (含金矿) | 占位 ${fallback} 个 | 出生点 ${slocMeshes.length}`);
+}
+
+await renderRealUnits();
+await renderRealDoodads();
+
+const cam = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 1, 50000);
+cam.position.set(0, 2500, 2500);
+cam.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.target.set(0, 200, 0);
+
+log('✅ 渲染中...');
+
+// ================== 可玩 RTS 系统 ==================
+const SURFH = window.__surfH;  // foc surface 高度场 (Float32Array 9409)
+const TERR = { W: 97, H: 97, TS: 128, OX: -6144, OY: -6144 };
+const heightAt = (wx, wy) => {
+  const { W, H, TS, OX, OY } = TERR;
+  const fx = (wx - OX) / TS, fy = (wy - OY) / TS;
+  const i = Math.max(0, Math.min(W - 2, Math.floor(fx)));
+  const j = Math.max(0, Math.min(H - 2, Math.floor(fy)));
+  const r = j * W + i;
+  const a = SURFH[r] || 0, b = SURFH[r + 1] || 0, c = SURFH[r + W] || 0, d = SURFH[r + W + 1] || 0;
+  const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fy - j));
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+};
+
+// 单位类型表 (模型名来自 foc-web 管线 models.json)
+const UT = {
+  townhall:  { model: 'buildings~human~townhall~townhall', hp: 2500, gold: 0, attack: 0, range: 0,   speed: 0,  size: 90, mine: false, label: '城镇大厅' },
+  peasant:   { model: 'units~human~peasant~peasant',       hp: 140,  gold: 75, attack: 4, range: 45,  speed: 130, size: 24, mine: true,  label: '农民' },
+  footman:   { model: 'units~human~footman~footman',       hp: 420,  gold: 135, attack: 12, range: 55, speed: 100, size: 28, mine: false, label: '步兵' },
+  archer:    { model: 'units~creeps~gnollarcher~gnollarcher',         hp: 250,  gold: 90,  attack: 15, range: 260, speed: 110, size: 26, mine: false, label: '弓箭手' },
+  wolf:      { model: 'units~creeps~wolf~wolf',            hp: 220,  gold: 0,   attack: 9,  range: 50,  speed: 160, size: 26, mine: false, label: '狼' },
+};
+// 野怪模型映射 (unitmodels.json 里的 m)
+const CREEP_MODELS = { nwiz: 'units~creeps~humanmage~humanmage', nkot: 'units~creeps~kobold~kobold',
+  nkob: 'units~creeps~kobold~kobold', nrog: 'units~creeps~bandit~bandit', nftr: 'units~creeps~foresttroll~foresttroll',
+  nmrr: 'units~creeps~murlocwarrior~murlocwarrior', nfsp: 'units~creeps~foresttrollshadowpriest~foresttrollshadowpriest',
+  nsqt: 'units~creeps~sasquatch~sasquatch', ngrk: 'units~creeps~rockgolem~rockgolem', nwzg: 'units~creeps~banditmage~banditmage',
+  nwzr: 'units~creeps~banditmage~banditmage', nbrg: 'units~creeps~banditspearthrower~banditspearthrower',
+  nass: 'units~creeps~banditspearthrower~banditspearthrower', nkol: 'units~creeps~kobold~kobold',
+  nkog: 'units~creeps~koboldgeomancer~koboldgeomancer', nenf: 'units~creeps~bandit~bandit',
+  nban: 'units~creeps~bandit~bandit', nmrm: 'units~creeps~murlocnightcrawler~murlocnightcrawler',
+  nmer: 'buildings~other~mercenary~mercenary', ngme: 'buildings~other~merchant~merchant',
+  ngad: 'buildings~other~ammodump~ammodump', ntav: 'doodads~cityscape~structures~tavern~tavern' };
+
+const G = {
+  players: [{ gold: 0, alive: true, base: null }, { gold: 0, alive: true, base: null }],
+  units: [], sel: [], ticks: 0, over: false,
+  unitModelCache: new Map(),
+};
+
+// 模型加载缓存
+const unitLoader = new GLTFLoader();
+unitLoader.setResourcePath('./foc/assets/');
+const loadUnitModel = async (name) => {
+  if (G.unitModelCache.has(name)) return G.unitModelCache.get(name);
+  try { const g = await unitLoader.loadAsync('./foc/assets/models/' + name + '.glb'); G.unitModelCache.set(name, g); return g; }
+  catch (e) { G.unitModelCache.set(name, null); return null; }
+};
+
+// 选择圈 (绿色圆环)
+const ringGeo = new THREE.RingGeometry(38, 48, 24);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0x40ff40, transparent: true, opacity: 0.8, side: THREE.DoubleSide });
+const ringMesh = new THREE.Mesh(ringGeo, ringMat); ringMesh.rotation.x = -Math.PI / 2; ringMesh.visible = false; scene.add(ringMesh);
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+// 创建单位 (type: UT 键 / creep id)
+function makeUnit(type, x, y, owner, opts = {}) {
+  const t = UT[type] || { model: CREEP_MODELS[type], hp: opts.hp || 300, attack: opts.atk || 8, range: 60, speed: 90, size: 26, mine: false };
+  if (!t.model) return null;
+  const g = G.unitModelCache.get(t.model);
+  if (!g) return null;
+  const obj = cloneSkeleton(g.scene);
+  obj.position.set(x, heightAt(x, y) + (opts.lift || 0), -y);
+  obj.rotation.y = Math.random() * Math.PI * 2;
+  const s = opts.scale || (t.size / 26);
+  obj.scale.setScalar(s);
+  scene.add(obj);
+  // 动画 (Stand/Walk/Attack 序列)
+  let mixer = null;
+  if (g.animations && g.animations.length) {
+    mixer = new THREE.AnimationMixer(obj);
+    mixer.timeScale = 1;
+    const names = g.animations.map(a => a.name.toLowerCase());
+    const pick = (re) => names.findIndex(n => re.test(n));
+    const standIdx = pick(/^stand/) >= 0 ? pick(/^stand/) : 0;
+    const act = mixer.clipAction(g.animations[standIdx]); act.play();
+  }
+  const u = {
+    type, owner, x, y, z: heightAt(x, y),
+    hp: opts.hp || t.hp, maxHp: opts.hp || t.hp,
+    atk: opts.atk || t.attack, range: t.range, speed: t.speed, size: t.size,
+    mine: t.mine, state: 'idle', target: null, obj, mixer, dead: false,
+    atkCd: 0, mineT: 0, model: t.model, scale: s,
+    creep: !!CREEP_MODELS[type] && type !== 'townhall' && type !== 'peasant',
+  };
+  G.units.push(u);
+  return u;
+}
+
+// 野怪 (83 个中立) + 金矿 + 出生点基地
+async function setupGame() {
+  // 金矿模型
+  const mineGlb = await loadUnitModel('buildings~other~goldmine~goldmine');
+  const mines = [];
+  for (const m of units.units.filter(u => u.id === 'ngol')) {
+    const obj = cloneSkeleton(mineGlb.scene);
+    obj.position.set(m.x, m.z, -m.y);
+    scene.add(obj);
+    mines.push({ x: m.x, y: m.y, left: 12500 });
+  }
+  G.mines = mines;
+  // 出生点基地 (玩家 1/2)
+  const slocs = units.units.filter(u => u.id === 'sloc');
+  const townGlb = await loadUnitModel('buildings~human~townhall~townhall');
+  for (let i = 0; i < 2 && i < slocs.length; i++) {
+    const s = slocs[i];
+    const t = makeUnit('townhall', s.x, s.y, i, { hp: 2500 });
+    if (t) {
+      t.obj.rotation.y = 0;
+      G.players[i].base = t;
+      G.players[i].gold = 500;
+      G.players[i].pos = { x: s.x, y: s.y };
+      // 预加载玩家单位模型
+    await Promise.all(['units~human~peasant~peasant', 'units~human~footman~footman', 'units~creeps~gnollarcher~gnollarcher'].map(n => loadUnitModel(n)));
+    // 3 个农民开局
+    for (let k = 0; k < 3; k++) makeUnit('peasant', s.x + (k - 1) * 80 + 40, s.y - 60, i, {});
+    }
+  }
+  // 野怪 (守金矿) —— 先预加载所有野怪模型
+  await Promise.all([...new Set(Object.values(CREEP_MODELS))].map(n => loadUnitModel(n)));
+  const nearMine = (x, y) => {
+    let best = null, bd = 1e9;
+    for (const m of mines) { const d = Math.hypot(m.x - x, m.y - y); if (d < bd) { bd = d; best = m; } }
+    return { mine: best, d: bd };
+  };
+  for (const c of units.units) {
+    if (c.id === 'ngol' || c.id === 'sloc') continue;
+    const nm = nearMine(c.x, c.y);
+    const u = makeUnit(c.id, c.x, c.y, 0, { hp: Math.round(c.hp || 300), atk: 8, scale: 1 });
+    if (u) { u.guardMine = nm.mine; u.guardD = nm.d; }
+  }
+  log(`游戏: 基地2 农民6 野怪${G.units.filter(u=>u.creep).length} 金矿${mines.length}`);
+}
+
+// ---- 命令: 左键选 / 右键命令 ----
+const raycaster = new THREE.Raycaster();
+const mouseNDC = new THREE.Vector2();
+const pickUnits = (clientX, clientY, ownerOnly) => {
+  mouseNDC.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(mouseNDC, cam);
+  const hits = raycaster.intersectObjects(G.units.map(u => u.obj), true);
+  for (const h of hits) {
+    const u = G.units.find(gu => gu.obj === h.object || gu.obj.getObjectById(h.object.id));
+    if (u && !u.dead && (!ownerOnly || u.owner > 0)) return u;
+  }
+  return null;
+};
+const pickGround = (clientX, clientY) => {
+  mouseNDC.set((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(mouseNDC, cam);
+  const hits = raycaster.intersectObject(mesh);
+  if (hits.length) return { x: hits[0].point.x, z: hits[0].point.y, y: -hits[0].point.z };
+  return null;
+};
+let downX = 0, downY = 0, downT = 0, downBtn = 0;
+renderer.domElement.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; downT = Date.now(); downBtn = e.button; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+  if (moved > 8 || Date.now() - downT > 400) return;  // 拖动=旋转, 不处理
+  if (downBtn === 0) {  // 左键选
+    const u = pickUnits(e.clientX, e.clientY, true);
+    G.sel = u ? [u] : [];
+  } else if (downBtn === 2 && G.sel.length) {  // 右键命令
+    const target = pickUnits(e.clientX, e.clientY, false);
+    const ground = pickGround(e.clientX, e.clientY);
+    for (const u of G.sel) {
+      if (u.dead) continue;
+      if (target && target.owner !== u.owner) { u.state = 'attack'; u.target = target; }
+      else if (target && target.mine && u.mine) { u.state = 'mine'; u.target = target; }
+      else if (ground) { u.state = 'move'; u.target = ground; u.movePt = ground; }
+    }
+  }
+});
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---- 战斗/移动 tick ----
+function tickGame(dt) {
+  G.ticks++;
+  // 金矿刷新: 已死的单位标记
+  for (const u of G.units) {
+    if (u.dead) continue;
+    u.atkCd = Math.max(0, u.atkCd - dt);
+    if (u.state === 'move' && u.movePt) {
+      const dx = u.movePt.x - u.x, dy = u.movePt.y - u.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 6) { u.state = 'idle'; u.target = null; }
+      else {
+        const step = u.speed * dt;
+        const nx = u.x + dx / d * Math.min(step, d), ny = u.y + dy / d * Math.min(step, d);
+        u.x = nx; u.y = ny;
+        u.z = heightAt(nx, ny);
+        u.obj.position.set(nx, u.z, -ny);
+        u.obj.rotation.y = Math.atan2(dy, dx);
+      }
+      if (u.atk > 0) {  // 移动中自动索敌 (野怪/敌方)
+        const e = nearestEnemy(u);
+        if (e && dist(u, e) < u.range + e.size) { u.state = 'attack'; u.target = e; }
+      }
+    } else if (u.state === 'attack' && u.target && !u.target.dead) {
+      const d = dist(u, u.target);
+      if (d > u.range + u.target.size) {
+        const dx = u.target.x - u.x, dy = u.target.y - u.y, dd = Math.hypot(dx, dy);
+        const step = u.speed * dt;
+        u.x += dx / dd * step; u.y += dy / dd * step;
+        u.z = heightAt(u.x, u.y);
+        u.obj.position.set(u.x, u.z, -u.y);
+        u.obj.rotation.y = Math.atan2(dy, dx);
+      } else if (u.atkCd <= 0) {
+        u.atkCd = 1.0;
+        u.target.hp -= u.atk;
+        if (u.target.hp <= 0 && !u.target.dead) killUnit(u.target);
+      }
+    } else if (u.state === 'mine' && u.target && u.target.left > 0) {
+      const d = dist(u, u.target);
+      if (d > 90) {
+        const dx = u.target.x - u.x, dy = u.target.y - u.y, dd = Math.hypot(dx, dy);
+        const step = u.speed * dt;
+        u.x += dx / dd * step; u.y += dy / dd * step;
+        u.z = heightAt(u.x, u.y);
+        u.obj.position.set(u.x, u.z, -u.y);
+      } else {
+        u.mineT -= dt;
+        if (u.mineT <= 0) {
+          u.mineT = 2.0;
+          const take = Math.min(10, u.target.left);
+          u.target.left -= take;
+          G.players[u.owner].gold += take;
+          if (u.target.left <= 0) { u.target.left = 0; u.state = 'idle'; }
+        }
+      }
+    } else if (u.state === 'idle') {
+      // 野怪守矿: 有入侵者就攻击
+      if (u.creep && u.guardMine) {
+        for (const e of G.units) {
+          if (e.dead || e.owner === 0) continue;
+          const d = dist(e, u.guardMine);
+          if (d < 500 && dist(u, e) < 700) { u.state = 'attack'; u.target = e; break; }
+        }
+      }
+    }
+    // 血条浮空
+    if (u.hp < u.maxHp) {
+      u.obj.traverse(o => { if (o.isMesh && o.userData.hpBar) { o.scale.x = u.hp / u.maxHp; } });
+    }
+  }
+  // 野怪: 攻击入侵者 (金矿守卫半径)
+  // 选中圈跟随
+  if (G.sel.length && G.sel[0] && !G.sel[0].dead) {
+    const s = G.sel[0];
+    ringMesh.position.set(s.x, s.z + 4, -s.y);
+    ringMesh.visible = true;
+  } else ringMesh.visible = false;
+  // 胜负
+  for (let p = 0; p < 2; p++) {
+    if (G.players[p].base && G.players[p].base.dead && G.players[p].alive) {
+      G.players[p].alive = false;
+      G.over = true;
+      log(`🏆 玩家 ${p === 0 ? 2 : 1} 获胜！`);
+      document.getElementById('overlay').textContent = `玩家 ${p === 0 ? 2 : 1} 获胜！按 F5 重开`;
+    }
+  }
+  // HUD
+  hudGold.textContent = `玩家1: ${Math.round(G.players[0].gold)}金  |  玩家2: ${Math.round(G.players[1].gold)}金`;
+}
+const nearestEnemy = (u) => {
+  let best = null, bd = 1e9;
+  for (const e of G.units) {
+    if (e.dead || e.owner === u.owner || (e.owner === 0 && !e.creep)) continue;
+    const d = dist(u, e);
+    if (d < bd && d < 600) { bd = d; best = e; }
+  }
+  return best;
+};
+function killUnit(u) {
+  u.dead = true;
+  scene.remove(u.obj);
+}
+
+// 造兵按钮 (异步: 先加载模型再扣钱创建)
+const train = async (type, owner) => {
+  if (G.over) return;
+  const t = UT[type];
+  const p = G.players[owner];
+  if (!p || !p.alive || !p.base || p.base.dead || p.gold < t.gold) return;
+  await loadUnitModel(t.model);
+  if (!G.unitModelCache.get(t.model)) { log(`模型缺失: ${t.model}`); return; }
+  p.gold -= t.gold;
+  const b = p.base;
+  const bx = b.x + (Math.random() - 0.5) * 100, by = b.y + 130;
+  makeUnit(type, bx, by, owner, {});
+  log(`玩家${owner + 1} 训练 ${t.label}`);
+};
+
+// HUD
+const hud = document.createElement('div');
+hud.id = 'hud';
+hud.style.cssText = 'position:fixed;bottom:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.75);padding:8px 14px;border-radius:6px;color:#ddd;font:13px monospace;display:flex;gap:10px;align-items:center;z-index:20';
+hud.innerHTML = `<span id="hudGold"></span>` +
+  `<button onclick="window.__train(0,'peasant')">农民 75</button><button onclick="window.__train(0,'footman')">步兵 135</button><button onclick="window.__train(0,'archer')">弓手 90</button>` +
+  `<button onclick="window.__train(1,'peasant')">农民 75</button><button onclick="window.__train(1,'footman')">步兵 135</button>`;
+document.body.appendChild(hud);
+const hudGold = document.getElementById('hudGold');
+const overlay = document.createElement('div');
+overlay.id = 'overlay';
+overlay.style.cssText = 'position:fixed;top:30%;left:50%;transform:translateX(-50%);font:28px bold monospace;color:#ffd700;z-index:30;text-shadow:0 2px 6px #000';
+document.body.appendChild(overlay);
+window.__train = train;
+window.__G = G;
+
+// 主循环
+let lastT = performance.now();
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastT) / 1000);
+  lastT = now;
+  controls.update();
+  if (!G.over) tickGame(dt);
+  renderer.render(scene, cam);
+});
+
+// 开局
+setupGame();
+</script>
+</body>
+</html>
