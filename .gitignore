@@ -1,0 +1,75 @@
+# ===== 二进制 / 大文件：全部拦截 =====
+# 游戏数据（MPQ 压缩包）
+*.mpq
+*.mpq_files
+!*.c
+!*.h
+!*.cpp
+!*.hpp
+
+# 提取的素材（模型/贴图/音频）
+*.mdx
+*.mdl
+*.blp
+*.dds
+*.tga
+*.bmp
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.ico
+*.wav
+*.mp3
+*.ogg
+*.mid
+*.flac
+*.rgba
+*.ppm
+
+# 编译产物 / 库文件
+*.o
+*.a
+*.so
+*.dll
+*.exe
+*.lib
+*.obj
+*.wasm
+*.bin
+*.class
+*.jar
+*.pyc
+*.pyo
+
+# Emscripten / JS 构建产物
+*/build*/
+build/
+dist/
+node_modules/
+*.min.js
+*.min.css
+
+# 压缩包
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.gz
+
+# 生成/临时
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+*.bak
+*.old
+*~
+
+# 敏感
+*.pem
+*.key
+*.env
