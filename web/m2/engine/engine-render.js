@@ -26,6 +26,7 @@ export function bindEngineUnits({ scene, world, heightAt, log, cloneSkeleton }) 
     if (!glb) return null;
     const obj = cloneSkeleton(glb.scene);
     obj.scale.setScalar(info.s || 1);
+    obj.userData = { unitId: u.id };
     scene.add(obj);
     let mixer = null, stand = null, walk = null;
     if (glb.animations && glb.animations.length) {
@@ -40,7 +41,15 @@ export function bindEngineUnits({ scene, world, heightAt, log, cloneSkeleton }) 
   };
 
   let pending = new Set();
+  window.__engineVis = vis;   // 供点选反查
+  window.__renderStat = { vis: 0, alive: 0, moving: 0 };
   const sync = () => {
+    let alive = 0, moving = 0;
+    for (const u of world.units.values()) {
+      if (u.alive && !u.hidden && !u.removed) alive++;
+      if (u.path && u.path.length) moving++;
+    }
+    window.__renderStat.alive = alive; window.__renderStat.moving = moving; window.__renderStat.vis = vis.size;
     for (const u of world.units.values()) {
       if (u.hidden || u.removed) continue;
       if (!u.alive) { const v = vis.get(u.id); if (v) { scene.remove(v.obj); vis.delete(u.id); } continue; }

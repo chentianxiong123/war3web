@@ -1,0 +1,11 @@
+import { parseW3E } from './w3e.js';
+import { parseW3DO } from './w3do.js';
+import { parseW3UNITS } from './w3units.js';
+import { readFileSync } from 'fs';
+const t = parseW3E(new Uint8Array(readFileSync('/tmp/m2/war3map.w3e')));
+const d = parseW3DO(new Uint8Array(readFileSync('/tmp/m2/war3map.doo')));
+const u = parseW3UNITS(new Uint8Array(readFileSync('/tmp/m2/war3mapUnits.doo')));
+console.log('地形:', t.width+'x'+t.height, '| 装饰物:', d.items.length, '| 单位:', u.units.length);
+const trees = d.items.filter(i => ['VTlt','LPwh','LTbs','LOtr','LOhx','LOl'].includes(i.id)).length;
+const rocks = d.items.filter(i => i.id.startsWith('LR')||i.id.startsWith('YO')||i.id==='VSvb').length;
+console.log('树:', trees, '| 岩石:', rocks, '| 金矿:', u.units.filter(x=>x.gold>0).length, '| 野怪:', u.units.filter(x=>x.gold<=0&&x.id!=='sloc').length);

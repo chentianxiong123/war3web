@@ -280,7 +280,7 @@ log('✅ 渲染中...');
 
 log('✅ 渲染中...');
 let syncUnits = null;   // 引擎单位同步 (引擎接线段赋值)
-renderer.setAnimationLoop(() => { controls.update(); if (syncUnits) syncUnits(); renderer.render(scene, cam); });
+renderer.setAnimationLoop(() => { controls.update(); if (syncUnits) syncUnits(); if (window.__afterSync) window.__afterSync(); renderer.render(scene, cam); });
 
 // ===== 引擎接线: JASS VM + world.js (foc-web 现成逻辑) =====
 log('启动 WC3 引擎 (JASS VM + world.js)...');
@@ -300,5 +300,108 @@ syncUnits = bindEngineUnits({ scene, world: eng.world, heightAt, log, cloneSkele
 let synced = 0;
 startTick(eng.world, eng.eng, log);
 window.__eng = eng;
+setInterval(() => {
+  const st = window.__renderStat || {};
+  log(`引擎单位: 存活 ${st.alive} | 已渲染 ${st.vis} | 移动中 ${st.moving}`);
+}, 2000);
 log('✅ 引擎运行中 (war3map.j 脚本驱动), 单位渲染对接就绪');
+
+// ================== 对战操作 UI (接线: 规则由 war3map.j 引擎驱动) ==================
+const UNIT_COSTS = { hpea: 75, hfoo: 135, harr: 90 };
+const UNIT_NAMES = { hpea: '农民', hfoo: '步兵', harr: '弓箭手' };
+const raycaster2 = new THREE.Raycaster();
+const ndc2 = new THREE.Vector2();
+let selUnit = null, selRing = null;
+
+function makeRing() {
+  selRing = new THREE.Mesh(new THREE.RingGeometry(32, 42, 24),
+    new THREE.MeshBasicMaterial({ color: 0x40ff40, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
+  selRing.rotation.x = -Math.PI / 2;
+  scene.add(selRing);
+}
+makeRing();
+
+// 点选: 屏幕坐标 -> 引擎单位
+function pickEngineUnit(cx, cy) {
+  ndc2.set((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+  raycaster2.setFromCamera(ndc2, cam);
+  const objs = [];
+  for (const u of eng.world.units.values()) {
+    if (u.hidden || u.removed || !u.alive) continue;
+    const v = window.__engineVis && window.__engineVis.get(u.id);
+    if (v) objs.push(v.obj);
+  }
+  const hits = raycaster2.intersectObjects(objs, true);
+  for (const h of hits) {
+    let o = h.object;
+    while (o && !o.userData?.unitId) o = o.parent;
+    if (o && o.userData.unitId != null) return eng.world.units.get(o.userData.unitId);
+  }
+  return null;
+}
+// 点地面 (地形 mesh 交点 -> 世界坐标 x,y)
+function pickGroundPoint(cx, cy) {
+  ndc2.set((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1);
+  raycaster2.setFromCamera(ndc2, cam);
+  const hits = raycaster2.intersectObject(mesh);
+  if (hits.length) { const p = hits[0].point; return { x: p.x, y: -p.z }; }
+  return null;
+}
+
+let dnX = 0, dnY = 0, dnT = 0, dnB = 0;
+renderer.domElement.addEventListener('pointerdown', (e) => { dnX = e.clientX; dnY = e.clientY; dnT = Date.now(); dnB = e.button; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (Math.hypot(e.clientX - dnX, e.clientY - dnY) > 8 || Date.now() - dnT > 400) return;
+  if (dnB === 0) {  // 左键: 选中己方单位
+    const u = pickEngineUnit(e.clientX, e.clientY);
+    selUnit = (u && u.playerIndex >= 0 && u.playerIndex <= 1) ? u : null;
+  } else if (dnB === 2 && selUnit && selUnit.alive) {  // 右键: 攻击/移动
+    const t = pickEngineUnit(e.clientX, e.clientY);
+    const g = pickGroundPoint(e.clientX, e.clientY);
+    if (t && t.alive && t.playerIndex !== selUnit.playerIndex) {
+      eng.world.order(selUnit, { type: 'attack', target: t });
+    } else if (g) {
+      eng.world.order(selUnit, { type: 'move', x: g.x, y: g.y });
+    }
+  }
+});
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// 造兵 (引擎 createUnit, 出生在己方基地旁)
+window.__trainFor = (owner, typeKey) => {
+  const p = eng.eng.players[owner];
+  const cost = UNIT_COSTS[typeKey];
+  if (!p || !cost) return;
+  if (p.gold < cost) { log(`玩家${owner + 1} 金币不足 (${Math.round(p.gold)}/${cost})`); return; }
+  const base = [...eng.world.units.values()].find(u => u.typeKey === 'htow' && u.playerIndex === owner && u.alive);
+  if (!base) { log(`玩家${owner + 1} 没有城镇大厅`); return; }
+  p.gold -= cost;
+  const bx = base.x + (Math.random() - 0.5) * 120, by = base.y - 110;
+  eng.world.createUnit(p, typeKey, bx, by, 180);
+  log(`玩家${owner + 1} 训练 ${UNIT_NAMES[typeKey]}`);
+};
+
+// 对战 HUD
+const hud2 = document.createElement('div');
+hud2.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.8);padding:6px 14px;border-radius:6px;color:#ffd700;font:13px monospace;z-index:20;display:flex;gap:14px;align-items:center;white-space:nowrap';
+hud2.innerHTML = '<span id="hudRes"></span><span style="color:#888">|</span>' +
+  '<button onclick="window.__trainFor(0,this.dataset.t)" data-t="hpea">P1农民75</button><button onclick="window.__trainFor(0,this.dataset.t)" data-t="hfoo">P1步兵135</button><button onclick="window.__trainFor(0,this.dataset.t)" data-t="harr">P1弓手90</button>' +
+  '<button onclick="window.__trainFor(1,this.dataset.t)" data-t="hpea">P2农民75</button><button onclick="window.__trainFor(1,this.dataset.t)" data-t="hfoo">P2步兵135</button>';
+document.body.appendChild(hud2);
+const hudRes = document.getElementById('hudRes');
+setInterval(() => {
+  const g0 = eng.eng.players[0].gold, g1 = eng.eng.players[1].gold;
+  const u0 = [...eng.world.units.values()].filter(u => u.playerIndex === 0 && u.alive).length;
+  const u1 = [...eng.world.units.values()].filter(u => u.playerIndex === 1 && u.alive).length;
+  hudRes.textContent = `P1 ${Math.round(g0)}金 ${u0}兵 | P2 ${Math.round(g1)}金 ${u1}兵`;
+}, 500);
+
+// 选择圈跟随 (在渲染循环里 syncUnits 之后调用)
+const afterSync = () => {
+  if (selUnit && selUnit.alive) {
+    selRing.position.set(selUnit.x, heightAt(selUnit.x, selUnit.y) + 4, -selUnit.y);
+    selRing.visible = true;
+  } else { selRing.visible = false; selUnit = null; }
+};
+window.__afterSync = afterSync;
 </script>

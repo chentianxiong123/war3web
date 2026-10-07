@@ -1,0 +1,10 @@
+import { parseW3DO } from './w3do.js';
+import { readFileSync } from 'fs';
+const d = parseW3DO(new Uint8Array(readFileSync('/tmp/m2/war3map.doo')));
+console.log(`war3map.doo: version=${d.version} sub=${d.sub} items=${d.items.length} consumed=${d.consumed}/${d.total}`);
+const cnt = {};
+for (const it of d.items) cnt[it.id] = (cnt[it.id] || 0) + 1;
+const top = Object.entries(cnt).sort((a,b) => b[1]-a[1]).slice(0, 15);
+console.log('  常见对象:', top.map(([k,v]) => `${k}x${v}`).join(' '));
+const s = d.items[0];
+console.log('  样例:', JSON.stringify({id:s.id, x:s.x, y:s.y, z:s.z}));

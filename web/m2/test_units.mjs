@@ -1,0 +1,15 @@
+import { parseW3UNITS } from './w3units.js';
+import { readFileSync } from 'fs';
+const d = parseW3UNITS(new Uint8Array(readFileSync('/tmp/m2/war3mapUnits.doo')));
+console.log(`units: ${d.units.length} | consumed=${d.consumed}/${d.total} ${d.consumed===d.total?'✅ 完整':'⚠️ 差'+(d.total-d.consumed)}`);
+const cnt = {};
+for (const u of d.units) cnt[u.id] = (cnt[u.id] || 0) + 1;
+const top = Object.entries(cnt).sort((a,b) => b[1]-a[1]).slice(0, 25);
+console.log('  单位:', top.map(([k,v]) => `${k}x${v}`).join(' '));
+const pc = {};
+for (const u of d.units) pc[u.player] = (pc[u.player] || 0) + 1;
+console.log('  玩家分布:', Object.entries(pc).sort((a,b)=>a[0]-b[0]).map(([k,v])=>`P${k}:${v}`).join(' '));
+const mines = d.units.filter(u => u.gold > 0);
+console.log('  金矿数:', mines.length, mines.slice(0,3).map(m => `(${Math.round(m.x)},${Math.round(m.y)},gold=${m.gold})`).join(' '));
+const sloc = d.units.filter(u => u.id === 'sloc');
+console.log('  出生点:', sloc.map(s => `P${s.player}@(${Math.round(s.x)},${Math.round(s.y)})`).join(' '));
