@@ -26,6 +26,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { bootEngine, startTick } from './engine/bridge.js';
 import { WebGPURenderer } from 'three';
 import { parseW3E } from './w3e.js';
 import { parseW3DO } from './w3do.js';
@@ -278,4 +279,10 @@ log('✅ 渲染中...');
 
 log('✅ 渲染中...');
 renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, cam); });
+
+// ===== 引擎接线: JASS VM + world.js (foc-web 现成逻辑) =====
+log('启动 WC3 引擎 (JASS VM + world.js)...');
+const eng = await bootEngine(log);
+startTick(eng.world, eng.eng, log);
+log('✅ 引擎运行中 (war3map.j 脚本驱动)');
 </script>
