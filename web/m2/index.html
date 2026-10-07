@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WC3 地图渲染 - M2</title>
+<style>
+  body { margin: 0; background: #111; overflow: hidden; font-family: monospace; color: #aaa; }
+  #status { position: fixed; top: 8px; left: 8px; z-index: 10; background: rgba(0,0,0,.7); padding: 6px 10px; border-radius: 4px; font-size: 12px; white-space: pre; }
+  #info { position: fixed; bottom: 8px; left: 8px; z-index: 10; font-size: 11px; color: #666; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="status">loading...</div>
+<div id="info">WC3 地图地形 · WASM(StormLib) 读 MPQ + three.js WebGPU 渲染 · 拖拽旋转 / 滚轮缩放</div>
+
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.webgpu.js",
+               "three/addons/": "./node_modules/three/examples/jsm/" } }
+</script>
+
+<script src="./mpq_reader.js"></script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { WebGPURenderer } from 'three';
+import { parseW3E } from './w3e.js';
+import { parseW3DO } from './w3do.js';
+import { parseW3UNITS } from './w3units.js';
+
+const status = document.getElementById('status');
+const log = (s) => { status.textContent += '\n' + s; };
+
+// ---------- 1. WASM 读地图 ----------
+log('加载 WASM (StormLib)...');
+const m = await MPQLoader({ locateFile: f => './' + f, print: () => {}, printErr: () => {} });
+
+const mapResp = await fetch('./terenas.w3x');
+const mapBuf = new Uint8Array(await mapResp.arrayBuffer());
+m.FS.writeFile('/map.w3x', mapBuf);
+log(`地图写入: ${mapBuf.length} 字节`);
+
+const open  = m.cwrap('mpq_open', 'number', ['string']);
+const read  = m.cwrap('mpq_read', 'number', ['string']);
+const getSize = m.cwrap('mpq_get_buf_size', 'number', []);
+const getBuf  = m.cwrap('mpq_get_buf', 'number', []);
+
+if (!open('/map.w3x')) { log('❌ MPQ 打开失败'); throw new Error('open failed'); }
+const rd = (f) => {
+  const n = read(f);
+  if (n <= 0) throw new Error('read fail: ' + f);
+  return new Uint8Array(m.HEAPU8.buffer.slice(getBuf(), getBuf() + n));
+};
+const w3eData = rd('war3map.w3e');
+log(`WASM 读出 war3map.w3e: ${w3eData.length} 字节`);
+const dooData = rd('war3map.doo');
+const unitsData = rd('war3mapUnits.doo');
+log(`WASM 读出 war3map.doo: ${dooData.length} | units: ${unitsData.length}`);
+
+// ---------- 2. 解析地形 ----------
+const t = parseW3E(w3eData);
+log(`地形: ${t.width}x${t.height} 格 | tileset=${t.tileset}`);
+const doo = parseW3DO(dooData);
+const units = parseW3UNITS(unitsData);
+log(`装饰物: ${doo.items.length} 个 | 单位: ${units.units.length} 个 (金矿 ${units.units.filter(u=>u.id==='ngol').length})`);
+
+// ---------- 3. 生成几何 (高度用 foc 真实 surface 高度场, 与装饰物/单位同坐标系) ----------
+const W = t.width, H = t.height, TS = t.tileSize;
+const positions = new Float32Array(W * H * 3);
+const uvs = new Float32Array(W * H * 2);
+
+for (let y = 0; y < H; y++) {
+  for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    const px = t.offX + x * TS;           // worldX = left + col*128
+    const py = -(t.offY + y * TS);        // worldY: w3e 行0=北, 世界y北为正 → 取负 (foc-web 同款)
+    positions.set([px, 0, py], i * 3);    // Y 稍后用 foc surface 高度填充
+    // UV: 对应 96x96 格的 _ground.png 纹理
+    uvs.set([x / (W - 1), 1 - y / (H - 1)], i * 2);  // v 翻转: w3e 行0=北
+  }
+}
+
+// 网格索引（每格两个三角形）
+const indices = [];
+for (let y = 0; y < H-1; y++) {
+  for (let x = 0; x < W-1; x++) {
+    const a = y*W + x, b = a+1, c = (y+1)*W+x, d = c+1;
+    indices.push(a, b, c, b, d, c);
+  }
+}
+log(`网格: ${positions.length/3} 顶点 / ${indices.length/3} 三角`);
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+geo.setIndex(indices);
+geo.computeVertexNormals();
+
+// ---------- 4. WebGPU 渲染 ----------
+log('初始化 WebGPU...');
+const renderer = new WebGPURenderer({ antialias: true });
+await renderer.init();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a2a3a);
+
+// 平行光（伪太阳）
+const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+sun.position.set(200, 400, 100);
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x8090a0, 0.6));
+
+const tex = await new THREE.TextureLoader().loadAsync('./ground_tex.png');
+tex.colorSpace = THREE.SRGBColorSpace;
+// 真实 surface 高度场 (foc 管线: (raw-8192)/4 + layer*128 + raised*64, 与装饰物 z 同坐标系)
+const hb = await fetch('./foc/data/heights.bin').then(r => r.arrayBuffer());
+const surfH = new Float32Array(hb);
+const posArr = geo.attributes.position.array;
+for (let v = 0; v < W * H; v++) posArr[v * 3 + 1] = surfH[v];
+geo.attributes.position.needsUpdate = true;
+geo.computeVertexNormals();
+const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0.0 }));
+scene.add(mesh);
+
+// ---------- 5. 真实装饰物渲染 (foc-web 管线资产: 真树/真岩石/真建筑) ----------
+const H0 = 0, SC = 1;   // 统一 foc surface 坐标系: y = z 直接使用
+const yOf = (z) => (z - H0) * SC;
+const mineGeo = new THREE.CylinderGeometry(40, 44, 30, 8);
+const mineMat = new THREE.MeshStandardMaterial({ color: 0xc8a832, roughness: 1, emissive: 0x554400 });
+const unitGeo = new THREE.BoxGeometry(30, 30, 30);
+const unitMat = new THREE.MeshStandardMaterial({ color: 0xaa4444, roughness: 1 });
+const slocGeo = new THREE.SphereGeometry(45, 12, 12);
+const slocMats = [new THREE.MeshStandardMaterial({ color: 0xff2020, emissive: 0x550000 }),
+                  new THREE.MeshStandardMaterial({ color: 0x2020ff, emissive: 0x000055 })];
+const mineMeshes = [], unitMeshes = [], slocMeshes = [];
+
+async function renderRealDoodads() {
+  log('加载真实装饰物模型 (foc-web 管线资产)...');
+  const [doodads, meta] = await Promise.all([
+    fetch('./foc/data/doodads.json').then(r => r.json()),
+    fetch('./foc/data/doodadmeta.json').then(r => r.json()),
+  ]);
+  const hb = await fetch('./foc/data/heights.bin').then(r => r.arrayBuffer());
+  const heights = new Float32Array(hb);
+  const terr = { width: 97, height: 97, tileSize: 128, offsetX: -6144, offsetY: -6144 };
+  const heightAt = (wx, wy) => {
+    const W = terr.width, H = terr.height;
+    const fx = (wx - terr.offsetX) / terr.tileSize, fy = (wy - terr.offsetY) / terr.tileSize;
+    const i = Math.max(0, Math.min(W - 2, Math.floor(fx)));
+    const j = Math.max(0, Math.min(H - 2, Math.floor(fy)));
+    const r = j * W + i;
+    const a = heights[r] || 0, b = heights[r + 1] || 0;
+    const c = heights[r + W] || 0, d = heights[r + W + 1] || 0;
+    const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fy - j));
+    return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+  };
+  const loader = new GLTFLoader();
+  loader.setResourcePath('./foc/assets/');
+  const texLoader = new THREE.TextureLoader();
+  const groups = new Map();
+  for (const d of doodads) {
+    const m = meta[d.id];
+    if (!m || !m.visible) continue;
+    const hasVar = m.v && m.v.length;
+    const model = (hasVar ? m.v[d.variation % m.v.length] : null) || m.m;
+    if (!model) continue;
+    const key = d.id + '|' + (hasVar ? d.variation % m.v.length : 0);
+    if (!groups.has(key)) groups.set(key, { d, m, items: [] });
+    groups.get(key).items.push(d);
+  }
+  const t0 = Date.now();
+  let placed = 0, drawn = 0;
+  for (const [key, g] of groups) {
+    const model = (g.m.v && g.m.v.length ? g.m.v[g.d.variation % g.m.v.length] : null) || g.m.m;
+    if (!model) continue;
+    let glb;
+    try { glb = await loader.loadAsync('./foc/assets/models/' + model + '.glb'); }
+    catch (e) { log('  模型缺失: ' + model); continue; }
+    const protoScene = glb.scene;
+    // 原型: 无贴图材质 -> 贴 doodadmeta 的替换贴图 (foc-web applyRepl 同款)
+    if (g.m.tex) {
+      const t = await texLoader.loadAsync('./foc/assets/' + g.m.tex);
+      t.colorSpace = THREE.SRGBColorSpace;
+      const patched = new Map();
+      protoScene.traverse(o => {
+        if (!o.isMesh || !o.material) return;
+        const arr = Array.isArray(o.material) ? o.material : [o.material];
+        const out = arr.map(mm => {
+          if (!mm || mm.map) return mm;
+          let c = patched.get(mm);
+          if (!c) {
+            c = mm.clone(); c.map = t; c.transparent = true;
+            c.alphaTest = mm.alphaTest || 0.5; c.needsUpdate = true;
+            patched.set(mm, c);
+          }
+          return c;
+        });
+        o.material = Array.isArray(o.material) ? out : out[0];
+      });
+    }
+    const s = (g.m.s || 1);
+    const Y = new THREE.Vector3(0, 1, 0);
+    for (const d of g.items) {
+      // 完整克隆场景(含树干+树冠+骨骼), z=绝对放置高度 (Terenas 官方图)
+      const obj = cloneSkeleton(protoScene);
+      obj.position.set(d.x, d.z || 0, -d.y);
+      obj.rotation.y = d.rot || 0;
+      obj.scale.set((d.sx || 1) * s, (d.sz || 1) * s, (d.sy || 1) * s);
+      scene.add(obj);
+      placed++;
+    }
+    drawn++;
+  }
+  log(`真实装饰物: ${drawn} 组模型 / ${placed} 个摆放完成 (${(Date.now()-t0)/1000}s)`);
+}
+
+// 占位单位/金矿/出生点 (下一步换真实单位模型)
+for (const u of units.units) {
+  if (u.id === 'ngol') { const mm = new THREE.Mesh(mineGeo, mineMat); mm.position.set(u.x, yOf(u.z), u.y); mineMeshes.push(mm); scene.add(mm); }
+  else if (u.id === 'sloc') { const mm = new THREE.Mesh(slocGeo, slocMats[u.player % 2]); mm.position.set(u.x, yOf(u.z), u.y); slocMeshes.push(mm); scene.add(mm); }
+  else { const mm = new THREE.Mesh(unitGeo, unitMat); mm.position.set(u.x, yOf(u.z), u.y); unitMeshes.push(mm); scene.add(mm); }
+}
+log(`占位: 金矿 ${mineMeshes.length} 单位 ${unitMeshes.length} 出生点 ${slocMeshes.length}`);
+
+await renderRealDoodads();
+
+const cam = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 1, 50000);
+cam.position.set(0, 2500, 2500);
+cam.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(cam, renderer.domElement);
+controls.target.set(0, 200, 0);
+
+log('✅ 渲染中...');
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, cam); });
+</script>
+</body>
+</html>
