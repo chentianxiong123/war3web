@@ -27,6 +27,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import { bootEngine, startTick } from './engine/bridge.js';
+import { bindEngineUnits } from './engine/engine-render.js';
 import { WebGPURenderer } from 'three';
 import { parseW3E } from './w3e.js';
 import { parseW3DO } from './w3do.js';
@@ -278,11 +279,26 @@ controls.target.set(0, 200, 0);
 log('✅ 渲染中...');
 
 log('✅ 渲染中...');
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, cam); });
+let syncUnits = null;   // 引擎单位同步 (引擎接线段赋值)
+renderer.setAnimationLoop(() => { controls.update(); if (syncUnits) syncUnits(); renderer.render(scene, cam); });
 
 // ===== 引擎接线: JASS VM + world.js (foc-web 现成逻辑) =====
 log('启动 WC3 引擎 (JASS VM + world.js)...');
 const eng = await bootEngine(log);
+const surfH2 = window.__surfH;
+const heightAt = (wx, wy) => {
+  const W = 97, H = 97, TS = 128, OX = -6144, OY = -6144;
+  const fx = (wx - OX) / TS, fy = (wy - OY) / TS;
+  const i = Math.max(0, Math.min(W - 2, Math.floor(fx)));
+  const j = Math.max(0, Math.min(H - 2, Math.floor(fy)));
+  const r = j * W + i;
+  const a = surfH2[r] || 0, b = surfH2[r + 1] || 0, c = surfH2[r + W] || 0, d = surfH2[r + W + 1] || 0;
+  const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fy - j));
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+};
+syncUnits = bindEngineUnits({ scene, world: eng.world, heightAt, log, cloneSkeleton });
+let synced = 0;
 startTick(eng.world, eng.eng, log);
-log('✅ 引擎运行中 (war3map.j 脚本驱动)');
+window.__eng = eng;
+log('✅ 引擎运行中 (war3map.j 脚本驱动), 单位渲染对接就绪');
 </script>
