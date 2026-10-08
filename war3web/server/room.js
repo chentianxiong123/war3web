@@ -292,6 +292,32 @@ export class Room {
       }
       return;
     }
+    if (m.t === 'castUnit') {
+      // Casting from a selected unit's command card.
+      //
+      // Msg.CAST is the hero protocol: it resolves the ability through the hero's own
+      // command card (slotAbility looks the slot up in HERO_BY_ID), so on a map whose
+      // units are all ordinary footmen and priests there is no hero to resolve and every
+      // cast it was asked for found nothing at all. The ability button therefore had
+      // nothing behind it -- you could see the spell, you could not cast it.
+      //
+      // The ability is named outright instead of by slot, because a non-hero's card is
+      // the list in the snapshot rather than a fixed layout the server holds. Ownership
+      // is checked the same way TRAIN and BUILD check it, so one player cannot spend
+      // another's mana, and castAbility itself does the rest: range, target legality,
+      // mana, cooldown, and the cast itself.
+      const ids = m.unitIds === undefined ? [p.entId] : Array.isArray(m.unitIds) ? m.unitIds.slice(0, 12) : [];
+      const target = m.targetId != null ? this.world.units.get(m.targetId) : null;
+      let bad = null;
+      for (const id of new Set(ids)) {
+        const unit = Number.isInteger(id) && this.world.units.get(id);
+        if (!unit || unit.playerIndex !== p.slot || !unit.alive) continue;
+        const r = this.world.castAbility(unit, m.abilId, target, m.x, m.y);
+        if (!r.ok && !bad) bad = r.reason;
+      }
+      if (bad) this.send(p.ws, { t: Msg.ERROR, m: bad });
+      return;
+    }
     if ([Msg.MOVE, Msg.STOP, 'hold', Msg.ATTACK, 'smart'].includes(m.t)) {
       // Missing selection is the legacy single-hero protocol. An explicit empty
       // or invalid selection must never silently redirect an order to the hero.

@@ -38,6 +38,33 @@ for (const k of Object.values(BUILD_TRAIN).flat()) {
   TRAIN[k] = { cost: Math.round(v.gold || 75), time: Math.round((v.buildTime || 20) * 1000) };
 }
 const WALK = new Uint8Array(fs.readFileSync(path.join(ROOT, 'public/data/walk.bin')));
+// The abilities a unit type carries, and which of them the player can actually order.
+//
+// Warcraft III draws one button per castable ability on the selected unit's command card,
+// and the icons come from the archives' own button art. Nothing was sending them: the
+// snapshot carried no ability list at all, so a priest selected in the game showed an empty
+// command card and no spell could be aimed. The list is a property of the unit *type*, so it
+// is worked out once per type and reused -- the snapshot runs every tick and there is no
+// reason to re-derive a constant sixty times a second.
+//
+// A passive is left out, on the same evidence the engine already uses: passive art lives
+// under ReplaceableTextures\PassiveButtons and nothing castable does, and an ability with no
+// order string is not orderable either. The pseudo-abilities the engine keeps for itself
+// (Aloc, Avul, Ainu and the rest) carry no button in the real game either.
+const UNIT_CASTABLE = (() => {
+  const cache = new Map();
+  return (typeKey) => {
+    if (cache.has(typeKey)) return cache.get(typeKey);
+    const out = [];
+    for (const id of (TYPES[typeKey] || {}).abilities || []) {
+      const a = abilEntry(id);
+      if (!a || isPassive(a)) continue;
+      out.push(id);
+    }
+    cache.set(typeKey, out);
+    return out;
+  };
+})();
 const FLY = new Uint8Array(fs.readFileSync(path.join(ROOT, 'public/data/fly.bin')));
 const FLY_DESTS = readJSON('public/data/flydestructables.json');
 // The map's destructables, with the pathing cells each one claims. walk.bin
@@ -3326,6 +3353,16 @@ export class World {
         };
       }
       if (u.orderQueue?.length) ents[ents.length - 1].q = u.orderQueue.length;
+      // The command card: the abilities this unit carries that the player can order. The
+      // snapshot is broadcast whole to every player in the room, so this is sent for every
+      // unit rather than the viewer's own -- Warcraft III shows a friendly unit's abilities
+      // greyed out and a peer's on a card you cannot use, and the client decides which from
+      // the same list. Only the ids go over the wire; the client reads the name, the cost and
+      // the button art out of data/abilities.json and data/ability_icons.json itself.
+      if (u.alive) {
+        const ab = UNIT_CASTABLE(u.typeKey);
+        if (ab.length) ents[ents.length - 1].ab = ab;
+      }
       // Warcraft III hangs the buff's model on the unit for as long as the buff
       // is on it. Sent only when there is one, so the common unit costs nothing.
       const art = [];
