@@ -46,6 +46,10 @@ DATA = ['abilities.json', 'game.json', 'unittypes.json', 'itemtypes.json',
         # bundle without it sends no buff art at all and every buff icon on
         # every unit silently disappears
         'buffart.json',
+        # the button art. The client fetches these from /data/ and nothing else derives an
+        # icon, so a bundle without them draws every button, ability and item slot empty
+        'icons.json', 'ability_icons.json', 'item_icons.json', 'ability_meta.json',
+        'btn_icons.json', 'commands.json', 'unit_card.json',
         # engine.js does fall back to public/data for this one, but the pack
         # carries the copy it prefers rather than relying on the fallback
         'ambience.json',

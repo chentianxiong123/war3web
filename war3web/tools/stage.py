@@ -24,6 +24,13 @@ if os.path.exists('data/soundlabels.json'):
 # the model a buff hangs on a unit, and where it hangs it
 if os.path.exists('data/buffart.json'):
     shutil.copy('data/buffart.json', PUB + '/data/buffart.json')
+# the button art each unit type, ability and item draws with. tools/icons.py resolves the
+# archive path the table already carried into a URL; the client fetches these and nothing
+# else derives an icon, so a build without them draws every button empty.
+for _icons in ('icons.json', 'ability_icons.json', 'item_icons.json', 'ability_meta.json',
+                'btn_icons.json', 'commands.json', 'unit_card.json'):
+    if os.path.exists('data/' + _icons):
+        shutil.copy('data/' + _icons, PUB + '/data/' + _icons)
 
 # terrain: compact height + tile arrays
 t = json.load(open('data/terrain.json'))

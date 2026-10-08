@@ -35,6 +35,10 @@ $PY tools/soundsets.py          # per-unit sound sets
 # fetch any of it. Must precede convert_textures.py -- it lands the BLPs in
 # war3_extracted/ and the converter is what puts them in the atlas.
 $PY tools/extract_ui.py
+# The command-card buttons, in full. extract_blizzard.py harvests the art slots the object
+# tables name, which covers a model but not a button -- 693 of the archives' unit types name
+# a button nothing pulled, so those drew with no icon at all while the art sat in the MPQs.
+$PY tools/extract_icons.py
 
 echo "== 4. convert assets"
 $PY tools/convert_textures.py
@@ -45,6 +49,14 @@ $PY tools/bake_ground.py        # blend the matching ground tile around cliffs
 
 echo "== 5. compile game data"
 $PY tools/compile_game.py
+# every object table's icon path, resolved to a URL the client can load. Runs after
+# convert_textures.py (which is what put the files on disk) and after compile_game.py, which
+# resolves the heroes' own icons itself.
+$PY tools/icons.py
+# What the command card offers, read from the archives rather than written out: Units\CommandFunc.txt
+# for the card's own buttons (art + Buttonpos) and Units\*UnitFunc.txt for every unit type's
+# Trains / Builds / Researches / Sellunits. Needs btn_icons.json, so it follows icons.py.
+$PY tools/commands.py
 
 echo "== 6. probe the map's own triggers"
 # which target each spell needs; derived by casting every hero ability once,
