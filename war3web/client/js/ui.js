@@ -1,34 +1,27 @@
-// RTS 训练按钮 (Terenas 官方对战): 建筑 -> [type, 名称, 费用]
-// 谁训谁 = 官方人族建筑表 (数值来自 unittypes.json 自动, 这里仅中文名/展示)
-const TRAIN_BY_BUILDING = {
-  htow: [['hpea', '农民', 75]],
-  hbar: [['hfoo', '步兵', 135], ['harr', '弓箭手', 75]],
-  hars: [['hpri', '牧师', 135], ['hsor', '女巫', 155]],
-  harm: [['hmtm', '迫击炮小队', 200]],
-  hgra: [['hphx', '狮鹫骑士', 260], ['hgyr', '飞行机器', 135]],
-};
-// 真实图标: 从 unittypes 的 CommandButtons 图生成 (assets/textures/...)
+// 命令卡上的一切都来自官方表。这里只负责取数并把它凑成 renderCard 画的形状, 渲染
+// (落格 / 灰化 / 冷却 / 提示 / 按键复用) 全部是上游 renderCard 的事, 一行没改。
+//
+//   data/hud.json           Units\*AbilityFunc.txt 的 Buttonpos  (tools/hud_assets.py)
+//   data/ability_icons.json abilities.json 的 art.icon -> PNG      (tools/icons.py)
+//   data/ability_meta.json  同一张表的蓝量/冷却/施法距离            (tools/icons.py)
+//   data/unit_card.json     Units\*UnitFunc.txt 的 Builds / Trains, 费用时间人口
+//
+// 这几张表取代了这里原来的三张手写表: 9 个人族建筑、6 个人族训练对、5 个命令按钮。
+// 它们只覆盖人类, 而且和官方数据不一致 —— 兵营被写成训"步兵 + 弓箭手", 而
+// Units\HumanUnitFunc.txt 的 Trains=hfoo,hrif,hkni 是步兵/圣骑士/骑士; 弓箭手不是这个
+// 等级的建筑能训的, 它自己的箭塔 (hgtw 国王祭坛) 反而漏了。农民能建的也是 9 个, 而
+// Builds 列的是 11 个。图标也从 hud_assets.py 另存的 assets/ui 副本改回官方全量表
+// (tools/extract_icons.py 提取的 1150 个 CommandButtons)。
 const ICON_PATHS = await fetch('/data/icons.json').then(r => r.json()).catch(() => ({}));
-const cmdBtn = (type, label) => {
-  const b = document.createElement('button');
-  b.className = 'cmd-btn' + (ICON_PATHS[type] ? ' has-ic' : '');
-  if (ICON_PATHS[type]) {
-    const i = document.createElement('img'); i.className = 'cmd-ic'; i.src = ICON_PATHS[type]; i.alt = '';
-    b.appendChild(i);
-  }
-  const s = document.createElement('span'); s.textContent = label;
-  b.appendChild(s);
-  return b;
-};
-// RTS 建造按钮 (农民可建建筑, 费用/时间对齐 UnitBalance.slk)
-const BUILD_BUTTONS = [
-  ['hhou', '农场', 80, 35], ['hbar', '兵营', 160, 60], ['hgtw', '防御塔', 100, 50],
-  ['hlum', '伐木场', 120, 60], ['hbla', '铁匠铺', 140, 70], ['halt', '圣坛', 180, 60],
-  ['hars', '神秘圣地', 150, 140], ['harm', '车间', 140, 140], ['hgra', '狮鹫笼', 140, 150],
-];
+const ABIL_ICONS = await fetch('/data/ability_icons.json').then(r => r.json()).catch(() => ({}));
+const ABIL_META = await fetch('/data/ability_meta.json').then(r => r.json()).catch(() => ({}));
+const UNIT_CARD = await fetch('/data/unit_card.json').then(r => r.json()).catch(() => ({}));
+const ITEM_ICONS = await fetch('/data/item_icons.json').then(r => r.json()).catch(() => ({}));
+// 命令按钮自己的图标 (BTNBasicStruct = 建造入口, BTNMove 等), 官方全量表 1150 个。
+const BTN_ICONS = await fetch('/data/btn_icons.json').then(r => r.json()).catch(() => ({}));
+setAbilityIcons(ABIL_ICONS);
 
-
-import { initHud, renderCard } from './hud.js';
+import { initHud, renderCard, setAbilityIcons } from './hud.js';
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, html) => {
   const e = document.createElement(tag);
@@ -309,15 +302,21 @@ export class UI {
   }
 
   renderSelected(ent) {
+    // A sub-page of the card belongs to the *selected unit*, not to the frame that rebuilt
+    // it: snapshots re-render this every tick, so resetting on every call would close the
+    // peasant's building page before a single click landed. It resets when the selection
+    // changes to a different unit.
+    const changed = !this.unitSel || this.unitSel.i !== ent.i;
     this.unitSel = ent;
+    if (changed) this.buildMenu = false;
     this.inventoryHero = null;
     $('respawn').classList.add('hidden');
     $('pname2').textContent = ent.name || ent.u || '';
     $('heroClass').textContent = '';
     // RTS 建造中: 农民选择卡显示建筑进度
     if (ent.bld) {
-      const bn = BUILD_BUTTONS.find(([t]) => t === ent.bld.type);
-      $('heroClass').textContent = `建造中: ${bn ? bn[1] : ent.bld.type} ${ent.bld.pct}%`;
+      const bn = UNIT_CARD[ent.bld.type];
+      $('heroClass').textContent = `建造中: ${bn ? bn.name : ent.bld.type} ${ent.bld.pct}%`;
     }
     for (const [bar, text, value, max] of [['hpbar', 'hptext', ent.h, ent.H], ['mpbar', 'mptext', ent.m, ent.M]]) {
       $(bar).style.width = `${100 * Math.max(0, Math.min(1, (value || 0) / (max || 1)))}%`;
@@ -326,36 +325,114 @@ export class UI {
     $('xpbar').style.width = '0%';
     $('stats').replaceChildren();
     $('inventory').replaceChildren();
+    // The card, and the card only. There used to be a second panel for this -- a row of
+    // bordered HTML buttons spelling out "Farm 80 gold / 35s", floating to the right of the
+    // minimap. Warcraft III has no such panel: a command card is twelve openings in the
+    // console's own art, four across and three down, each holding an icon and nothing else.
+    // So the buildings and the trained units went into that panel, and the official twelve
+    // cells stayed empty, which is what "the official UI is not showing" meant in the end --
+    // it was being drawn the whole time, with nothing in it.
     if (this.canCommand?.(ent)) {
-      if (TRAIN_BY_BUILDING[ent.u]) {
-        // RTS 命令面板: 该建筑训练自己的单位 (官方人族建筑表)
-        const ab = $('commands');
-        ab.replaceChildren(...TRAIN_BY_BUILDING[ent.u].map(([type, name, cost]) => {
-          const b = cmdBtn(type, `${name} (${cost}金)`);
-          b.onclick = () => window.__trainBtn && window.__trainBtn(type);
-          return b;
-        }));
-      } else if (ent.u === 'hpea' || ent.u === 'hmil') {
-        // RTS 命令面板: 农民选建筑来放
-        const ab = $('commands');
-        ab.replaceChildren(...BUILD_BUTTONS.map(([type, name, gold, sec]) => {
-          const b = cmdBtn(type, `${name} ${gold}金/${sec}s`);
-          b.onclick = () => window.__buildBtn && window.__buildBtn(type);
-          return b;
-        }));
-      } else {
-        this.renderAbilities({ alive: !!ent.a, abilities: [], skillPoints: 0 });
-        $('commands').replaceChildren();
-      }
+      this.renderAbilities({ alive: !!ent.a, mana: ent.m || 0,
+                             skillPoints: 0, abilities: this.cardAbilities(ent) });
+    } else {
+      $('abilities').replaceChildren();
     }
-    else { $('abilities').replaceChildren(); $('commands').replaceChildren(); }
   }
 
-  /** 训练按钮配置: type / 名称 / 费用 (与 server/world.js TRAIN 表一致) */
-  static TRAIN_SETUP() { return TRAIN_BY_BUILDING; }
-
   renderAbilities(h) {
+    this._cardH = h;
     renderCard(this, h, T);
+  }
+
+  // Rebuild the current selection's card from scratch. The card's sub-pages (the skill menu,
+  // the building menu) call this to change page; renderSelected does the same on a new
+  // selection, so there is one shape an h ever has.
+  rebuildCard() {
+    const ent = this.unitSel;
+    if (ent) this.renderAbilities({ alive: !!ent.a, mana: ent.m || 0,
+                                    skillPoints: 0, abilities: this.cardAbilities(ent) });
+  }
+
+  /**
+   * What the selected unit's card offers, in the shape renderCard draws.
+   *
+   * renderCard (upstream, unchanged) is the whole of Warcraft III's command card: it lays the
+   * five orders into the cells CommandFunc names, puts each entry in the cell AbilityFunc's
+   * Buttonpos gives it, greys what cannot be afforded, sweeps a cooldown over the rest, and
+   * keeps the buttons attached between snapshots so a click is not dropped between the press
+   * and the release. It takes one list and draws every element of it as an ability.
+   *
+   * Warcraft III's card is not hero-only: a priest's Heal sits in it beside the orders, and a
+   * peasant's buildings sit in it too. So all three go into that one list, in the order the
+   * game fills a card -- the unit's spells first, then what it produces, then what it builds.
+   *
+   * Nothing here picks a cell or draws anything.
+   */
+  cardAbilities(ent) {
+    const strings = this.hudData?.strings || {};
+    const out = [];
+
+    // -- the unit's own spells, as the castable list the snapshot carries in `ab`
+    for (const id of (Array.isArray(ent.ab) ? ent.ab : [])) {
+      const meta = ABIL_META[id];
+      if (!meta) continue;
+      const L = (meta.levels && meta.levels[0]) || {};
+      const s = strings[id] || {};
+      out.push({
+        id, kind: 'spell', spell: true,
+        icon: ABIL_ICONS[id],
+        lvl: 1, maxLvl: 1, reqLevel: 0, levelSkip: 0, cdLeft: 0,
+        info: { mana: L.mana || 0, cooldown: L.cooldown || 0 },
+        hotkey: s.hotkey || '',
+        name: s.name || id,
+        // The archives' own text, with the colour escapes and the <Ahea,DataA1> value
+        // references taken out. The game substitutes the numbers from the ability's data
+        // slots; those are left out rather than guessed at.
+        desc: String(s.tip || '').replace(/\|c[\da-f]{8}|\|r/gi, '').replace(/\|n/g, '\n')
+              .replace(/<\w+,[\w,]+>/g, '').trim(),
+      });
+    }
+
+    // -- what it produces and what it builds: Units\*UnitFunc.txt, all four races.
+    // `Trains` is the field the current tables use and `Sellunits` is what the same list is
+    // called in the older ones; eleven types carry only that, so it is read as the fallback
+    // rather than as a second list, which would put every unit on a Barracks' card twice.
+    const type = UNIT_CARD[ent.u] || {};
+    const offer = (kind, list, run) => {
+      for (const id of (list || [])) {
+        const t = UNIT_CARD[id];
+        if (!t) continue;
+        out.push({
+          id: `${kind}:${id}`, kind, run,
+          icon: ICON_PATHS[id],
+          lvl: 1, maxLvl: 1, cdLeft: 0,
+          name: t.name || id,
+          desc: [t.gold != null ? `费用: ${t.gold} 金` : '',
+                 t.buildTime ? `建造时间: ${t.buildTime} 秒` : '',
+                 t.foodMade ? `人口: ${t.foodMade}` : ''].filter(Boolean).join('\n'),
+        });
+      }
+    };
+    offer('train', type.trains?.length ? type.trains : type.sellsUnits, (id) => this.onTrain?.(id));
+    if (this.buildMenu) {
+      // The building page: every building the unit can make, which is more than the card
+      // holds on one page. renderCard fills cells row by row and spills the rest onto the
+      // lowest free cell, and the corner is Cancel, which closes the page.
+      offer('build', type.builds, (id) => this.onBuild?.(id));
+    } else if (type.builds?.length) {
+      // The main page: a single Build command, at the cell CommandFunc.txt gives it
+      // (CmdBuildHuman Buttonpos = 0,2), with the archives' own icon. Warcraft III shows
+      // a peasant eleven buildings through one button rather than eleven buttons.
+      out.push({
+        id: 'buildMenu', kind: 'build', spell: false, pos: [0, 2],
+        icon: BTN_ICONS.btnbasicstruct,
+        lvl: 1, maxLvl: 1, cdLeft: 0, name: '建造',
+        desc: '建造建筑。',
+        run: () => { this.buildMenu = true; this.rebuildCard(); },
+      });
+    }
+    return out;
   }
 
   /**

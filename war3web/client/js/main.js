@@ -14,6 +14,7 @@ import { Msg, Phase, Ent, DEST_ID } from '/shared/const.js';
 const alerts = new AlertHistory();
 const net = new Net();
 const ui = new UI(net);
+window.__ui = ui;               // 诊断: 命令卡格子/资源面板的布局状态
 const view = new Renderer(document.getElementById('view'));
 const overlay = new Overlay(document.getElementById('overlay'));
 const audio = new Audio();
@@ -59,21 +60,23 @@ const S = {
   prev: new Map(),           // id -> previous state (for interpolation)
   lastSnap: 0, snapDt: 1 / 15,
   selected: null, bounds: null, ready: false, showScore: false, cinematic: false, booted: false,
-  castPending: null, itemPending: null, minimapImg: null, debug: false,
+  castPending: null, itemPending: null, unitCast: null, minimapImg: null, debug: false,
   hoverId: null, altHeld: false,
   unitModels: null,          // also feeds the lobby's rotating hero preview
 };
 window.__S = S;               // 诊断:外部查看游戏状态
 window.__view = view;             // 诊断:外部投影/点选测试
 const TRAIN_BUTTONS = [['hpea', '农民', 75], ['hfoo', '步兵', 135], ['harr', '弓箭手', 90]];
-window.__trainBtn = (type) => { const uids = commandIds(); if (uids.length) net.send({ t: Msg.TRAIN, trainType: type, unitIds: uids }); };
 window.__setSelection = (ids) => setSelection(ids);   // 测试/调试: 选中单位
-// RTS 建造放置: 点按钮 -> 待放状态 -> 左键点地图 -> 发 BUILD
+// RTS 建造放置: 点命令卡上的建筑 -> 待放状态 -> 左键点地图 -> 发 BUILD
 let pendingBuild = null;
-window.__buildBtn = (type) => {
-  pendingBuild = type;
-  ui.log(`放置中: 左键点地图放建筑`, 'lvl');
-};
+// The command card calls these. They used to be window globals the card reached through,
+// which meant the card drew its buttons from a second HTML panel and these were wired to
+// nothing; both ends are here now -- the card is the card, and this is what a cell means.
+ui.onTrain = (type) => { const uids = commandIds(); if (uids.length) net.send({ t: Msg.TRAIN, trainType: type, unitIds: uids }); };
+ui.onBuild = (type) => { pendingBuild = type; ui.log('放置中: 左键点地图放建筑', 'lvl'); };
+window.__trainBtn = ui.onTrain;   // 测试/调试: 绕过命令卡直接训练
+window.__buildBtn = ui.onBuild;
 
 // ------------------------------------------------------------------ networking
 net.on(Msg.WELCOME, (m) => {
@@ -727,7 +730,7 @@ function setSelection(ids) {
   selection.activeId = selection.subgroups(S.ents)[0]?.[0] ?? null;
   selectionInitialized = true;
   ui.clearShop(); ui.skillMenu = false; ui.orderPending = null;
-  S.castPending = null; S.itemPending = null; canvas.style.cursor = 'default';
+  S.castPending = null; S.itemPending = null; S.unitCast = null; canvas.style.cursor = 'default';
   refreshSelection(); showUnitPortrait();
 }
 function screenPosition(ent) {
@@ -744,18 +747,14 @@ addEventListener('mousemove', e => {
   if (d.moved) Object.assign(selectionBox.style, { display: 'block', left: Math.min(d.x, e.clientX) + 'px', top: Math.min(d.y, e.clientY) + 'px', width: Math.abs(e.clientX - d.x) + 'px', height: Math.abs(e.clientY - d.y) + 'px' });
 });
 addEventListener('mouseup', e => {
-  if (e.button !== 0) return;
-  // RTS 建造放置: 待放状态下左键点地面 -> 发布建造 (不需要框选状态)
-  if (pendingBuild) {
-    if (S.phase === Phase.PLAYING && !S.cinematic) {
-      const g = view.pickGround(e.clientX / innerWidth * 2 - 1, 1 - e.clientY / innerHeight * 2);
-      if (g) {
-        sendOrder({ t: Msg.BUILD, buildType: pendingBuild, x: g.x, y: g.y });
-      }
-    }
+  // A pending building is issued on the press, before the selection can change -- see the
+  // canvas mousedown handler, where the reason it could not be issued here is written down.
+  // All that is left on this path is dropping the pending placement.
+  if (pendingBuild && e.button === 0 && !e.target.closest?.('.slot')) {
     pendingBuild = null;
     return;
   }
+  if (e.button !== 0) return;
   if (!selectionDrag) return;
   const d = selectionDrag; selectionDrag = null; selectionBox.style.display = 'none';
   if (S.phase !== Phase.PLAYING || S.cinematic) return;
@@ -788,6 +787,24 @@ canvas.addEventListener('mousedown', (e) => {
   const nx = (e.clientX / innerWidth) * 2 - 1;
   const ny = -(e.clientY / innerHeight) * 2 + 1;
   if (e.button === 0) {
+    // Placing a building: issued on the press, and before anything below can clear the
+    // selection.
+    //
+    // It was issued on the *release*, from a window-level mouseup, and that meant it never
+    // went out at all. The press on the canvas runs the selection handler first -- clicking
+    // open ground clears the selection -- so by the time the release asked sendOrder to
+    // deliver it, commandIds() was empty and sendOrder sent nothing. The card said
+    // "placing" and no building ever appeared.
+    //
+    // Every other order on this card is issued here as well, for the same reason: it is
+    // the unit that builds, so it has to still be selected at the moment of the click.
+    if (pendingBuild) {
+      const g = view.pickGround(nx, ny);
+      if (g) sendOrder({ t: Msg.BUILD, buildType: pendingBuild, x: g.x, y: g.y });
+      pendingBuild = null;
+      canvas.style.cursor = 'default';
+      return;
+    }
     if (ui.orderPending) {
       const g = view.pickGround(nx, ny), target = view.pickEntity(nx, ny);
       if (ui.orderPending === 'attack' && target && target.id !== S.hero?.id)
@@ -804,6 +821,15 @@ canvas.addEventListener('mousedown', (e) => {
         canvas.style.cursor = 'default';
       }
       return;                                    // stay armed until something is hit
+    }
+    if (S.unitCast) {
+      const g = view.pickGround(nx, ny);
+      const t = view.pickEntity(nx, ny);
+      if (g) net.send({ t: 'castUnit', abilId: S.unitCast.id, unitIds: S.unitCast.unitIds,
+                        x: g.x, y: g.y, targetId: t ? t.id : undefined });
+      S.unitCast = null;
+      canvas.style.cursor = 'default';
+      return;
     }
     if (S.castPending != null) {
       const g = view.pickGround(nx, ny);
@@ -822,7 +848,7 @@ canvas.addEventListener('mousedown', (e) => {
     selectionDrag = { x: e.clientX, y: e.clientY, shift: e.shiftKey, ctrl: e.ctrlKey, moved: false };
   } else if (e.button === 2) {
     if (ui.orderPending || S.castPending != null || S.itemPending != null) {
-      ui.orderPending = null; S.castPending = null; S.itemPending = null; canvas.style.cursor = 'default'; return;
+      ui.orderPending = null; S.castPending = null; S.itemPending = null; S.unitCast = null; canvas.style.cursor = 'default'; return;
     }
     if (!commandIds().length) return;
     // Warcraft III's smart order: an item under the cursor beats anything else,
@@ -1008,6 +1034,32 @@ ui.onCastSlot = (slot) => {
   const a = S.hero?.abilities?.[slot];
   if (!a || a.lvl < 1) return;
   S.castPending = slot; canvas.style.cursor = 'crosshair';
+};
+
+// Casting from a non-hero's command card.
+//
+// The hero path above names a slot in the hero's own card, which the server resolves
+// through its hero table; a footman's card is the list in the snapshot, so this names the
+// ability outright and sends the unit it was cast from. Which of the two is armed is
+// recorded separately, because a map with heroes and an army has both at once.
+//
+// The target is sent whenever the click landed on something, and the server decides: it
+// runs the same validSpellTarget the spell itself would, so a ground-targeted spell aimed
+// at a unit, or a friendly spell aimed at an enemy, is refused with a reason rather than
+// quietly doing the wrong thing. The client is not trusted to read Targets correctly for
+// the 800 abilities in the table -- the server already has that answer.
+const castUnitIds = () => {
+  const ids = new Set(commandIds());
+  if (S.selected != null && S.ents.get(S.selected)) ids.add(S.selected);
+  return [...ids];
+};
+ui.onUnitCast = (id) => {
+  if (S.phase !== Phase.PLAYING) return;
+  const ids = castUnitIds();
+  if (!ids.length) { ui.log('先选中一个单位再放技能', 'lvl'); return; }
+  S.unitCast = { id, unitIds: ids };
+  canvas.style.cursor = 'crosshair';
+  ui.log(`${(ui.hudData?.strings?.[id]?.name) || id}: 点击地面或目标`, 'lvl');
 };
 
 /**

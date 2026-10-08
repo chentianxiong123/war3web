@@ -119,19 +119,25 @@ body.cinematic #letterbox .bar{transform:none}
 #stats{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 8px;font-size:11px;
   color:var(--dim);margin-top:6px}
 #stats b{color:var(--txt)}
+/* The command card. placeCard() (upstream) positions every .slot by data-cell into the
+   twelve openings the console art leaves in the bottom right, so this box itself has no
+   position of its own and the cell does the placing. */
 #abilities{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;gap:7px;flex-wrap:wrap;justify-content:center}
-/* RTS 命令面板: 右下角技能格右侧一排 — 建造/训练按钮, 不占技能格 */
-#commands{position:absolute;right:44px;bottom:10px;display:flex;gap:5px;flex-wrap:wrap;
-  justify-content:flex-end;max-width:340px}
-#commands .cmd-btn{height:28px;padding:0 9px;font-size:11px;line-height:26px;border:1px
-  solid var(--line);border-radius:4px;background:#10141d;color:#c8d2e6;cursor:pointer;
-  white-space:nowrap;box-shadow:0 1px 2px #000}
-#commands .cmd-btn.has-ic{padding:0 8px 0 4px}
-#commands .cmd-ic{width:22px;height:22px;border-radius:3px;vertical-align:-6px;margin-right:5px;
-  image-rendering:auto}
-#commands .cmd-btn:hover{border-color:var(--green);color:#fff}
-.slot{width:56px;height:56px;border:1px solid var(--line);border-radius:7px;position:relative;
-  background:#11141c center/cover;cursor:pointer;overflow:hidden}
+/* A cell is a hole in the console's own art: the frame, the bevel and the dark backing all
+   come from the tile the cell was measured out of, so the button adds none of its own.
+   Warcraft III draws a command icon on that and nothing else -- no border, no radius, no
+   label; the name, the gold and the time are on the tooltip. */
+.slot{width:56px;height:56px;border:0;padding:0;position:relative;background:#0000 center/contain no-repeat;
+  cursor:pointer;overflow:visible}
+.slot:hover{filter:brightness(1.18)}
+.slot:active{filter:brightness(.82)}
+/* What the game does to a command you cannot issue: the button's own disabled art, and the
+   whole card greys when the unit that owns it is dead. */
+.slot.unavailable{filter:grayscale(1) brightness(.55);cursor:default}
+/* The card's page arrow. It is the one thing on the card that is not a command, so it is
+   the one thing drawn as type rather than as art. */
+.slot.pagebtn{background:none;color:#c8d2e6;font:700 22px/56px var(--serif,serif);text-shadow:0 1px 2px #000}
+.slot.pagebtn:hover{color:#fff;filter:brightness(1.3)}
 .slot.unlearned{opacity:.85;filter:grayscale(.5)}
 /* Warcraft III shows an ability you cannot use yet in full, just without the
    ready border -- at a third opacity on a near-black console it reads as an

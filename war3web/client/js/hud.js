@@ -6,12 +6,21 @@ export const COMMANDS = [
   ['attack', 'Attack', 'A', 3, 'Attack a unit, or move to a location engaging enemies along the way.'],
   ['patrol', 'Patrol', 'P', 4, 'Travel between the current position and a target location, engaging enemies.'],
 ];
-// 人族技能图标 (官方 CommandButtons 图; abilities.json 的 icon 列在中文版 slk 缺失,
-// 用 Id->图 映射补齐 — 文件名就是官方图标名)
-const SKILL_ICONS = {
-  Ahea: 'BTNHeal', Ainf: 'BTNInnerFireOn', Adis: 'BTNDispelMagic', Aslo: 'BTNSlow',
-  Aivs: 'BTNInvisibility', Aply: 'BTNPolymorph', Adef: 'BTNDefend',
-};
+// An ability's button art, injected from data/ability_icons.json (see tools/icons.py).
+//
+// Upstream resolves this in compile_game.py's find_icon(), which writes an `icon` onto every
+// hero ability it compiles into game.json -- and a hero map, which is what upstream ports.
+// This map has no heroes: its units are footmen, priests and gryphon riders, so find_icon's
+// output never reached anything a card could draw and every button came up blank. The same
+// resolution is done over the whole ability table instead (687 of the 800 abilities name an
+// icon in Units\*AbilityFunc.txt's `Art=`), and the file is keyed by ability id here.
+//
+// This replaces a seven-entry table that named BTNHeal, BTNInnerFireOn and five others by
+// hand. Same seven pictures, and 680 more; and it survives a rebuild, where a hand-written
+// id-to-filename list is not something any part of the pipeline can produce.
+let ABILITY_ICONS = {};
+
+export function setAbilityIcons(map) { ABILITY_ICONS = map || {}; }
 
 export function initHud(ui) {
   ui.hudData = { art: {}, abilities: {} };
@@ -106,9 +115,17 @@ export function renderCard(ui, h, translate) {
     return node;
   };
   const art = key => ui.hudData.art[key] || `/assets/ui/${key}.png`;
-  if (ui.skillMenu) {
+  // A sub-page of the card, exactly as the skill menu already is: everything else drops
+  // off the card and the top-right corner becomes Cancel. The peasant's building page is
+  // the same shape -- the card only holds five commands and its work buttons, so the
+  // eleven buildings Units\HumanUnitFunc.txt gives it cannot share that row of cells, and
+  // Warcraft III does not try to make them: CommandBuild sits at (0,2) on the main page
+  // and opens the building list.
+  const subMenu = ui.skillMenu ? 'skill' : ui.buildMenu ? 'build' : null;
+  if (subMenu) {
     add('cancel', 'Cancel (Esc)\nReturn to the command menu.', art('cancel'), 11, () => {
-      ui.skillMenu = false; ui.renderAbilities(ui.hero);
+      if (subMenu === 'skill') { ui.skillMenu = false; ui.renderAbilities(ui.hero); }
+      else { ui.buildMenu = false; ui.rebuildCard(); }
     });
   } else {
     for (const [key, name, hotkey, cell, desc] of COMMANDS) {
@@ -122,20 +139,36 @@ export function renderCard(ui, h, translate) {
   }
   h.abilities.forEach((a, i) => {
     if (ui.skillMenu ? a.innate || a.lvl >= a.maxLvl : a.lvl < 1) return;
+    // The building page is for buildings: the unit's own spells stayed on the main page,
+    // and Warcraft III does not repeat them here -- a peasant has eleven buildings and a
+    // card holds twelve cells, and only by leaving the spells behind do the eleven fit.
+    if (subMenu === 'build' && a.spell === true) return;
     const layout = ui.hudData.abilities[a.id];
-    const pos = layout?.[ui.skillMenu ? 'research' : 'button'] || [i % 4, ui.skillMenu ? 0 : 2];
+    const pos = a.pos || layout?.[ui.skillMenu ? 'research' : 'button'] || [i % 4, ui.skillMenu ? 0 : 2];
     const canLearn = h.skillPoints > 0 && a.lvl < (a.cap ?? a.maxLvl);
     const disabled = ui.skillMenu ? !canLearn : !h.alive || a.cdLeft > 0 || (a.info?.mana || 0) > h.mana;
     const key = String(a.key || a.hotkey || '').toUpperCase();
     const required = a.reqLevel + a.lvl * a.levelSkip;
-    const label = `${translate(a, 'name')}${key ? ` (${key})` : ''} - Level ${ui.skillMenu ? a.lvl + 1 : a.lvl}`;
+    // A card entry that is not a spell carries no level: the peasant's nine buildings and
+    // a Barracks' three units are abilities as far as the card is concerned, but they have
+    // no ranks, and "Farm - Level 1" below a farm is just noise the game does not make.
+    // Only a spell that can rank up carries a level on the button. Warcraft III draws a
+    // Peasant's Gather and Repair at their fixed tier-one with no "Level 1" on them, and
+    // a Priest's Heal the same way; the level is for a hero's learnable ranks.
+    const ranked = a.spell === true && a.maxLvl > 1;
+    const label = ranked
+      ? `${translate(a, 'name')}${key ? ` (${key})` : ''} - Level ${ui.skillMenu ? a.lvl + 1 : a.lvl}`
+      : `${translate(a, 'name')}${key ? ` (${key})` : ''}`;
     const text = `${label}\n${a.info?.mana ? `\nMana: ${a.info.mana}` : ''}${a.info?.cooldown ? `\nCooldown: ${a.info.cooldown} seconds` : ''}\n\n${translate(a, 'desc') || ''}`
       + (ui.skillMenu && !canLearn ? `\n\nRequires hero level ${required}${h.skillPoints ? '' : '\nRequires a skill point'}` : '');
-    const n = add(`ability-${i}`, text, a.icon ? `/assets/${a.icon}` : (SKILL_ICONS[a.id] ? `/assets/textures/ReplaceableTextures/CommandButtons/${SKILL_ICONS[a.id]}.png` : null), pos[0] + pos[1] * 4,
+    const art2 = a.icon || ABILITY_ICONS[a.id];
+    const n = add(`ability-${i}`, text, art2 ? `/assets/${art2}` : null, pos[0] + pos[1] * 4,
       () => {
         if (ui.skillMenu) {
           ui.net.send({ t: 'learn', slot: i }); ui.skillMenu = false;
-        } else ui.onCastSlot?.(i);
+        // A card button that is not a spell (build, train) fires its own action.
+        } else if (a.run) a.run();
+        else ui.onCastSlot?.(i);
       }, disabled);
     if (n && !ui.skillMenu && a.cdLeft > 0) {
       const sweep = document.createElement('span'); sweep.className = 'cooldown-sweep';
