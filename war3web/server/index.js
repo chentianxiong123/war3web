@@ -20,7 +20,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 // /shared imports and the /three import map -- so those URL prefixes alone
 // are mapped to the directories they really live under.
 const STATIC_DIRS = ['client', 'public'];
-const STATIC_TREES = { '/shared/': '.', '/three/': 'node_modules' };
+const STATIC_TREES = { '/shared/': '.', '/three/': 'node_modules', '/assets/': '.' };
 // The bench pages -- modelview, cliffview, fxview -- sit in tools/ beside the
 // scripts that drive them, and every browser-driven test loads one. Closing the
 // project root took them off the wire with everything else it was meant to
@@ -36,7 +36,11 @@ function resolveFile(urlPath) {
   if (rel === '/' ) rel = '/index.html';
   rel = path.normalize(rel).replace(/^(\.\.[/\\])+/, '');
   const dirs = [...STATIC_DIRS];
-  for (const [pre, d] of Object.entries(STATIC_TREES)) if (rel.startsWith(pre)) dirs.push(d);
+  // STATIC_TREES keys are Unix-style ('/shared/', '/three/'); on Windows
+  // path.normalize turns '/' into '\\', so compare both sides normalized.
+  for (const [pre, d] of Object.entries(STATIC_TREES)) {
+    if (rel.startsWith(path.normalize(pre))) dirs.push(d);
+  }
   if (BENCH_PAGE.test(rel)) dirs.push('.');
   for (const d of dirs) {
     const p = path.join(ROOT, d, rel);

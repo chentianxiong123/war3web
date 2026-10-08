@@ -391,6 +391,12 @@ export class UI {
         // slots; those are left out rather than guessed at.
         desc: String(s.tip || '').replace(/\|c[\da-f]{8}|\|r/gi, '').replace(/\|n/g, '\n')
               .replace(/<\w+,[\w,]+>/g, '').trim(),
+        // A melee map has no hero, so renderCard's `onCastSlot` path (which resolves
+        // the slot against the hero's own card) returns before anything is armed.
+        // Spell buttons must arm the *unit* cast path instead -- the same castUnit
+        // message the server already handles for non-hero units -- otherwise a
+        // priest's Heal or a footman's Defend is visible but dead.
+        run: () => this.onUnitCast?.(id),
       });
     }
 
