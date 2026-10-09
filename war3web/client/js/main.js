@@ -18,9 +18,6 @@ window.__ui = ui;               // 诊断: 命令卡格子/资源面板的布局
 const view = new Renderer(document.getElementById('view'));
 const overlay = new Overlay(document.getElementById('overlay'));
 const audio = new Audio();
-// The hero turning in the character-select pane. Built lazily on the first pick
-// so a player who never opens the lobby never pays for a second WebGL context.
-let heroPreview = null;
 // the top strip's resource readouts, built once the console layout arrives
 let topBar = null;
 let consoleSlots = null;
@@ -46,16 +43,8 @@ function combatText(ev, text) {
                      life: t.life, fade: t.fade,
                      age: 0, perm: false, vis: true });
 }
-ui.onHeroShown = (h) => {
-  const cv = document.getElementById('heroSpin');
-  if (!cv) return;
-  if (!heroPreview) heroPreview = new HeroPreview(cv, 280);
-  heroPreview.show(h, (S.unitModels || {})[h.id]).catch(() => {});
-};
-ui.onLobbyClosed = () => { if (heroPreview) heroPreview.clear(); };
-
 const S = {
-  you: null, phase: Phase.LOBBY, game: null, heroes: [], hero: null,
+  you: null, phase: Phase.LOBBY, game: null, hero: null,
   ents: new Map(),           // id -> latest server state
   prev: new Map(),           // id -> previous state (for interpolation)
   lastSnap: 0, snapDt: 1 / 15,
@@ -91,10 +80,10 @@ net.on(Msg.WELCOME, (m) => {
   if (S.booted) {
     ui.hideDisconnected();
     ui.log(m.you === wasYou ? 'reconnected' : 'rejoined as a new player', 'lvl');
-    S.game = m.game; S.heroes = m.heroes; S.bounds = m.game.bounds;
+    S.game = m.game; S.bounds = m.game.bounds;
     return;
   }
-  S.game = m.game; S.heroes = m.heroes; S.bounds = m.game.bounds;
+  S.game = m.game; S.bounds = m.game.bounds;
   // The server decides whether the debugging keys exist at all; the client only
   // binds what it was told about, so nothing here can reach a deployed build.
   S.debug = !!m.debug;
@@ -112,7 +101,7 @@ net.on(Msg.WELCOME, (m) => {
     // lobby back up over a running game and nothing took it down again: the
     // server sends STATE when the phase changes, and it already had.
     if (S.phase === Phase.PLAYING) { S.cinematic = false; ui.startGame(); refitConsole(); }
-    else ui.showLobby(m.game, m.heroes);
+    else ui.showLobby(m.game);
   }).catch((err) => {
     // One 404 on terrain.json or heights.bin used to leave the player watching
     // "loading terrain..." with nothing said and nothing to do.
@@ -139,7 +128,7 @@ net.on(Msg.STATE, (m) => {
     }
   }
   if (m.phase === Phase.PLAYING) { S.cinematic = false; ui.startGame(); }
-  if (m.phase === Phase.LOBBY && S.game) ui.showLobby(S.game, S.heroes);
+  if (m.phase === Phase.LOBBY && S.game) ui.showLobby(S.game);
   // Second matches in one room are real now that the room lifecycle is fixed,
   // so the state a match leaves behind has to be cleared on the way out of it:
   // the server drops everyone's ready flag in reset() and the client has to
@@ -211,28 +200,6 @@ net.on(Msg.SNAPSHOT, (m) => {
   ui.quests = m.s.quests || [];
   selection.prune(id => S.ents.has(id) && S.ents.get(id).sel !== false);
   refreshSelection();
-});
-
-net.on('hero', (m) => {
-  const changed = S.hero?.unitId !== m.h.unitId;
-  S.hero = m.h;
-  if (!selectionInitialized) { selection.set([m.h.id]); selectionInitialized = true; }
-  // before the card is drawn: the labels read the keys this assigns
-  KEY_SLOT = resolveHotkeys(m.h.abilities);
-  if (topBar) {
-    // Warcraft III shows all three whatever the map uses. This one spends gold
-    // and lumber and never touches food, so supply reads what the engine
-    // reports for it, which is nothing -- the same as the game would show.
-    topBar.res.get('gold')?.replaceChildren(String(m.h.gold ?? 0));
-    topBar.res.get('lumber')?.replaceChildren(String(m.h.lumber ?? 0));
-    topBar.res.get('supply')?.replaceChildren('0');
-  }
-  ui.hero = m.h;
-  refreshSelection();
-  // The console is built during boot, before any hero exists, so the portrait
-  // has to be asked for again once there is one -- and again when the unit type
-  // underneath it changes, which a metamorphosis does.
-  if (changed) showUnitPortrait();
 });
 
 net.on(Msg.EVENT, (m) => {
@@ -642,40 +609,6 @@ async function boot(m) {
 // --------------------------------------------------------------------- input
 const canvas = document.getElementById('view');
 
-// Where the fixed Q/W/E/R/D/F row used to be.
-//
-// The map assigns each ability its own key in war3map.w3a ('ahky') and 109 of
-// the 130 hero abilities declare one -- including T, B, V and C, which that row
-// could not produce, while D and F are declared by no ability at all. So on most
-// heroes the letter printed on the button and the key that actually cast were
-// different keys.
-//
-// Resolved once, here, and written back onto the ability as `key`: the command
-// card labels from the same field the keydown handler binds, so the two cannot
-// drift apart again. Nothing is invented -- a slot the map leaves blank (16 of
-// them, 3 innate) falls back to its position, and only to a letter no declared
-// hotkey on that hero has already taken. Three heroes need that guard.
-const POS_KEYS = ['q', 'w', 'e', 'r', 'd', 'f'];
-
-function resolveHotkeys(abilities) {
-  const taken = new Set();
-  for (const a of abilities || []) {
-    const k = String(a.hotkey || '').trim().toLowerCase();
-    a.key = k && !taken.has(k) ? k : '';
-    if (a.key) taken.add(a.key);
-  }
-  (abilities || []).forEach((a, i) => {
-    if (a.key) return;
-    const pref = [POS_KEYS[i], ...POS_KEYS].find((k) => k && !taken.has(k));
-    if (pref) { a.key = pref; taken.add(pref); }
-  });
-  const map = {};
-  (abilities || []).forEach((a, i) => { if (a.key) map[a.key] = i; });
-  return map;
-}
-
-let KEY_SLOT = {};
-
 const selection = new Selection();
 let selectionInitialized = false, selectionDrag = null, markedSelection = new Set();
 let lastPortraitSelection = null;
@@ -945,11 +878,8 @@ addEventListener('keydown', (e) => {
   if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key) && !e.altKey && !e.ctrlKey && !e.metaKey) {
     e.preventDefault(); cameraKeys.add(e.key); return;
   }
-  if (e.key === 'F1') {
-    e.preventDefault(); const already = selection.ids.length === 1 && heroSelected();
-    setSelection([S.hero?.id]);
-    const me = S.ents.get(S.hero?.id); if (already && me) focusCamera(me.x, me.y); return;
-  }
+  // F1 selects your hero in Warcraft III; a melee map has none, so it is a no-op.
+  if (e.key === 'F1') { e.preventDefault(); return; }
   if (/^[0-9]$/.test(k)) {
     e.preventDefault();
     if (e.ctrlKey) selection.assign(k, id => canCommand(S.ents.get(id)));
@@ -964,33 +894,11 @@ addEventListener('keydown', (e) => {
     }
     return;
   }
-  if (!heroSelected() && ['m','s','h','a','p'].includes(k)) {
+  if (['m','s','h','a','p'].includes(k)) {
     ui.onCommand({m:'move',s:'stop',h:'hold',a:'attack',p:'patrol'}[k], e.shiftKey); return;
   }
-  if (!heroSelected() && e.key !== 'Escape') return;
-  if (ui.skillMenu && k in KEY_SLOT) {
-    const slot = KEY_SLOT[k], a = S.hero?.abilities?.[slot];
-    if (a && !a.innate && S.hero.skillPoints > 0 && a.lvl < a.cap) {
-      net.send({ t: Msg.LEARN, slot }); ui.skillMenu = false;
-    }
-    return;
-  }
-  if (k in KEY_SLOT) {
-    const slot = KEY_SLOT[k];
-    const a = S.hero?.abilities?.[slot];
-    if (!a || a.lvl < 1) return;
-    if (e.shiftKey) { net.send({ t: Msg.LEARN, slot }); return; }
-    // What a spell needs pointed at it comes from the map's own trigger, not
-    // from a guess about the ability's flavour: firing a unit-target spell with
-    // no target made its blink read a null location and jump to the map centre.
-    if (a.targetMode === 'none') net.send({ t: Msg.CAST, slot });
-    else {
-      S.castPending = slot;
-      canvas.style.cursor = 'crosshair';
-      if (a.targetMode === 'unit') ui.log(`${a.name}: click a target`, 'lvl');
-    }
-  } else if (e.key === '\\') { const n = view.setSkinning(!!view.skinless);
-    ui.log(`skinning ${view.skinless ? 'OFF (bind pose)' : 'on'} \u2014 ${n} skeletons`, 'lvl'); }
+  // The hero skill grid is gone: m/s/h/a/p are this map's real commands, and
+  // the rest of the row is the debug views and the escape menu.
   else if (k === '[') { view.frozen = !view.frozen;
     ui.log(`animation ${view.frozen ? 'frozen' : 'running'}`, 'lvl'); }
   else if (k === ']') { view.noUnits = !view.noUnits;
@@ -998,9 +906,6 @@ addEventListener('keydown', (e) => {
     ui.log(`units ${view.noUnits ? 'hidden' : 'shown'}`, 'lvl'); }
   else if (k === '`') { overlay.stats.on = !overlay.stats.on;
     ui.log(`frame stats ${overlay.stats.on ? 'on' : 'off'}`, 'lvl'); }
-  else if (k === 'l' && S.debug) net.send({ t: 'debugLevel' });
-  else if (k === 'o' && S.hero?.skillPoints > 0) { ui.skillMenu = true; ui.renderAbilities(S.hero); }
-  else if (['m','s','h','a','p'].includes(k)) ui.onCommand({m:'move',s:'stop',h:'hold',a:'attack',p:'patrol'}[k], e.shiftKey);
   else if (k === 'escape') {
     S.castPending = null; S.itemPending = null; ui.orderPending = null; ui.skillMenu = false; canvas.style.cursor = 'default';
     if (S.hero) ui.updateHero(S.hero);
@@ -1081,13 +986,13 @@ addEventListener('mousemove', (e) => {
 const NEUTRAL_PASSIVE = 15;
 
 function relationTo(e) {
+  // The melee map has no hero: "own" is simply every unit whose owner is the
+  // player's slot, and the two sides of the duel are team 0 and team 1.
   if (!e) return null;
-  if (e.i === S.hero?.id) return 'own';
-  const me = S.ents.get(S.hero?.id);
-  if (e.p != null && me && e.p === me.p) return 'own';
+  if (e.p != null && e.p === S.slot) return 'own';
   if (e.p === NEUTRAL_PASSIVE) return 'neutral';
-  if (e.t == null || !me || me.t == null) return 'neutral';
-  return e.t === me.t ? 'ally' : 'enemy';
+  if (e.t == null || S.slot == null) return 'neutral';
+  return e.t === S.slot ? 'ally' : 'enemy';
 }
 
 // Manual camera controls. Only the initial hero spawn centers automatically.
@@ -1176,8 +1081,8 @@ document.getElementById('btnTeam1').onclick = () => net.send({ t: Msg.JOIN_TEAM,
 const btnLang = document.getElementById('btnLang');
 function syncLang() {
   btnLang.textContent = Lang.en ? 'EN' : '\uD55C';
-  // both languages are already in the hero data, so this is only a re-render
-  if (S.game) ui.showLobby(S.game, S.heroes || S.game.heroes || []);
+  // both languages ship in game.json; the lobby and the card are re-rendered
+  if (S.game) ui.showLobby(S.game);
   if (S.hero) ui.renderAbilities(S.hero);
 }
 btnLang.onclick = () => { Lang.set(!Lang.en); syncLang(); };
@@ -1198,8 +1103,6 @@ function frame() {
   const dt = view.render();
   const tRender = performance.now();
   stepRings(dt);
-  // the lobby's hero turns only while the lobby is up
-  if (S.phase === Phase.LOBBY && heroPreview) heroPreview.step(dt);
   // interpolate entity views toward server state
   const alpha = Math.min(1, (performance.now() - S.lastSnap) / 1000 / S.snapDt);
   for (const [id, e] of S.ents) {
@@ -1258,7 +1161,7 @@ function frame() {
   if (S.phase === Phase.PLAYING) drawUnitUI();
   if (S.phase === Phase.PLAYING && unitPortrait) unitPortrait.step(dt);
   if (S.phase === Phase.PLAYING && S.bounds)
-    ui.drawMinimap(S.bounds, [...S.ents.values()], S.hero?.id, S.minimapImg, view.cameraFootprint());
+    ui.drawMinimap(S.bounds, [...S.ents.values()], S.slot, S.minimapImg, view.cameraFootprint());
   if (flashT > 0) { flashT -= dt; document.body.style.boxShadow = `inset 0 0 200px rgba(200,30,30,${flashT * 1.4})`; }
   else document.body.style.boxShadow = '';
   const k = 0.1;
@@ -1286,9 +1189,7 @@ function showUnitPortrait() {
   // While a shop is selected the arch shows the shop's building, as the game
   // does; S.unitModels carries every unit type's model, shops included.
   const sel = ui.shopSel;
-  const h = ui.unitSel ? { id: ui.unitSel.u, name: ui.unitSel.name } : sel ? { id: sel.shop.id, name: sel.shop.name }
-          : (S.heroes?.find((x) => x.id === S.hero?.unitId)
-             || S.heroes?.find((x) => x.id === ui.selected));
+  const h = ui.unitSel ? { id: ui.unitSel.u, name: ui.unitSel.name } : sel ? { id: sel.shop.id, name: sel.shop.name } : null;
   if (!cv) return;
   cv.style.visibility = h?.id ? 'visible' : 'hidden';
   if (!h?.id) return;
@@ -1366,7 +1267,6 @@ ui.onAimItem = (slot, it) => {
 window.FOC = { view, S, ui, net, overlay, audio, refitConsole, shopFor,
                showUnitPortrait, relationTo,
                get consoleSlots() { return consoleSlots; },
-               get heroPreview() { return heroPreview; },
                get unitPortrait() { return unitPortrait; } };
 
 ui.setLoading('connecting…', 0.1);

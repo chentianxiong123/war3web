@@ -34,7 +34,7 @@ const p = { entId: 1, slot: 0 };
 const command = m => { orders.length = 0; room.command(p,m); return orders.map(([id]) => id); };
 assert.deepEqual(command({t:'move', x:10, y:20, unitIds:[1,1,2,3,4,5,6,'7',999]}), [1,6]);
 assert.equal(units.get(6).controlled, true);
-assert.deepEqual(command({t:'stop'}), [1]);
+assert.deepEqual(command({t:'stop', unitIds:[1]}), [1]);
 for (const unitIds of [[], null, {}, [2,3,4,5]]) assert.deepEqual(command({t:'stop',unitIds}), []);
 assert.deepEqual(command({t:'move',x:NaN,y:10,unitIds:[1]}), []);
 assert.deepEqual(command({t:'hold',unitIds:Array.from({length:20},(_,i)=>i+1)}), [1,6,7,8,9,10,11,12]);

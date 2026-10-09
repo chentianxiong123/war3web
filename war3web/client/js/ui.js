@@ -35,12 +35,6 @@ const icon = (p) => (p ? `/assets/${p}` : '/assets/textures/_teamcolor.png');
 // `<img onerror=...>` is script in every connected browser otherwise.
 export const esc = (s) => String(s)
   .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-// A hero's own model, rendered at build time by tools/hero_portraits.mjs. The
-// map ships no icons for its heroes -- every one of them carries whatever art
-// the Warcraft III unit it was built from had, so Goku picks as a Paladin and
-// Ichigo as a Blood Elf Peasant. The `onerror` falls back to that original icon,
-// so a missing portrait costs the card nothing.
-const portrait = (id) => `/assets/portraits/${id}.png`;
 // Language. The map's text is Korean; data/translations.ko-en.json supplies an
 // English overlay and compile_game.py ships both, so this only chooses which of
 // the two already-present strings to show. Nothing is translated at runtime.
@@ -58,14 +52,9 @@ export const T = (o, field) => {
   return (Lang.en && en) || o[field] || '';
 };
 
-const TAVERN_NAMES = { n00M: 'Tavern I', n006: 'Tavern II', ntav: 'Tavern III', n00W: 'Tavern IV' };
-
 export class UI {
   constructor(net) {
     this.net = net;
-    this.heroes = [];
-    this.selected = null;
-    this.tavern = null;
     this.you = null;
     this.players = [];
     this.logLines = [];
@@ -78,61 +67,13 @@ export class UI {
   }
   hideLoading() { $('loading').classList.add('hidden'); }
 
-  showLobby(game, heroes) {
-    this.heroes = heroes;
+  showLobby(game) {
+    // Terenas: no hero pick. The lobby is the objective, the teams and the
+    // ready button; the FOC tavern grid and the spin preview are gone.
     $('objective').textContent = game.meta.objective || '';
     $('lobby').classList.remove('hidden');
     $('hud').classList.add('hidden');
     $('gameover').classList.add('hidden');
-    // biggest rosters first, so the default tab is a real hero tavern rather
-    // than a one-off vendor that happens to sell a hero-flagged unit
-    const counts = new Map();
-    for (const h of heroes) counts.set(h.tavern, (counts.get(h.tavern) || 0) + 1);
-    const tavs = [...counts.keys()].sort((a, b) => counts.get(b) - counts.get(a));
-    // keep whichever tavern is open; only fall back when nothing valid is selected
-    if (!tavs.includes(this.tavern)) this.tavern = tavs[0];
-    const tabs = $('tavtabs'); tabs.innerHTML = '';
-    for (const t of tavs) {
-      const b = el('button', t === this.tavern ? 'on' : '', TAVERN_NAMES[t] || t);
-      b.onclick = () => { this.tavern = t; this.showLobby(game, heroes); };
-      tabs.appendChild(b);
-    }
-    const grid = $('heroGrid'); grid.innerHTML = '';
-    for (const h of heroes.filter((x) => x.tavern === this.tavern)) {
-      const c = el('div', 'hcard' + (h.model ? '' : ' nomodel') + (this.selected === h.id ? ' sel' : ''));
-      c.dataset.id = h.id;                 // so a test can pick a named hero
-      c.innerHTML = `<img src="${portrait(h.id)}" data-icon="${icon(h.icon)}"
-          onerror="if(this.dataset.icon){this.src=this.dataset.icon;this.dataset.icon='';}
-                   else this.style.opacity=.25">
-        <div class="nm">${h.name}</div><div class="ti">${T(h, 'title')}</div>`;
-      c.onclick = () => { this.selected = h.id; this.showHero(h); this.showLobby(game, heroes);
-                          this.net.send({ t: 'pickHero', heroId: h.id }); };
-      grid.appendChild(c);
-    }
-    if (this.selected) {
-      const h = heroes.find((x) => x.id === this.selected);
-      if (h) this.showHero(h);
-    }
-  }
-
-  showHero(h) {
-    // #heroInfo, not #heroDetail: the spin canvas is a sibling and must survive,
-    // or every pick throws away a WebGL context and builds another
-    const d = $('heroInfo');
-    d.innerHTML = `<h2>${h.name}</h2><div class="sub">${T(h, 'title')}${h.model ? '' : ' · no imported model'}</div>
-      <div class="statgrid">
-        <span>Health</span><b>${h.hp}</b><span>Mana</span><b>${h.mana}</b>
-        <span>Damage</span><b>${h.dmg}</b><span>Armor</span><b>${h.armor}</b>
-        <span>Move</span><b>${h.moveSpeed}</b><span>Range</span><b>${h.atkRange}</b>
-        <span>STR / AGI / INT</span><b>${h.str} / ${h.agi} / ${h.int}</b>
-      </div>`;
-    if (this.onHeroShown) this.onHeroShown(h);
-    for (const a of h.abilities || []) {
-      const row = el('div', 'ab');
-      row.innerHTML = `<img src="${icon(a.icon)}" onerror="this.style.opacity=.25">
-        <div><b>${T(a, 'name')}</b><p>${T(a, 'desc').slice(0, 220)}</p></div>`;
-      d.appendChild(row);
-    }
   }
 
   renderTeams(players, you, phase) {
@@ -141,10 +82,8 @@ export class UI {
     for (const t of [0, 1]) {
       box.appendChild(el('h3', null, `${t === 0 ? '红方' : '蓝方'}`));
       for (const p of players.filter((x) => x.team === t)) {
-        const hero = this.heroes.find((h) => h.id === p.heroId);
         const row = el('div', 'pslot' + (p.id === you ? ' me' : ''));
-        row.innerHTML = `<i class="rd ${p.ready ? 'on' : ''}"></i><span>${esc(p.name)}</span>
-                         <small>${hero ? hero.name : '—'}</small>`;
+        row.innerHTML = `<i class="rd ${p.ready ? 'on' : ''}"></i><span>${esc(p.name)}</span>`;
         box.appendChild(row);
       }
     }
@@ -624,11 +563,10 @@ export class UI {
       close(); return;
     }
     const rows = this.players.map((p) => {
-      const h = this.heroes.find((x) => x.id === p.heroId);
-      return `<tr><td>${esc(p.name)}</td><td>${h ? h.name : '—'}</td>
+      return `<tr><td>${esc(p.name)}</td>
               <td>${p.team === 0 ? '红方' : '蓝方'}</td><td>${p.kills}</td><td>${p.deaths}</td></tr>`;
     }).join('');
-    s.innerHTML = `<table><tr><th>Player</th><th>Hero</th><th>Team</th><th>K</th><th>D</th></tr>${rows}</table>`;
+    s.innerHTML = `<table><tr><th>Player</th><th>Team</th><th>K</th><th>D</th></tr>${rows}</table>`;
     close();
   }
 
@@ -670,8 +608,8 @@ export class UI {
       const px = ((e.x - bounds.minX) / bx) * W;
       const py = H - ((e.y - bounds.minY) / by) * H;
       if (e.k === 4) continue;
-      g.fillStyle = e.i === youId ? '#ffe680' : e.t === 0 ? '#5aa9e6' : e.t === 1 ? '#e2564d' : '#9a9a9a';
-      const r = e.i === youId ? 3.5 : e.k === 2 ? 3 : 2.5;
+      g.fillStyle = (youId != null && e.p === youId) ? '#ffe680' : e.t === 0 ? '#5aa9e6' : e.t === 1 ? '#e2564d' : '#9a9a9a';
+      const r = (youId != null && e.p === youId) ? 3.5 : e.k === 2 ? 3 : 2.5;
       g.beginPath(); g.arc(px, py, r, 0, 6.284); g.fill();
     }
   }

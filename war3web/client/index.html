@@ -30,16 +30,6 @@
   </header>
   <div class="lobby-main">
     <aside id="teams"></aside>
-    <section id="picker">
-      <div id="tavtabs"></div>
-      <div id="heroGrid"></div>
-    </section>
-    <aside id="heroDetail">
-      <!-- the canvas outlives each selection: rebuilding it would leak a WebGL
-           context per hero picked -->
-      <canvas id="heroSpin" width="280" height="280"></canvas>
-      <div id="heroInfo"><p class="dim">等待开始…</p></div>
-    </aside>
   </div>
   <footer>
     <input id="pname" maxlength="18" placeholder="你的名字">

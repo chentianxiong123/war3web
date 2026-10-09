@@ -38,12 +38,10 @@ const pa = room.join(wa, 'Alpha');
 const pb = room.join(wb, 'Bravo');
 const hello = wa.out[0];
 check('WELCOME carries a seat token', hello.t === 'welcome' && typeof hello.token === 'string' && hello.token.length > 16);
-const heroId = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/game.json'), 'utf8')).heroes[0].id;
-for (const [p] of [[pa], [pb]]) { room.handle(p, { t: 'pickHero', heroId }); room.handle(p, { t: 'ready', ready: true }); }
+for (const p of [pa, pb]) room.handle(p, { t: 'ready', ready: true });
 clearInterval(room.loop); room.loop = null;
 room.stepLoop();
-check('the match is running with both seated', room.phase === 'playing' && pa.entId != null && pb.entId != null);
-const entA = pa.entId;
+check('the match is running with both seated', room.phase === 'playing' && pa.slot === 0 && pb.slot === 1, `${room.phase} ${pa.slot} ${pb.slot}`);
 const leaveKey = room.eng.eventId('EVENT_PLAYER_LEAVE');
 const fired = [];
 const origFire = room.eng.fire.bind(room.eng);
@@ -63,7 +61,7 @@ check('reconnecting with the token returns the same seat', back === pa && pa.ws 
 const w2 = wa2.out[0];
 check('with a WELCOME naming the same player and the running match',
       w2.t === 'welcome' && w2.you === pa.id && w2.token === hello.token && w2.phase === 'playing');
-check('the same hero', pa.entId === entA && wa2.out.some((m) => m.t === 'hero' && m.h && m.h.id === entA));
+check('and a snapshot starts flowing again', wa2.out.some((m) => m.t === 'snapshot'));
 check('and the scenery replayed', wa2.out.some((m) => m.t === 'event' && m.ev.some((e) => e.t === 'textTag' || e.t === 'fog' || e.t === 'dnc' || e.t === 'music' || e.t === 'tag')) || pa.tagsSent,
       `tagsSent=${pa.tagsSent}`);
 check('everyone sees the seat connected again', last(wb, 'state').players.some((x) => x.id === pa.id && x.connected && !x.away));
@@ -90,7 +88,7 @@ check('a match nobody is in or coming back to is reset', room.phase === 'lobby' 
   const r2 = new Room('rejoin2');
   const wx = ws(), wy = ws();
   const px = r2.join(wx, 'X'), py = r2.join(wy, 'Y');
-  for (const p of [px, py]) { r2.handle(p, { t: 'pickHero', heroId }); r2.handle(p, { t: 'ready', ready: true }); }
+  for (const p of [px, py]) r2.handle(p, { t: 'ready', ready: true });
   clearInterval(r2.loop); r2.loop = null;
   r2.leave(px); r2.leave(py);
   check('a match everyone dropped from is still held for them', r2.phase === 'playing' && !!px.dropTimer);
@@ -117,13 +115,11 @@ const errs = [];
 page.on('pageerror', (e) => errs.push(String(e.message)));
 await page.goto(`http://127.0.0.1:${PORT}/?room=rejoin${process.pid}`, { waitUntil: 'domcontentloaded', timeout: 90000 });
 await page.waitForFunction(() => document.getElementById('loading').classList.contains('hidden'), { timeout: 90000 });
-await page.evaluate(() => { const c = [...document.querySelectorAll('.hcard:not(.nomodel)')]; (c[0] || document.querySelector('.hcard')).click(); });
-await wait(700);
-await page.$eval('#btnReady', (b) => b.click());
+await page.evaluate(() => { document.getElementById('btnReady').click(); });
 await page.waitForFunction(() => !document.getElementById('hud').classList.contains('hidden'), { timeout: 60000 });
 await wait(5000);
-const before = await page.evaluate(() => ({ you: window.FOC.S.you, hero: window.FOC.S.hero?.id, ents: window.FOC.S.ents.size, token: window.FOC.net.token }));
-check('a live client holds its token and a hero', !!before.token && before.hero != null && before.ents > 0, JSON.stringify(before));
+const before = await page.evaluate(() => ({ you: window.FOC.S.you, ents: window.FOC.S.ents.size, token: window.FOC.net.token }));
+check('a live client holds its token in a running match', !!before.token && before.ents > 0, JSON.stringify(before));
 await page.evaluate(() => window.FOC.net.ws.close());
 await wait(300);
 const shown = await page.evaluate(() => !document.getElementById('disconnected').classList.contains('hidden'));
@@ -134,14 +130,14 @@ for (let i = 0; i < 40 && !(back2 && back2.open && back2.hidden); i++) {
   back2 = await page.evaluate(() => ({
     open: window.FOC.net.ws?.readyState === 1,
     hidden: document.getElementById('disconnected').classList.contains('hidden'),
-    you: window.FOC.S.you, hero: window.FOC.S.hero?.id, ents: window.FOC.S.ents.size,
+    you: window.FOC.S.you, ents: window.FOC.S.ents.size,
     phase: window.FOC.S.phase, hud: !document.getElementById('hud').classList.contains('hidden'),
     log: document.getElementById('log').textContent }));
 }
 check('the client reconnects on its own and takes the notice down', !!back2 && back2.open && back2.hidden, JSON.stringify({ open: back2?.open, hidden: back2?.hidden }));
-check('as the same player, in the same match, with the same hero',
-      back2 && back2.you === before.you && back2.hero === before.hero && back2.phase === 'playing' && back2.hud,
-      JSON.stringify({ you: [before.you, back2?.you], hero: [before.hero, back2?.hero], phase: back2?.phase }));
+check('as the same player, in the same match',
+      back2 && back2.you === before.you && back2.phase === 'playing' && back2.hud,
+      JSON.stringify({ you: [before.you, back2?.you], phase: back2?.phase }));
 check('the world it already had is still there', back2 && back2.ents > 0, `${back2?.ents} entities`);
 check('and it says so', !!back2 && /reconnected/.test(back2.log));
 check('no console errors', errs.length === 0, errs.slice(0, 2).join(' | '));

@@ -104,36 +104,27 @@ const ws = () => ({ readyState: 1, out: [], send(s) { this.out.push(JSON.parse(s
 const wa = ws(), wb = ws();
 const pa = room.join(wa, 'Alpha');
 const pb = room.join(wb, 'Bravo');
-const heroId = pa.heroId || (JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/game.json'), 'utf8')).heroes[0].id);
-room.handle(pa, { t: 'pickHero', heroId });
-room.handle(pb, { t: 'pickHero', heroId });
 room.handle(pa, { t: 'ready', ready: true });
 room.handle(pb, { t: 'ready', ready: true });
 clearInterval(room.loop); room.loop = null;
-check('the room started and seated both heroes',
-      room.phase === 'playing' && pa.entId != null && pb.entId != null, `${room.phase} ${pa.entId} ${pb.entId}`);
+check('the room started and seated both players',
+      room.phase === 'playing' && pa.slot === 0 && pb.slot === 1, `${room.phase} ${pa.slot} ${pb.slot}`);
 const W = room.world, R = room.eng;
-const ha = W.units.get(pa.entId), hb = W.units.get(pb.entId);
 const own = R.players[pa.slot];
-// the new form, as the script makes it: the same owner, a hero type
-const demon = W.createUnit(own, 'Eidm', ha.x + 64, ha.y, 0);
-check('a new hero unit exists for the same player', !!demon && demon.isHero && demon.playerIndex === pa.slot);
-R.vm.natives.get('SelectUnitForPlayerSingle')(demon, own);
+// The map's own script created both sides' armies; the room never hands a
+// unit to a player (the FOC hero protocol is gone).
+const mine = [...W.units.values()].find((u) => u.playerIndex === pa.slot && u.alive);
+const theirs = [...W.units.values()].find((u) => u.playerIndex === pb.slot && u.alive);
+check('the script gave each side units and the room left them alone',
+      !!mine && !!theirs && mine.playerIndex === pa.slot && pa.entId == null, `${pa.entId}`);
+// SelectUnitForPlayerSingle still reaches the client as an event (the map's
+// own selection highlight), but there is no hero slot to re-point any more.
+R.vm.natives.get('SelectUnitForPlayerSingle')(mine, own);
 room.stepLoop();
-check('selecting it for the player re-points the player at it', pa.entId === demon.id, `${pa.entId} vs ${demon.id}`);
-check('and the hero card follows', wa.out.some((m) => m.t === 'hero' && m.h && m.h.id === demon.id));
-// what it must not do
-R.vm.natives.get('SelectUnitForPlayerSingle')(hb, own);
-room.stepLoop();
-check('another player\'s hero is never handed across', pa.entId === demon.id);
-const creep = [...W.units.values()].find((u) => u.alive && !u.isHero && u.playerIndex === pa.slot)
-           || W.createUnit(own, [...W.units.values()].find((u) => !u.isHero && !u.isBuilding).typeKey, ha.x, ha.y + 64, 0);
-R.vm.natives.get('SelectUnitForPlayerSingle')(creep, own);
-room.stepLoop();
-check('nor a unit that is not a hero', pa.entId === demon.id);
-R.vm.natives.get('SelectUnitForPlayerSingle')(ha, own);
-room.stepLoop();
-check('selecting the old form again hands it back', pa.entId === ha.id);
+check('a scripted select still broadcasts, and no hero card follows',
+      wa.out.some((m) => m.t === 'event' && m.ev?.some((e) => e.t === 'select' && e.player === pa.slot)),
+      JSON.stringify(wa.out.slice(-2)));
+check('and the player has no server-side hero slot to re-point', pa.entId == null);
 clearTimeout(room.resetTimer);
 
 // ------------------------------------------------------------ the countdown, as the map runs it
