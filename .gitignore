@@ -7,6 +7,10 @@
 !*.cpp
 !*.hpp
 
+# 地图文件（w3x/w3m 也是 Blizzard 版权物，供自己，不入库）
+*.w3x
+*.w3m
+
 # 提取的素材（模型/贴图/音频）
 *.mdx
 *.mdl
@@ -73,3 +77,21 @@ Thumbs.db
 *.pem
 *.key
 *.env
+
+# ===== war3web 项目产物（管线可重建，不入库）=====
+extracted/
+war3_extracted/
+assets/
+public/
+data/
+serve/
+.tmp/
+.venv/
+__pycache__/
+.claude/
+
+# ===== 参考源码区（可从各自上游重新拉取，不入库）=====
+refs/
+
+# 文档目录里的图片允许入库（示意图/截图）
+!docs/**/*.png
