@@ -215,6 +215,14 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 事件驱动执行的前置：注册侧完整，触发侧（jass_run 后事件循环）待做
 - 断言 2 项；83/83 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.18 数学族 + 玩家属性（提交 46f8455）
+- 数学 11 natives：Sin/Cos/Tan/Asin/Acos/Atan/Atan2/SquareRoot（负→0）/
+  Pow/ModuloInteger/ModuloReal（**正余数**，对齐 JS `(a%b+b)%b`）
+- 玩家属性存储：SetPlayerController/GetPlayerController（mapcontrol 值）、
+  SetPlayerStartLocation/GetPlayerStartLocation（返回 index 对齐 JS）、
+  GetPlayerSlotState（slotState 还原）
+- 断言 9 项；92/92 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
