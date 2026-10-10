@@ -61,12 +61,12 @@ if (!fs.existsSync(MAP_PATH)) {
   m._free(w3i);
 }
 
-// --- JASS 解析（WASM 版 vs JS 版 parse() 对照）---
+// --- JASS 解析（WASM 版 vs JS 版 parse() 完整 AST 对照）---
 const jassC = (s) => {
   const b = m._malloc(s.length + 1);
   m.stringToUTF8(s, b, s.length + 1);
   const ptr = m._jass_parse(b, s.length);
-  const json = JSON.parse(m.UTF8ToString(ptr));
+  const json = m.UTF8ToString(ptr);
   m._free(ptr); m._free(b);
   return json;
 };
@@ -97,37 +97,44 @@ function Main takes nothing returns nothing
   endif
 endfunction
 `;
-const cm = jassC(mini);
+const cmStr = jassC(mini);
+const jmStr = JSON.stringify(parseJs(mini, 'mini'));
+ck('jass(小) AST 完整一致', cmStr === jmStr ? 1 : 0, 1);
+if (cmStr !== jmStr) {
+  let d = 0;
+  while (d < cmStr.length && d < jmStr.length && cmStr[d] === jmStr[d]) d++;
+  console.log('  首个差异 @' + d + ':\n  C 「' + cmStr.slice(Math.max(0, d - 50), d + 50) + '」\n  JS「' + jmStr.slice(Math.max(0, d - 50), d + 50) + '」');
+}
+const cm = JSON.parse(cmStr);
 const jm = parseJs(mini, 'mini');
 ck('jass(小) types', cm.types.length, jm.types.length);
-ck('jass(小) globals', cm.globals, jm.globals.length);
-ck('jass(小) natives', cm.native_count, jm.natives.length);
-ck('jass(小) functions', cm.function_count, jm.functions.length);
+ck('jass(小) globals', cm.globals.length, jm.globals.length);
+ck('jass(小) natives', cm.natives.length, jm.natives.length);
+ck('jass(小) functions', cm.functions.length, jm.functions.length);
 const cAdd = cm.functions.find((f) => f.name === 'Add');
 const jAdd = jm.functions.find((f) => f.name === 'Add');
-ck('jass(小) Add.stmts', cAdd.stmts, jAdd.body.length);
-ck('jass(小) Add.params', cAdd.params.length, jAdd.params.length);
-ck('jass(小) Add.ret', cAdd.ret === jAdd.ret ? 1 : 0, 1);
-ck('jass(小) Main.ret=nothing', cm.functions.find((f) => f.name === 'Main').ret === 'nothing' ? 1 : 0, 1);
+ck('jass(小) Add.body 语句数', cAdd.body.length, jAdd.body.length);
 
 const JASS_PATH = path.join(ROOT, 'extracted', 'war3map.j');
 if (!fs.existsSync(JASS_PATH)) {
   console.log('  SKIP  war3map.j 对照（缺 extracted/war3map.j）');
 } else {
   const src = fs.readFileSync(JASS_PATH, 'utf8');
-  const cm2 = jassC(src);
+  const cm2Str = jassC(src);
+  const jm2Str = JSON.stringify(parseJs(src, 'war3map.j'));
+  ck('jass(地图) AST 完整一致', cm2Str === jm2Str ? 1 : 0, 1);
+  if (cm2Str !== jm2Str) {
+    let d = 0;
+    while (d < cm2Str.length && d < jm2Str.length && cm2Str[d] === jm2Str[d]) d++;
+    console.log('  首个差异 @' + d + '  (C ' + cm2Str.length + ' / JS ' + jm2Str.length + '):\n  C 「' + cm2Str.slice(Math.max(0, d - 60), d + 60) + '」\n  JS「' + jm2Str.slice(Math.max(0, d - 60), d + 60) + '」');
+  }
+  const cm2 = JSON.parse(cm2Str);
   const jm2 = parseJs(src, 'war3map.j');
   ck('jass(地图) types', cm2.types.length, jm2.types.length);
-  ck('jass(地图) globals', cm2.globals, jm2.globals.length);
-  ck('jass(地图) natives', cm2.native_count, jm2.natives.length);
-  ck('jass(地图) functions', cm2.function_count, jm2.functions.length);
-  const jFn = jm2.functions.find((f) => f.name === 'InitGlobals');
-  const cFn = cm2.functions.find((f) => f.name === 'InitGlobals');
-  ck('jass(地图) InitGlobals.stmts', cFn ? cFn.stmts : -1, jFn ? jFn.body.length : -1);
-  const jDrop = jm2.functions.find((f) => f.name.endsWith('_DropItems'));
-  const cDrop = cm2.functions.find((f) => f.name.endsWith('_DropItems'));
-  ck('jass(地图) DropItems 参数数', cDrop ? cDrop.params.length : -1, jDrop ? jDrop.params.length : -1);
-  console.log(`  info   war3map.j: ${cm2.function_count} 函数 / ${cm2.native_count} 原生 / ${cm2.globals} 全局`);
+  ck('jass(地图) globals', cm2.globals.length, jm2.globals.length);
+  ck('jass(地图) natives', cm2.natives.length, jm2.natives.length);
+  ck('jass(地图) functions', cm2.functions.length, jm2.functions.length);
+  console.log(`  info   war3map.j: ${cm2.functions.length} 函数 / ${cm2.natives.length} 原生 / ${cm2.globals.length} 全局 (AST ${cm2Str.length} 字节)`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
