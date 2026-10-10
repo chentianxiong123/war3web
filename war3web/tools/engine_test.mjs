@@ -828,6 +828,27 @@ ck('jass(触发) TriggerClearActions 后 Execute 不执行', rCl.globals.cleared
 ck('jass(触发) TriggerRemoveAction 返回 true', rCl.globals.rem, 2);
 ck('jass(region) RegionAddCell/ClearCell 可用', rCl.globals.cellok, 1);
 
+// --- Widget 生命（SetWidgetLife/GetWidgetLife 与 UnitState 统一存储）---
+const wlScript = `
+globals
+  unit u = null
+  real wl = -1
+  real us = -1
+endglobals
+function Init takes nothing returns nothing
+  set u = CreateUnit(Player(0), 777, 0.0, 0.0, 0.0)
+  call SetWidgetLife(u, 250.0)
+  set wl = GetWidgetLife(u)
+  set us = GetUnitState(u, UNIT_STATE_LIFE)
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rW = jassRunC(wlScript, 'main');
+ck('jass(widget) SetWidgetLife(250) 读回', rW.globals.wl, 250);
+ck('jass(widget) GetUnitState LIFE 与 widget 统一', rW.globals.us, 250);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

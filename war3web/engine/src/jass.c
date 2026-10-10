@@ -1609,6 +1609,16 @@ static Value n_get_unit_state(Vm* vm, Expr** a, int n, VScope* s) {
   }
   return v_real(0);
 }
+static Value n_set_widget_life(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), lf = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) u->life = lf.k == V_REAL ? lf.f : (double)lf.i; }
+  return v_null();
+}
+static Value n_get_widget_life(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) return v_real(u->life); }
+  return v_real(0);
+}
 
 // ---- 单位范围/颜色 + GetLocalPlayer + 销毁回收（3.19 批）----
 static Value n_set_unit_acquire_range(Vm* vm, Expr** a, int n, VScope* s) {
@@ -2611,6 +2621,8 @@ static const NativeEntry NATIVES[] = {
   { "CreateUnit", n_create_unit }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
   { "GetUnitTypeId", n_get_unit_type_id }, { "UnitAlive", n_unit_alive },
   { "KillUnit", n_kill_unit }, { "RemoveUnit", n_kill_unit }, { "DestroyEffect", n_void },
+  { "SetWidgetLife", n_set_widget_life }, { "GetWidgetLife", n_get_widget_life },
+  { "AddSpecialEffectLoc", n_handle }, { "AddSpecialEffectTarget", n_handle },
   { "UnitAddAbility", n_unit_add_ability }, { "UnitRemoveAbility", n_unit_remove_ability },
   { "GetUnitAbilityLevel", n_get_unit_ability_level }, { "GetUnitName", n_str_empty },
   { "CreateRegion", n_create_region }, { "RegionAddRect", n_region_add_rect },
