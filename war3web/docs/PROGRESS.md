@@ -175,6 +175,15 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 断言 5 项（force 去重/枚举求和、物品 typeId round-trip/坐标）
   67/67 全绿 + 880 对账保持
 
+### 3.13 单位能力 + region 对象表（提交 9d1f986）
+- 单位能力表：UnitAddAbility（去重，成功返回 true）/UnitRemoveAbility/
+  GetUnitAbilityLevel（有=1 无=0）
+- region 表：CreateRegion/RegionAddRect（去重）/RegionClearRect/AddCell/ClearCell
+- GetUnitName → 空串（无单位数据表，对齐 engine.js 缺省）
+- 断言 4 项；71/71 全绿 + 880 对账保持
+- natives 深化累计：player/unit/trigger/rect/location/group/force/item/
+  hashtable/region + 坐标/资源/能力/字符串/哈希（~70 个真语义 natives）
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
