@@ -15,7 +15,8 @@
     "wasm": "node tools/build_wasm.mjs",
     "wasm:test": "node tools/wasm_test.mjs && node tools/wasm_browser_test.mjs",
     "engine": "node tools/build_engine.mjs",
-    "engine:test": "node tools/engine_test.mjs"
+    "engine:test": "node tools/engine_test.mjs",
+    "sim:test": "node tools/sim_test.mjs"
   },
   "dependencies": {
     "three": "^0.185.1",
