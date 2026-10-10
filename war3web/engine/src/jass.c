@@ -666,6 +666,13 @@ static void b_real(Buf* b, double v) {
   if (strpbrk(tmp, "nNf")) b_put(b, "null");   // NaN / inf -> null
   else b_put(b, tmp);
 }
+// globals 输出用 17 位有效数字（对齐 JS JSON.stringify 的 round-trip 精度）
+static void b_real17(Buf* b, double v) {
+  char tmp[48];
+  snprintf(tmp, sizeof(tmp), "%.17g", v);
+  if (strpbrk(tmp, "nNf")) b_put(b, "null");
+  else b_put(b, tmp);
+}
 static void b_str(Buf* b, const char* s) {
   b_put(b, "\"");
   for (const char* q = s ? s : ""; *q; q++) {
@@ -1062,7 +1069,7 @@ static void free_ast(Ast* ast) {
 // exec_block，函数调用走 C 递归，natives 用内嵌小表，返回值沿调用链上抛。
 
 typedef struct VArr VArr;
-enum { V_INT, V_REAL, V_BOOL, V_NULL, V_STR, V_ARR, V_HANDLE };
+enum { V_INT, V_REAL, V_BOOL, V_NULL, V_STR, V_ARR, V_HANDLE, V_CODE };
 typedef struct {
   int k;                 // V_INT V_REAL V_BOOL V_NULL V_STR V_ARR
   long long i;
@@ -1087,6 +1094,9 @@ typedef struct {
   long long opCount, opLimit;    // 每线程 runaway 护栏（同 JS 8000000）
   int handles;                   // handle id 分配器（0x100000 起，对齐 JS nextHandleId）
   const char** callNames; int nCalls, capCalls;  // 已实现 native 调用名（去重，trace 证据）
+  // 触发器表（同步执行：动作函数按名注册/调用；事件注册暂不存储）
+  struct VTrigger { long long id; const char** actions; int nActions, capActions; } * triggers;
+  int nTriggers, capTriggers;
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1104,6 +1114,11 @@ static Value v_str(Vm* vm, const char* s) {
 static Value v_handle(Vm* vm) {
   Value v; memset(&v, 0, sizeof v);
   v.k = V_HANDLE; v.i = 0x100000 + vm->handles++;
+  return v;
+}
+static Value v_code(Vm* vm, const char* name) {
+  Value v; memset(&v, 0, sizeof v);
+  v.k = V_CODE; v.s = a_str(&vm->ast->ar, name);
   return v;
 }
 
@@ -1242,6 +1257,74 @@ static Value n_randreal(Vm* vm, Expr** a, int n, VScope* s) {
   return v_real(l + (rnd32() / 4294967296.0) * (h - l));
 }
 
+// ---- 触发器同步执行（第一版：动作按名注册/执行；事件注册暂不存储）----
+static Value vm_invoke(Vm* vm, FuncDef* f, Expr** args, int nargs, VScope* caller);
+
+static struct VTrigger* find_trigger(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nTriggers; i++)
+    if (vm->triggers[i].id == id) return &vm->triggers[i];
+  return NULL;
+}
+static Value n_create_trigger(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nTriggers == vm->capTriggers) {
+    vm->capTriggers = vm->capTriggers ? vm->capTriggers * 2 : 16;
+    vm->triggers = (struct VTrigger*)realloc(vm->triggers, sizeof(struct VTrigger) * (size_t)vm->capTriggers);
+  }
+  struct VTrigger* t = &vm->triggers[vm->nTriggers++];
+  memset(t, 0, sizeof *t);
+  t->id = id;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_trigger_add_action(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  Value cv = narg(vm, a, n, 1, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t && cv.k == V_CODE) {
+    if (t->nActions == t->capActions) {
+      t->capActions = t->capActions ? t->capActions * 2 : 4;
+      const char** nn = (const char**)realloc(t->actions, sizeof(char*) * (size_t)t->capActions);
+      t->actions = nn;
+    }
+    t->actions[t->nActions++] = cv.s;
+  }
+  return v_null();
+}
+static void exec_trigger_actions(Vm* vm, struct VTrigger* t) {
+  for (int i = 0; i < t->nActions; i++) {
+    FuncDef* f = NULL;
+    for (int k = 0; k < vm->ast->nfuncs; k++)
+      if (vm->ast->funcs[k].sig.name && strcmp(vm->ast->funcs[k].sig.name, t->actions[i]) == 0) { f = &vm->ast->funcs[k]; break; }
+    if (f) vm_invoke(vm, f, NULL, 0, NULL);
+    else vm_err(vm, "trigger action not found");
+  }
+}
+// TriggerEvaluate：执行动作并返回 true（引擎返回 action 是否触发）
+static Value n_trigger_evaluate(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  if (tv.k == V_HANDLE) { struct VTrigger* t = find_trigger(vm, tv.i); if (t) { exec_trigger_actions(vm, t); return v_bool(1); } }
+  return v_bool(0);
+}
+static Value n_trigger_execute(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  if (tv.k == V_HANDLE) { struct VTrigger* t = find_trigger(vm, tv.i); if (t) exec_trigger_actions(vm, t); }
+  return v_null();
+}
+static Value n_execute_func(Vm* vm, Expr** a, int n, VScope* s) {
+  Value cv = narg(vm, a, n, 0, s);
+  if (cv.k == V_CODE) {
+    for (int k = 0; k < vm->ast->nfuncs; k++)
+      if (vm->ast->funcs[k].sig.name && strcmp(vm->ast->funcs[k].sig.name, cv.s) == 0) {
+        vm_invoke(vm, &vm->ast->funcs[k], NULL, 0, NULL);
+        return v_null();
+      }
+    vm_err(vm, "ExecuteFunc not found");
+  }
+  return v_null();
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1258,7 +1341,8 @@ static const NativeEntry NATIVES[] = {
   { "GetCameraMargin", n_0 },
   { "GetLocalizedString", n_locstr }, { "GetLocalizedHotkey", n_lochotkey },
   // handle 工厂（stub：返回非空 id；真实对象待 world/渲染层）
-  { "AddWeatherEffect", n_handle }, { "CreateTrigger", n_handle }, { "CreateTimer", n_handle },
+  { "AddWeatherEffect", n_handle }, { "CreateTimer", n_handle },
+  { "CreateTrigger", n_create_trigger },
   { "CreateGroup", n_handle }, { "CreateForce", n_handle },
   { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_handle },
   { "GetEnumUnit", n_handle }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
@@ -1300,11 +1384,13 @@ static const NativeEntry NATIVES[] = {
   { "ConvertWeaponType", n_convint }, { "ConvertWidgetEvent", n_convint },
   // 第二轮：handle 工厂 / 枚举与布尔默认值 / 空实现
   { "CreateUnit", n_handle }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
-  { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_handle }, { "TriggerAddAction", n_handle },
+  { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_handle },
+  { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
+  { "ExecuteFunc", n_execute_func },
   { "GetGameSpeed", n_i2 }, { "VersionGet", n_i1 }, { "GetFloatGameState", n_r0 },
   { "GetPlayerController", n_i0 }, { "GetPlayerSlotState", n_i0 },
   { "GetPlayerTechResearched", n_false }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
-  { "TriggerEvaluate", n_false }, { "TriggerRegisterGameStateEvent", n_false },
+  { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_false },
   { "TriggerRegisterPlayerUnitEvent", n_false }, { "TriggerRegisterTimerExpireEvent", n_false },
   { "TriggerRegisterUnitEvent", n_false },
   { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
@@ -1444,6 +1530,7 @@ static Value eval_expr(Vm* vm, const Expr* e, VScope* scope) {
       return v_null();
     }
     case E_BIN: return eval_bin(vm, e, scope);
+    case E_FUNCREF: return v_code(vm, e->name);
     case E_CALL: return eval_call(vm, e->name, e->args, e->nargs, scope);
     default: return v_null();
   }
@@ -1560,7 +1647,7 @@ static void vm_init_globals(Vm* vm) {
 static void json_value(Buf* b, Value v) {
   switch (v.k) {
     case V_INT: b_num(b, v.i); break;
-    case V_REAL: b_real(b, v.f); break;
+    case V_REAL: b_real17(b, v.f); break;
     case V_BOOL: b_put(b, v.i ? "true" : "false"); break;
     case V_STR: b_str(b, v.s); break;
     default: b_put(b, "null"); break;
@@ -1582,10 +1669,19 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
   vm.opLimit = 8000000;
   vm_init_globals(&vm);
   FuncDef* target = NULL;
-  for (int i = 0; i < ast->nfuncs; i++)
-    if (ast->funcs[i].sig.name && strcmp(ast->funcs[i].sig.name, entry) == 0) { target = &ast->funcs[i]; break; }
-  if (target) vm_invoke(&vm, target, NULL, 0, NULL);
-  else vm_err(&vm, "entry function not found");
+  // entry 支持逗号分隔多入口顺序执行（如 "config,main"，共享同一 VM 状态）
+  char entries[128];
+  snprintf(entries, sizeof entries, "%s", entry ? entry : "");
+  char* save = NULL;
+  int found_any = 0;
+  for (char* tok = strtok_r(entries, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+    target = NULL;
+    for (int i = 0; i < ast->nfuncs; i++)
+      if (ast->funcs[i].sig.name && strcmp(ast->funcs[i].sig.name, tok) == 0) { target = &ast->funcs[i]; break; }
+    if (target) { found_any = 1; vm_invoke(&vm, target, NULL, 0, NULL); }
+    else vm_err(&vm, "entry function not found");
+  }
+  if (!found_any && !vm.err) vm_err(&vm, "no entry function");
 
   Buf out = {0};
   if (vm.err) {
@@ -1612,6 +1708,8 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  for (int i = 0; i < vm.nTriggers; i++) free(vm.triggers[i].actions);
+  free(vm.triggers);
   free(vm.callNames);
   free_ast(ast);
   return out.b ? out.b : strdup("{\"ok\":false,\"error\":\"no output\"}");
