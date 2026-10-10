@@ -223,6 +223,39 @@ const rP = jassRunC(playerScript, 'main');
 ck('jass(玩家) GetPlayerId(Player(3)) 还原 index=3', rP.globals.pidx, 3);
 if (rP.globals.pidx !== 3) console.log('  pidx=' + rP.globals.pidx);
 
+// --- 单位对象表语义（CreateUnit 真分配 + typeId/owner/alive 查询还原）---
+const unitScript = `
+globals
+  integer uid = 0
+  integer utype = 0
+  integer ualive = -1
+  integer uowner = -1
+  unit u = null
+endglobals
+function Init takes nothing returns nothing
+  set uid = 1751479663
+  set u = CreateUnit(Player(2), uid, 0.0, 0.0, 0.0)
+  set utype = GetUnitTypeId(u)
+  if UnitAlive(u) then
+    set ualive = 1
+  endif
+  set uowner = GetPlayerId(GetOwningPlayer(u))
+  call KillUnit(u)
+  if UnitAlive(u) then
+    set ualive = 2
+  else
+    set ualive = 0
+  endif
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rU = jassRunC(unitScript, 'main');
+ck('jass(单位) GetUnitTypeId round-trip', rU.globals.utype, rU.globals.uid);
+ck('jass(单位) UnitAlive=1 且 KillUnit 后=0', rU.globals.ualive, 0);
+ck('jass(单位) GetOwningPlayer 还原所属玩家=2', rU.globals.uowner, 2);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

@@ -1099,6 +1099,9 @@ typedef struct {
   int nTriggers, capTriggers;
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; } players[16];
+  // 单位表（CreateUnit 真分配：typeId/所属玩家/存活；查询类 natives 由此还原）
+  struct VUnit { long long id; int typeId; int pi; int alive; } * units;
+  int nUnits, capUnits;
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1343,6 +1346,59 @@ static Value n_get_player_id(Vm* vm, Expr** a, int n, VScope* s) {
   return v_int(0);
 }
 
+// ---- 单位对象表（CreateUnit 真分配 + 查询还原）----
+static struct VUnit* find_unit(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nUnits; i++)
+    if (vm->units[i].id == id) return &vm->units[i];
+  return NULL;
+}
+static int player_index_of(Vm* vm, long long pid) {
+  for (int i = 0; i < 16; i++)
+    if (vm->players[i].id == pid) return i;
+  return 0;   // 未登记玩家 handle → Player(0)
+}
+static Value n_create_unit(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);      // player
+  Value ti = narg(vm, a, n, 1, s);     // unittype id
+  (void)narg(vm, a, n, 2, s); (void)narg(vm, a, n, 3, s); (void)narg(vm, a, n, 4, s); // x/y/face
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nUnits == vm->capUnits) {
+    vm->capUnits = vm->capUnits ? vm->capUnits * 2 : 64;
+    vm->units = (struct VUnit*)realloc(vm->units, sizeof(struct VUnit) * (size_t)vm->capUnits);
+  }
+  struct VUnit* u = &vm->units[vm->nUnits++];
+  memset(u, 0, sizeof *u);
+  u->id = id;
+  u->typeId = (int)ti.i;
+  u->pi = p.k == V_HANDLE ? player_index_of(vm, p.i) : 0;
+  u->alive = 1;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_get_unit_type_id(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s);
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) return v_int(p->typeId); }
+  return v_int(0);
+}
+static Value n_get_owning_player(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s);
+  int pi = 0;
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) pi = p->pi; }
+  if (vm->players[pi].id == 0) vm->players[pi].id = 0x100000 + vm->handles++;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->players[pi].id;
+  return v;
+}
+static Value n_unit_alive(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s);
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) return v_bool(p->alive); }
+  return v_bool(0);
+}
+static Value n_kill_unit(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s);
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) p->alive = 0; }
+  return v_null();
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1362,7 +1418,7 @@ static const NativeEntry NATIVES[] = {
   { "AddWeatherEffect", n_handle }, { "CreateTimer", n_handle },
   { "CreateTrigger", n_create_trigger },
   { "CreateGroup", n_handle }, { "CreateForce", n_handle },
-  { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_handle },
+  { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_get_owning_player },
   { "GetEnumUnit", n_handle }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
   { "GetExpiredTimer", n_handle },
   // 环境/配置空实现（对齐 engine.js 空实现语义）
@@ -1401,7 +1457,9 @@ static const NativeEntry NATIVES[] = {
   { "ConvertVersion", n_convint }, { "ConvertVolumeGroup", n_convint },
   { "ConvertWeaponType", n_convint }, { "ConvertWidgetEvent", n_convint },
   // 第二轮：handle 工厂 / 枚举与布尔默认值 / 空实现
-  { "CreateUnit", n_handle }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
+  { "CreateUnit", n_create_unit }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
+  { "GetUnitTypeId", n_get_unit_type_id }, { "UnitAlive", n_unit_alive },
+  { "KillUnit", n_kill_unit }, { "RemoveUnit", n_kill_unit }, { "DestroyEffect", n_void },
   { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_player },
   { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
@@ -1730,6 +1788,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  free(vm.units);
   for (int i = 0; i < vm.nTriggers; i++) free(vm.triggers[i].actions);
   free(vm.triggers);
   free(vm.callNames);
