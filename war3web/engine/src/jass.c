@@ -1102,6 +1102,14 @@ typedef struct {
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing; } * units;
   int nUnits, capUnits;
+  // rect / location / group 对象表（对象工厂真分配 + 查询/枚举）
+  struct VRect { long long id; double minx, miny, maxx, maxy; } * rects;
+  int nRects, capRects;
+  struct VLoc { long long id; double x, y; } * locs;
+  int nLocs, capLocs;
+  struct VGroup { long long id; long long* items; int nItems, capItems; } * groups;
+  int nGroups, capGroups;
+  long long enumUnit;   // ForGroup 当前枚举单位（GetEnumUnit 读取）
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1459,6 +1467,201 @@ static Value n_get_player_state(Vm* vm, Expr** a, int n, VScope* s) {
   return v_int(0);
 }
 
+// ---- GetHandleId / 字符串工具（对齐 engine.js）----
+static Value n_get_handle_id(Vm* vm, Expr** a, int n, VScope* s) {
+  Value h = narg(vm, a, n, 0, s);
+  return v_int(h.k == V_HANDLE ? (int)h.i : 0);
+}
+static Value n_string_length(Vm* vm, Expr** a, int n, VScope* s) {
+  Value sv = narg(vm, a, n, 0, s);
+  return v_int(sv.k == V_STR ? (int)strlen(sv.s) : 0);
+}
+static Value n_sub_string(Vm* vm, Expr** a, int n, VScope* s) {
+  Value sv = narg(vm, a, n, 0, s), av = narg(vm, a, n, 1, s), bv = narg(vm, a, n, 2, s);
+  if (sv.k != V_STR) return v_str(vm, "");
+  int len = (int)strlen(sv.s);
+  int a2 = (int)av.i < 0 ? 0 : (int)av.i; if (a2 > len) a2 = len;
+  int b2 = (int)bv.i; if (b2 > len) b2 = len; if (b2 < a2) b2 = a2;
+  char* buf = (char*)malloc((size_t)(b2 - a2 + 1));
+  memcpy(buf, sv.s + a2, (size_t)(b2 - a2));
+  buf[b2 - a2] = 0;
+  Value r = v_str(vm, buf);
+  free(buf);
+  return r;
+}
+
+// ---- rect 对象表（Rect(minx,miny,maxx,maxy)，对齐 engine.js H('rect',...)）----
+static struct VRect* find_rect(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nRects; i++) if (vm->rects[i].id == id) return &vm->rects[i];
+  return NULL;
+}
+static Value n_rect(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v0 = narg(vm, a, n, 0, s), v1 = narg(vm, a, n, 1, s);
+  Value v2 = narg(vm, a, n, 2, s), v3 = narg(vm, a, n, 3, s);
+  double d0 = v0.k == V_REAL ? v0.f : (double)v0.i, d1 = v1.k == V_REAL ? v1.f : (double)v1.i;
+  double d2 = v2.k == V_REAL ? v2.f : (double)v2.i, d3 = v3.k == V_REAL ? v3.f : (double)v3.i;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nRects == vm->capRects) {
+    vm->capRects = vm->capRects ? vm->capRects * 2 : 16;
+    vm->rects = (struct VRect*)realloc(vm->rects, sizeof(struct VRect) * (size_t)vm->capRects);
+  }
+  struct VRect* r = &vm->rects[vm->nRects++];
+  memset(r, 0, sizeof *r);
+  r->id = id; r->minx = d0; r->miny = d1; r->maxx = d2; r->maxy = d3;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_set_rect(Vm* vm, Expr** a, int n, VScope* s) {
+  Value rv = narg(vm, a, n, 0, s);
+  struct VRect* r = rv.k == V_HANDLE ? find_rect(vm, rv.i) : NULL;
+  if (r) {  // SetRect(r, minx, miny, maxx, maxy)
+    Value v0 = narg(vm, a, n, 1, s), v1 = narg(vm, a, n, 2, s);
+    Value v2 = narg(vm, a, n, 3, s), v3 = narg(vm, a, n, 4, s);
+    r->minx = v0.k == V_REAL ? v0.f : (double)v0.i; r->miny = v1.k == V_REAL ? v1.f : (double)v1.i;
+    r->maxx = v2.k == V_REAL ? v2.f : (double)v2.i; r->maxy = v3.k == V_REAL ? v3.f : (double)v3.i;
+  }
+  return v_null();
+}
+static Value n_rect_prop(Vm* vm, Expr** a, int n, VScope* s, int which) {  // 0=cx 1=cy 2=minx 3=miny 4=maxx 5=maxy 6=w 7=h
+  Value rv = narg(vm, a, n, 0, s);
+  struct VRect* r = rv.k == V_HANDLE ? find_rect(vm, rv.i) : NULL;
+  if (!r) return v_real(0);
+  double out = which == 0 ? (r->minx + r->maxx) / 2 : which == 1 ? (r->miny + r->maxy) / 2
+    : which == 2 ? r->minx : which == 3 ? r->miny : which == 4 ? r->maxx : which == 5 ? r->maxy
+    : which == 6 ? (r->maxx - r->minx) : (r->maxy - r->miny);
+  return v_real(out);
+}
+static Value n_get_rect_cx(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 0); }
+static Value n_get_rect_cy(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 1); }
+static Value n_get_rect_minx(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 2); }
+static Value n_get_rect_miny(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 3); }
+static Value n_get_rect_maxx(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 4); }
+static Value n_get_rect_maxy(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 5); }
+static Value n_get_rect_width(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 6); }
+static Value n_get_rect_height(Vm* vm, Expr** a, int n, VScope* s) { return n_rect_prop(vm, a, n, s, 7); }
+
+// ---- location 对象表 ----
+static struct VLoc* find_loc(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nLocs; i++) if (vm->locs[i].id == id) return &vm->locs[i];
+  return NULL;
+}
+static Value n_location(Vm* vm, Expr** a, int n, VScope* s) {
+  Value x = narg(vm, a, n, 0, s), y = narg(vm, a, n, 1, s);
+  double dx = x.k == V_REAL ? x.f : (double)x.i, dy = y.k == V_REAL ? y.f : (double)y.i;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nLocs == vm->capLocs) {
+    vm->capLocs = vm->capLocs ? vm->capLocs * 2 : 16;
+    vm->locs = (struct VLoc*)realloc(vm->locs, sizeof(struct VLoc) * (size_t)vm->capLocs);
+  }
+  struct VLoc* l = &vm->locs[vm->nLocs++];
+  memset(l, 0, sizeof *l);
+  l->id = id; l->x = dx; l->y = dy;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_move_location(Vm* vm, Expr** a, int n, VScope* s) {
+  Value lv = narg(vm, a, n, 0, s), x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  struct VLoc* l = lv.k == V_HANDLE ? find_loc(vm, lv.i) : NULL;
+  if (l) { l->x = x.k == V_REAL ? x.f : (double)x.i; l->y = y.k == V_REAL ? y.f : (double)y.i; }
+  return v_null();
+}
+static Value n_get_loc_x(Vm* vm, Expr** a, int n, VScope* s) {
+  Value lv = narg(vm, a, n, 0, s);
+  struct VLoc* l = lv.k == V_HANDLE ? find_loc(vm, lv.i) : NULL;
+  return v_real(l ? l->x : 0);
+}
+static Value n_get_loc_y(Vm* vm, Expr** a, int n, VScope* s) {
+  Value lv = narg(vm, a, n, 0, s);
+  struct VLoc* l = lv.k == V_HANDLE ? find_loc(vm, lv.i) : NULL;
+  return v_real(l ? l->y : 0);
+}
+
+// ---- group 对象表（ForGroup 同步枚举 + GetEnumUnit 上下文）----
+static struct VGroup* find_group(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nGroups; i++) if (vm->groups[i].id == id) return &vm->groups[i];
+  return NULL;
+}
+static Value n_create_group(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nGroups == vm->capGroups) {
+    vm->capGroups = vm->capGroups ? vm->capGroups * 2 : 8;
+    vm->groups = (struct VGroup*)realloc(vm->groups, sizeof(struct VGroup) * (size_t)vm->capGroups);
+  }
+  struct VGroup* g = &vm->groups[vm->nGroups++];
+  memset(g, 0, sizeof *g);
+  g->id = id;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_group_add_unit(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s), uv = narg(vm, a, n, 1, s);
+  struct VGroup* g = gv.k == V_HANDLE ? find_group(vm, gv.i) : NULL;
+  if (g && uv.k == V_HANDLE) {
+    for (int i = 0; i < g->nItems; i++) if (g->items[i] == uv.i) return v_null();  // 去重
+    if (g->nItems == g->capItems) {
+      g->capItems = g->capItems ? g->capItems * 2 : 4;
+      g->items = (long long*)realloc(g->items, sizeof(long long) * (size_t)g->capItems);
+    }
+    g->items[g->nItems++] = uv.i;
+  }
+  return v_null();
+}
+static Value n_group_remove_unit(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s), uv = narg(vm, a, n, 1, s);
+  struct VGroup* g = gv.k == V_HANDLE ? find_group(vm, gv.i) : NULL;
+  if (g && uv.k == V_HANDLE) {
+    for (int i = 0; i < g->nItems; i++)
+      if (g->items[i] == uv.i) { g->items[i] = g->items[--g->nItems]; break; }
+  }
+  return v_null();
+}
+static Value n_group_clear(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s);
+  struct VGroup* g = gv.k == V_HANDLE ? find_group(vm, gv.i) : NULL;
+  if (g) g->nItems = 0;
+  return v_null();
+}
+static Value n_group_count(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s);
+  struct VGroup* g = gv.k == V_HANDLE ? find_group(vm, gv.i) : NULL;
+  return v_int(g ? g->nItems : 0);
+}
+static Value n_first_of_group(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s);
+  struct VGroup* g = gv.k == V_HANDLE ? find_group(vm, gv.i) : NULL;
+  if (g && g->nItems > 0) {
+    Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = g->items[0];
+    return v;
+  }
+  return v_null();
+}
+static Value n_for_group(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s), cv = narg(vm, a, n, 1, s);
+  struct VGroup* g = gv.k == V_HANDLE ? find_group(vm, gv.i) : NULL;
+  if (g && cv.k == V_CODE) {
+    FuncDef* f = NULL;
+    for (int k = 0; k < vm->ast->nfuncs; k++)
+      if (vm->ast->funcs[k].sig.name && strcmp(vm->ast->funcs[k].sig.name, cv.s) == 0) { f = &vm->ast->funcs[k]; break; }
+    if (f) {
+      for (int i = 0; i < g->nItems; i++) {
+        vm->enumUnit = g->items[i];
+        vm_invoke(vm, f, NULL, 0, NULL);
+      }
+      vm->enumUnit = 0;
+    }
+  }
+  return v_null();
+}
+static Value n_get_enum_unit(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  if (vm->enumUnit != 0) {
+    Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->enumUnit;
+    return v;
+  }
+  return v_null();
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1474,15 +1677,30 @@ static const NativeEntry NATIVES[] = {
   { "GetRandomInt", n_randint }, { "GetRandomReal", n_randreal },
   { "GetCameraMargin", n_0 },
   { "GetLocalizedString", n_locstr }, { "GetLocalizedHotkey", n_lochotkey },
+  { "GetHandleId", n_get_handle_id }, { "StringLength", n_string_length },
+  { "SubString", n_sub_string },
+  { "SetRect", n_set_rect },
+  { "GetRectCenterX", n_get_rect_cx }, { "GetRectCenterY", n_get_rect_cy },
+  { "GetRectMaxX", n_get_rect_maxx }, { "GetRectMaxY", n_get_rect_maxy },
+  { "GetRectMinX", n_get_rect_minx }, { "GetRectMinY", n_get_rect_miny },
+  { "GetRectWidth", n_get_rect_width }, { "GetRectHeight", n_get_rect_height },
+  { "Location", n_location }, { "MoveLocation", n_move_location },
+  { "GetLocationX", n_get_loc_x }, { "GetLocationY", n_get_loc_y }, { "RemoveLocation", n_void },
   // handle 工厂（stub：返回非空 id；真实对象待 world/渲染层）
   { "AddWeatherEffect", n_handle }, { "CreateTimer", n_handle },
   { "CreateTrigger", n_create_trigger },
-  { "CreateGroup", n_handle }, { "CreateForce", n_handle },
+  { "CreateGroup", n_create_group }, { "CreateForce", n_handle },
   { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_get_owning_player },
-  { "GetEnumUnit", n_handle }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
+  { "GetEnumUnit", n_get_enum_unit }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
+  { "GroupAddUnit", n_group_add_unit }, { "GroupRemoveUnit", n_group_remove_unit },
+  { "GroupClear", n_group_clear }, { "GroupCountUnits", n_group_count },
+  { "FirstOfGroup", n_first_of_group }, { "ForGroup", n_for_group },
+  { "DestroyGroup", n_void },
   { "GetExpiredTimer", n_handle },
   // 环境/配置空实现（对齐 engine.js 空实现语义）
-  { "SetCameraBounds", n_void }, { "SetDayNightModels", n_void }, { "SetTerrainFogEx", n_void },
+  { "SetCameraBounds", n_void }, { "GetCameraBoundMinX", n_r0 },
+  { "GetCameraBoundMinY", n_r0 }, { "GetCameraBoundMaxX", n_r0 },
+  { "GetCameraBoundMaxY", n_r0 }, { "SetDayNightModels", n_void }, { "SetTerrainFogEx", n_void },
   { "SetWaterBaseColor", n_void }, { "EnableWeatherEffect", n_void }, { "NewSoundEnvironment", n_void },
   { "SetAmbientDaySound", n_void }, { "SetAmbientNightSound", n_void }, { "SetMapMusic", n_void },
   { "SetMapName", n_void }, { "SetMapDescription", n_void }, { "SetPlayers", n_void },
@@ -1525,7 +1743,7 @@ static const NativeEntry NATIVES[] = {
   { "SetUnitX", n_set_unit_x }, { "SetUnitY", n_set_unit_y },
   { "SetUnitPosition", n_set_unit_position }, { "GetUnitFacing", n_get_unit_facing },
   { "SetUnitFacing", n_set_unit_facing }, { "SetUnitFacingTimed", n_set_unit_facing },
-  { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_player },
+  { "Filter", n_handle }, { "Rect", n_rect }, { "Player", n_player },
   { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
   { "ExecuteFunc", n_execute_func },
@@ -1853,6 +2071,10 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  for (int i = 0; i < vm.nGroups; i++) free(vm.groups[i].items);
+  free(vm.groups);
+  free(vm.rects);
+  free(vm.locs);
   free(vm.units);
   for (int i = 0; i < vm.nTriggers; i++) free(vm.triggers[i].actions);
   free(vm.triggers);

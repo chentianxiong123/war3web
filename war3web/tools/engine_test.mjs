@@ -291,6 +291,65 @@ ck('jass(坐标) SetUnitFacing 后 GetUnitFacing=180', rC.globals.uf, 180);
 ck('jass(资源) SetPlayerState GOLD=555 可读回', rC.globals.pg, 555);
 ck('jass(资源) SetPlayerState LUMBER=777 可读回', rC.globals.pl, 777);
 
+// --- rect/location/字符串/GetHandleId/group 对象表语义 ---
+const objScript = `
+globals
+  rect r = null
+  real rcx = 0
+  real rminx = 0
+  real rw = 0
+  location p = null
+  real lx = 0
+  integer sl = 0
+  string ss = ""
+  integer hid = 0
+  group g = null
+  integer gcount = 0
+  integer gsum = 0
+  unit u1 = null
+  unit u2 = null
+endglobals
+function AddU takes nothing returns nothing
+  set gsum = gsum + GetUnitTypeId(GetEnumUnit())
+endfunction
+function Init takes nothing returns nothing
+  set r = Rect(100.0, 200.0, 300.0, 400.0)
+  set rcx = GetRectCenterX(r)
+  set rminx = GetRectMinX(r)
+  set rw = GetRectWidth(r)
+  set p = Location(50.0, 60.0)
+  call MoveLocation(p, 99.0, 88.0)
+  set lx = GetLocationX(p)
+  set sl = StringLength("abcd")
+  set ss = SubString("hello", 1, 3)
+  set u1 = CreateUnit(Player(0), 12345, 0.0, 0.0, 0.0)
+  set hid = GetHandleId(u1)
+  if hid != 0 then
+    set hid = 1
+  endif
+  set g = CreateGroup()
+  call GroupAddUnit(g, u1)
+  set u2 = CreateUnit(Player(0), 67890, 0.0, 0.0, 0.0)
+  call GroupAddUnit(g, u2)
+  call ForGroup(g, function AddU)
+  call GroupRemoveUnit(g, u1)
+  set gcount = GroupCountUnits(g)
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rO = jassRunC(objScript, 'main');
+ck('jass(rect) GetRectCenterX((100,200,300,400))=200', rO.globals.rcx, 200);
+ck('jass(rect) GetRectMinX=100', rO.globals.rminx, 100);
+ck('jass(rect) GetRectWidth=200', rO.globals.rw, 200);
+ck('jass(loc) MoveLocation 后 GetLocationX=99', rO.globals.lx, 99);
+ck('jass(字符串) StringLength("abcd")=4', rO.globals.sl, 4);
+ck('jass(字符串) SubString("hello",1,3)="el"', rO.globals.ss === 'el' ? 1 : 0, 1);
+ck('jass(句柄) GetHandleId(unit)!=0', rO.globals.hid, 1);
+ck('jass(group) ForGroup 枚举求和=80235', rO.globals.gsum, 12345 + 67890);
+ck('jass(group) GroupRemoveUnit 后 GroupCountUnits=1', rO.globals.gcount, 1);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
