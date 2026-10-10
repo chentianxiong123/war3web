@@ -1097,6 +1097,8 @@ typedef struct {
   // 触发器表（同步执行：动作函数按名注册/调用；事件注册暂不存储）
   struct VTrigger { long long id; const char** actions; int nActions, capActions; } * triggers;
   int nTriggers, capTriggers;
+  // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
+  struct VPlayer { long long id; } players[16];
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1325,6 +1327,22 @@ static Value n_execute_func(Vm* vm, Expr** a, int n, VScope* s) {
   return v_null();
 }
 
+// ---- 玩家对象表（Player(i) 幂等，对齐 engine.js P(i) 16 常驻玩家）----
+static Value n_player(Vm* vm, Expr** a, int n, VScope* s) {
+  Value i = narg(vm, a, n, 0, s);
+  int idx = (int)i.i; if (idx < 0) idx = 0; if (idx > 15) idx = 15;
+  if (vm->players[idx].id == 0) vm->players[idx].id = 0x100000 + vm->handles++;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->players[idx].id;
+  return v;
+}
+static Value n_get_player_id(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);
+  if (p.k == V_HANDLE)
+    for (int i = 0; i < 16; i++)
+      if (vm->players[i].id == p.i) return v_int(i);
+  return v_int(0);
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1384,7 +1402,8 @@ static const NativeEntry NATIVES[] = {
   { "ConvertWeaponType", n_convint }, { "ConvertWidgetEvent", n_convint },
   // 第二轮：handle 工厂 / 枚举与布尔默认值 / 空实现
   { "CreateUnit", n_handle }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
-  { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_handle },
+  { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_player },
+  { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
   { "ExecuteFunc", n_execute_func },
   { "TriggerRegisterGameEvent", n_handle }, { "GetPlayerTechMaxAllowed", n_void },

@@ -205,6 +205,24 @@ ck('jass(VM) log 一致', cr.log.trim().split('\n').join('\n') === jr.log ? 1 : 
 if (cr.log.trim().split('\n').join('\n') !== jr.log) console.log('  diff log:\n  C 「' + cr.log + '」\n  JS「' + jr.log + '」');
 ck('jass(VM) counter=120', cr.globals.counter, jr.globals.counter);
 
+// --- 玩家对象表语义（Player 幂等 + GetPlayerId 还原 index，对齐 engine.js P(i)）---
+const playerScript = `
+globals
+  integer pidx = 0
+  player pSame = null
+endglobals
+function Init takes nothing returns nothing
+  set pSame = Player(3)
+  set pidx = GetPlayerId(Player(3))
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rP = jassRunC(playerScript, 'main');
+ck('jass(玩家) GetPlayerId(Player(3)) 还原 index=3', rP.globals.pidx, 3);
+if (rP.globals.pidx !== 3) console.log('  pidx=' + rP.globals.pidx);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
