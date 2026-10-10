@@ -97,6 +97,11 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   main → 环境 natives → CreateAllUnits → InitBlizzard → InitGlobals →
   InitCustomTriggers → RunInitializationTriggers，**无未实现 natives，87 个
   natives 被调用**；main 全链调用序断言常驻测试
+- **config 配置链执行**：SetMapName/SetPlayers/SetTeams/DefineStartLocation/
+  Player + InitCustomPlayerSlots 等 Blizzard 函数（51ms，**60 个 natives 被调用、
+  无未实现**）；补 5 个（GetPlayerId 暂返 0 待 player 对象表深化、
+  GetGameTypeSelected/SetPlayerStartLocation/SetStartLocPrio/SetStartLocPrioCount）；
+  config 调用序断言常驻（38/38 全绿）
 
 ## 四、测试资产与工具
 

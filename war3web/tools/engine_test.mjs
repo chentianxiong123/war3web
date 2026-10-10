@@ -236,6 +236,23 @@ if (fs.existsSync(COMMON_J) && fs.existsSync(BLIZZARD_J)) {
   ck('jass(main) natives 调用序完整', gotSeq.length === seq.length ? 1 : 0, 1);
   if (gotSeq.length !== seq.length) console.log('  缺调用证据: ' + seq.filter((n) => !gotSeq.includes(n)).join(', '));
   console.log(`  info   main 全链执行: ${calls.length} 个 natives 被调用`);
+
+  // --- config 配置链执行（地图配置：名字/玩家/出生点/槽位）---
+  const rCfg = jassRunC(full, 'config');
+  ck('jass(config) 执行完成', rCfg.ok ? 1 : 0, 1);
+  if (!rCfg.ok) console.log('  error: ' + rCfg.error);
+  const unimplCfg = [...new Set(((rCfg.log || '').match(/\[unimpl:([^\]]+)\]/g) || []).map((s) => s.slice(8, -1)))];
+  ck('jass(config) 无未实现 natives', unimplCfg.length === 0 ? 1 : 0, 1);
+  if (unimplCfg.length) console.log('  未实现: ' + unimplCfg.sort().join(', '));
+  const cfgCalls = rCfg.calls || [];
+  // config 直呼的真 natives（SetPlayerSlotAvailable/InitCustomPlayerSlots 等是
+  // Blizzard.j 函数，入口由"执行完成+无未实现"隐含验证）
+  const cfgSeq = ['SetMapName', 'SetMapDescription', 'SetPlayers', 'SetTeams', 'SetGamePlacement',
+    'DefineStartLocation', 'Player'];
+  const cfgGot = cfgSeq.filter((n) => cfgCalls.includes(n));
+  ck('jass(config) natives 调用序完整', cfgGot.length === cfgSeq.length ? 1 : 0, 1);
+  if (cfgGot.length !== cfgSeq.length) console.log('  缺调用证据: ' + cfgSeq.filter((n) => !cfgGot.includes(n)).join(', '));
+  console.log(`  info   config 链执行: ${cfgCalls.length} 个 natives 被调用`);
 } else {
   console.log('  SKIP  拼接对照（缺 war3_extracted/Scripts 库文件）');
 }

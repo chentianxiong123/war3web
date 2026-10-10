@@ -1310,6 +1310,9 @@ static const NativeEntry NATIVES[] = {
   { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
   { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_void },
   { "TimerStart", n_void },
+  // 第三轮（config 链）：GetPlayerId 暂返 0（player 对象表留待深化）
+  { "GetPlayerId", n_i0 }, { "GetGameTypeSelected", n_i0 },
+  { "SetPlayerStartLocation", n_void }, { "SetStartLocPrio", n_void }, { "SetStartLocPrioCount", n_void },
 };
 
 static int vm_call_native(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope, Value* out) {
