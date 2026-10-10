@@ -200,6 +200,14 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   bj_meleeDefeated 等）——数组语义首次被验证
 - 76/76 全绿 + 880 全局对账保持
 
+### 3.16 触发器条件 + 计时器表 + 单位状态（提交 a09d7e1）
+- TriggerAddCondition 存条件函数；**TriggerEvaluate 拆分为只判条件**
+  （全 true→true，不执行动作，对齐 engine.js）——ConditionalTriggerExecute
+  → TriggerExecute 执行动作链语义正确化
+- 计时器表：CreateTimer 真分配 + TimerStart 存回调函数名（事件驱动铺路）
+- 单位状态存储：SetUnitState/GetUnitState life/mana/max（UNIT_STATE 常量 0-3）
+- 断言 5 项；81/81 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
