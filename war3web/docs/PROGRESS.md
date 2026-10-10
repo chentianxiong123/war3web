@@ -237,6 +237,14 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - TriggerRegisterGameStateEvent 事件注册（kind=8）
 - 断言 3 项；**100/100 全绿**（测试破百里程碑）+ 880 全局 + 18 数组对账保持
 
+### 3.21 玩家联盟矩阵 + 队伍 + 地点回收（提交 f603977）
+- **联盟矩阵**：SetPlayerAlliance 存 per-player 联盟标记，IsPlayerAlly/
+  IsPlayerEnemy（`!ally && a!==b`）还原——RTS 同盟判断语义生效
+- SetPlayerTeam（war3map.j Config 调用，消除该 unimpl）、
+  GetGameTypeSelected → 1（gametype MELEE 对齐 JS Convert.v）
+- RemoveLocation 真回收（交换删除）
+- 断言 5 项；105/105 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
