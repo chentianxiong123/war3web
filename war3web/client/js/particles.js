@@ -446,6 +446,9 @@ class Emitter {
  * effect can be moved and removed as one thing.
  */
 export function buildEmitters(root, loadTexture) {
+  // M2 步骤B 实测：ShaderMaterial 在 WebGPU 后端不兼容（NodeBuilder 报错）。
+  // 试点阶段 WebGPU 通道降级跳过粒子（步骤 C 以 TSL 重写后移除本降级）。
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('webgpu') === '1') return [];
   const out = [];
   root.updateWorldMatrix(true, true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
