@@ -168,6 +168,13 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - GetPlayerName（对齐 engine.js `Player N` 命名）、DisplayTextToPlayer 三件套
 - 断言 5 项（4 类型 round-trip + flush 后失效）；62/62 全绿 + 880 对账保持
 
+### 3.12 force 集合 + 物品对象表（提交 c2c7e9c）
+- force 表：CreateForce/ForceAddPlayer（去重）/ForceRemovePlayer/ForceClear/
+  ForceHasPlayer/ForceCountPlayers/**ForForce（同步枚举 + GetEnumPlayer）**
+- 物品表：CreateItem(typeId,x,y)/GetItemTypeId/GetItemX/Y/SetItemPosition/RemoveItem
+- 断言 5 项（force 去重/枚举求和、物品 typeId round-trip/坐标）
+  67/67 全绿 + 880 对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
