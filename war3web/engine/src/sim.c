@@ -82,15 +82,21 @@ static int clear_footprint(double x0, double y0, double x1, double y1, double ra
   return 1;
 }
 
-/** 最近可行走格（有界螺旋搜索）。 */
-static void nearest_walkable(double x, double y, int maxR, int* ocx, int* ocy) {
+/** 最近可行走格（有界螺旋搜索，pass = 半径足迹检查，对齐 JS pathing pass）。 */
+static void nearest_walkable(double x, double y, int maxR, double radius, int* ocx, int* ocy) {
   int cx = (int)floor((x - OX) / SIM_PCELL), cy = (int)floor((y - OY) / SIM_PCELL);
-  if (walkable(cx, cy)) { *ocx = cx; *ocy = cy; return; }
+  if (walkable(cx, cy)) {
+    double pwx = OX + (cx + 0.5) * SIM_PCELL, pwy = OY + (cy + 0.5) * SIM_PCELL;
+    if (clear_footprint(pwx, pwy, pwx, pwy, radius)) { *ocx = cx; *ocy = cy; return; }
+  }
   for (int r = 1; r <= maxR; r++)
     for (int dx = -r; dx <= r; dx++)
       for (int dy = -r; dy <= r; dy++) {
         if (fmax(abs(dx), abs(dy)) != r) continue;
-        if (walkable(cx + dx, cy + dy)) { *ocx = cx + dx; *ocy = cy + dy; return; }
+        if (walkable(cx + dx, cy + dy)) {
+          double pwx = OX + (cx + dx + 0.5) * SIM_PCELL, pwy = OY + (cy + dy + 0.5) * SIM_PCELL;
+          if (clear_footprint(pwx, pwy, pwx, pwy, radius)) { *ocx = cx + dx; *ocy = cy + dy; return; }
+        }
       }
   *ocx = -1; *ocy = -1;
 }
@@ -174,11 +180,12 @@ static int clear_line(double x0, double y0, double x1, double y1, double radius)
   return 1;
 }
 
-/** 世界坐标点序列写入 out（float2 对），返回点数（不含起点）；-1=无路径。 */
-int sim_find_path(double sx, double sy, double tx, double ty, float* out, int maxOut) {
+/** 世界坐标点序列写入 out（float2 对），返回点数（不含起点）；-1=无路径。
+ *  radius>0 时按 pathing.js Grid.path 的 pass 语义检查（含半径足迹）。 */
+int sim_find_path_r(double sx, double sy, double tx, double ty, float* out, int maxOut, double radius) {
   int s0, s1, t0, t1;
-  nearest_walkable(sx, sy, 24, &s0, &s1);
-  nearest_walkable(tx, ty, 24, &t0, &t1);
+  nearest_walkable(sx, sy, 24, radius, &s0, &s1);
+  nearest_walkable(tx, ty, 24, radius, &t0, &t1);
   if (s0 < 0 || t0 < 0) return -1;
   if (s0 == t0 && s1 == t1) {
     if (maxOut < 1) return -1;
@@ -213,7 +220,7 @@ int sim_find_path(double sx, double sy, double tx, double ty, float* out, int ma
       if (dx && dy && (!walkable(cx + dx, cy) || !walkable(cx, cy + dy))) continue;
       const double pwx0 = OX + (cx + 0.5) * SIM_PCELL, pwy0 = OY + (cy + 0.5) * SIM_PCELL;
       const double pwx1 = OX + (nx + 0.5) * SIM_PCELL, pwy1 = OY + (ny + 0.5) * SIM_PCELL;
-      if (!clear_footprint(pwx0, pwy0, pwx1, pwy1, 0)) continue;
+      if (!clear_footprint(pwx0, pwy0, pwx1, pwy1, radius)) continue;
       const double ng = g[cur] + (dx && dy ? SIM_SQRT2 : 1);
       if (ng < g[ni]) {
         g[ni] = ng; from[ni] = cur; f[ni] = ng + hx(ni, t0, t1);
@@ -237,7 +244,7 @@ int sim_find_path(double sx, double sy, double tx, double ty, float* out, int ma
   res[0] = pts[0]; res[1] = pts[1]; m = 1;
   int anchor = 0;
   for (int i = 2; i < n; i++) {
-    if (!clear_line(pts[2 * anchor], pts[2 * anchor + 1], pts[2 * i], pts[2 * i + 1], 0)) {
+    if (!clear_line(pts[2 * anchor], pts[2 * anchor + 1], pts[2 * i], pts[2 * i + 1], radius)) {
       res[2 * m] = pts[2 * (i - 1)]; res[2 * m + 1] = pts[2 * (i - 1) + 1]; m++;
       anchor = i - 1;
     }
@@ -253,7 +260,99 @@ int sim_find_path(double sx, double sy, double tx, double ty, float* out, int ma
   return outN;
 }
 
+int sim_find_path(double sx, double sy, double tx, double ty, float* out, int maxOut) {
+  return sim_find_path_r(sx, sy, tx, ty, out, maxOut, 0);   // 壳：radius 0（Grid.path 默认对照）
+}
+
 int sim_clear_foot(double x0, double y0, double x1, double y1, double radius) {
   return clear_footprint(x0, y0, x1, y1, radius);
 }
 int sim_connected_i(int start, int goal) { return connected_idx(start, goal); }
+
+// ------------------------------------------------------------------ 单位移动推进
+// 对齐 world.js stepMove 的 move 分支（单单位、无实体阻挡）+ movementPath 快路径：
+//   1) 直线可达（canAdvance 通过）→ 单段直达目标；
+//   2) 否则 nearestWalkable 入口 → Grid.path A*；
+//   3) 逐 tick：turnToward 转向（预算 turnRate·dt/0.03）→ 沿 path[0] 推进
+//      stepLen = speed·dt → canAdvance(扫掠圆盘 radius) → 到达则 path 耗尽。
+
+static double U_X, U_Y, U_FACING;       // 单位状态（单单位场景）
+static double* UP; int UN, UCAP;        // 当前路径（世界坐标 float2 对）
+
+void sim_set_unit(double x, double y, double facing) {
+  U_X = x; U_Y = y; U_FACING = facing; UN = 0;
+}
+int sim_set_path(const float* pts, int n) {
+  if (n < 0) return 0;
+  if (n > UCAP) { UCAP = n ? n : 8; UP = (double*)realloc(UP, sizeof(double) * 2 * (size_t)UCAP); }
+  for (int i = 0; i < n; i++) { UP[2 * i] = pts[2 * i]; UP[2 * i + 1] = pts[2 * i + 1]; }
+  UN = n;
+  return 1;
+}
+
+/** movementPath（快路径优先）+ 单位逐 tick 推进；输出 outState[6] =
+ *  [arriveTick, pathLen, endX, endY, endErr, segCount]；返回 1 到达 / 0 未达 /
+ *  -1 无路径。 */
+int sim_run_move(double sx, double sy, double tx, double ty,
+                 double radius, double speed, double turnRate, double dt,
+                 int maxTicks, float* outState) {
+  // movementPath：快路径（直线可达 → 单段）
+  if (clear_footprint(sx, sy, tx, ty, radius)) {
+    U_X = sx; U_Y = sy; UN = 1;
+    if (UP == NULL) { UCAP = 8; UP = (double*)malloc(sizeof(double) * 2 * (size_t)UCAP); }
+    UP[0] = tx; UP[1] = ty;
+  } else {
+    // 慢路径：nearestWalkable 入口 + A*
+    int s0, s1, t0, t1;
+    nearest_walkable(sx, sy, 24, radius, &s0, &s1);
+    nearest_walkable(tx, ty, 24, radius, &t0, &t1);
+    if (s0 < 0 || t0 < 0) return -1;
+    const double ex = OX + (s0 + 0.5) * SIM_PCELL, ey = OY + (s1 + 0.5) * SIM_PCELL;
+    if (!clear_footprint(sx, sy, ex, ey, radius)) return -1;
+    float buf[512];
+    const int n = sim_find_path_r(ex, ey, tx, ty, buf, 256, radius);
+    if (n < 0) return -1;
+    U_X = sx; U_Y = sy; UN = n + 1;
+    if (UN > UCAP) { UCAP = UN + 8; UP = (double*)realloc(UP, sizeof(double) * 2 * (size_t)UCAP); }
+    UP[0] = ex; UP[1] = ey;
+    for (int i = 0; i < n; i++) { UP[2 * (i + 1)] = buf[2 * i]; UP[2 * (i + 1) + 1] = buf[2 * i + 1]; }
+  }
+  double pathLen = 0, px = sx, py = sy;
+  int arrive = -1;
+  for (int t = 0; t < maxTicks && UN > 0; t++) {
+    const double gx = UP[0], gy = UP[1];
+    // turnToward
+    double angle = atan2(gy - U_Y, gx - U_X);
+    double delta = atan2(sin(angle - U_FACING), cos(angle - U_FACING));
+    if (fabs(delta) >= 1e-9) {
+      double budget = fmax(0, turnRate) * dt / 0.03;
+      double amount = fmin(fabs(delta), budget);
+      U_FACING += (delta > 0 ? 1 : -1) * amount;
+      U_FACING = atan2(sin(U_FACING), cos(U_FACING));
+      if (fabs(delta) - amount >= 1e-9) { pathLen += hypot(U_X - px, U_Y - py); px = U_X; py = U_Y; continue; }
+    }
+    const double dx = gx - U_X, dy = gy - U_Y, d = hypot(dx, dy);
+    const double stepLen = speed * dt;
+    const double fraction = d > 0 ? fmin(1, stepLen / d) : 0;
+    const double nx = U_X + dx * fraction, ny = U_Y + dy * fraction;
+    if (!clear_footprint(U_X, U_Y, nx, ny, radius)) {   // canAdvance（无实体）
+      pathLen += hypot(U_X - px, U_Y - py); px = U_X; py = U_Y;
+      continue;   // 撞墙停（不推进，等重寻路由上层处理）
+    }
+    U_X = nx; U_Y = ny;
+    pathLen += hypot(U_X - px, U_Y - py); px = U_X; py = U_Y;
+    if (hypot(U_X - tx, U_Y - ty) < 40) { arrive = t; break; }   // golden 到达判定（0-based，距目标 40 内）
+    if (d <= stepLen) {
+      // path.shift()
+      for (int i = 1; i < UN; i++) { UP[2 * (i - 1)] = UP[2 * i]; UP[2 * (i - 1) + 1] = UP[2 * i + 1]; }
+      UN--;
+      if (UN == 0) { arrive = t; break; }
+    }
+  }
+  outState[0] = (float)arrive;                     // arriveTick（-1 未达）
+  outState[1] = (float)pathLen;
+  outState[2] = (float)U_X; outState[3] = (float)U_Y;
+  outState[4] = (float)hypot(U_X - tx, U_Y - ty);  // endErr
+  outState[5] = arrive >= 0 ? 1 : 0;
+  return arrive >= 0 ? 1 : 0;
+}

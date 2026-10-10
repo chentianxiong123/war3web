@@ -43,6 +43,7 @@ for (const r of runs) {
   let arriveTick = null;
   let pathLen = 0;
   let prev = [u.x, u.y];
+  let arrivePathLen = null, arriveEndErr = null, arriveEnd = null;
   const samples = [];
   for (let t = 0; t < TICKS; t++) {
     w.step();
@@ -50,13 +51,18 @@ for (const r of runs) {
     const dx = u.x - prev[0], dy = u.y - prev[1];
     pathLen += Math.sqrt(dx * dx + dy * dy);
     prev = [u.x, u.y];
-    if (arriveTick == null && Math.hypot(u.x - r.tx, u.y - r.ty) < 40) arriveTick = t;
+    if (arriveTick == null && Math.hypot(u.x - r.tx, u.y - r.ty) < 40) {
+      arriveTick = t;                       // 0-based，与 C 对齐
+      arrivePathLen = +pathLen.toFixed(1);  // arrive 时刻快照（C 对照基准）
+      arriveEnd = [Math.round(u.x), Math.round(u.y)];
+      arriveEndErr = +Math.hypot(u.x - r.tx, u.y - r.ty).toFixed(1);
+    }
   }
   allRuns.push({
     from: start, to: [r.tx, r.ty],
-    arriveTick,
-    arriveSec: arriveTick == null ? null : +(arriveTick / 30).toFixed(2),
-    pathLen: +pathLen.toFixed(1),
+    arriveTick, arriveSec: arriveTick == null ? null : +(arriveTick / 30).toFixed(2),
+    arrivePathLen, arriveEnd, arriveEndErr,
+    finalPathLen: +pathLen.toFixed(1),
     end: [Math.round(u.x), Math.round(u.y)],
     endErr: +Math.hypot(u.x - r.tx, u.y - r.ty).toFixed(1),
     samples,
@@ -70,9 +76,9 @@ console.log(JSON.stringify({ meta: { seconds: SECONDS, ticks: TICKS }, runs: all
 console.log('golden 已存档:', OUT);
 // 场景有效性门禁：黄金基准必须全部到达（endErr<=40），否则 C 移植后
 // 无从对照"到达"语义
-const bad = allRuns.filter((r) => r.endErr > 40);
+const bad = allRuns.filter((r) => r.arriveEndErr == null || r.arriveEndErr > 40);
 if (bad.length) {
-  console.error('FAIL: ' + bad.length + ' 个场景未到达（endErr>40）——换坐标重试');
+  console.error('FAIL: ' + bad.length + ' 个场景未到达（arriveEndErr>40 或未到达）——换坐标重试');
   process.exit(1);
 }
 console.log('OK: 全部场景到达，golden 基准有效');

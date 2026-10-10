@@ -70,8 +70,37 @@ for (let s = 0; s < scenes.length; s++) {
   }
 }
 
-eng._free(walkPtr); eng._free(outPtr);
+eng._free(outPtr);
 
 console.log(`\nsim_test: ${pass}/${scenes.length} 场景 C/JS 寻路一致`);
 process.exitCode = fail ? 1 : 0;
+
+
+// ---- M4 阶段1 端到端：C 移动推进 vs golden（到达耗时/路径长度/终点）----
+import { World } from "../server/world.js";
+const golden = JSON.parse(fs.readFileSync(path.join(ROOT, "goldens/path_trace.json"), "utf8"));
+const wv = new World();
+const probe = wv.createUnit({ index: 0, team: 0 }, "hpea", 1152, 1088, 0);
+const SPEED = probe.moveSpeed, RADIUS = probe.radius, TURN = probe.turnRate ?? 0.6;
+const outState = eng._malloc(6 * 8);
+
+let mvPass = 0, mvFail = 0;
+for (const r of golden.runs) {
+  const [sx, sy] = r.from, [tx, ty] = r.to;
+  const rc = eng._sim_run_move(sx, sy, tx, ty, RADIUS, SPEED, TURN, 1 / 30, 45 * 30, outState);
+  const st = [];
+  for (let i = 0; i < 6; i++) st.push(eng.HEAPF32[(outState >> 2) + i]);
+  const got = { arriveTick: st[0], pathLen: st[1], end: [st[2], st[3]], endErr: st[4] };
+  const jsArrive = Math.round((r.arriveSec ?? 45) * 30);
+  const dtick = Math.abs(got.arriveTick - jsArrive);
+  const dlen = r.arrivePathLen ? Math.abs(got.pathLen - r.arrivePathLen) / r.arrivePathLen : 1;
+  const ok = got.arriveTick >= 0 && dtick <= 6 && dlen <= 0.03 && got.endErr <= r.arriveEndErr + 5;
+  if (ok) { mvPass++; console.log(`golden场景 (${sx},${sy})->(${tx},${ty}): OK C到达 ${got.arriveTick}tick(${+(got.arriveTick/30).toFixed(2)}s) JS ${r.arriveSec}s | 路径 ${got.pathLen.toFixed(1)} vs ${r.arrivePathLen} | endErr ${got.endErr.toFixed(1)}`); }
+  else { mvFail++; console.log(`golden场景 (${sx},${sy})->(${tx},${ty}): FAIL C到达 ${got.arriveTick} JS ${r.arriveSec}s C路径 ${got.pathLen.toFixed(1)} JS ${r.arrivePathLen} C endErr ${got.endErr.toFixed(1)}`); }
+}
+eng._free(outState);
+console.log(`\nsim_move vs golden: ${mvPass}/${golden.runs.length} 到达行为一致`);
+if (mvFail) process.exitCode = 1;
+eng._free(walkPtr);
+
 

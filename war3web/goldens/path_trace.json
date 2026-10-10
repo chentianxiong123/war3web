@@ -14,7 +14,13 @@
    ],
    "arriveTick": 86,
    "arriveSec": 2.87,
-   "pathLen": 555.7,
+   "arrivePathLen": 535,
+   "arriveEnd": [
+    1488,
+    1467
+   ],
+   "arriveEndErr": 34.8,
+   "finalPathLen": 555.7,
    "end": [
     1488,
     1488
@@ -32,7 +38,13 @@
    ],
    "arriveTick": 57,
    "arriveSec": 1.9,
-   "pathLen": 406.4,
+   "arrivePathLen": 367.3,
+   "arriveEnd": [
+    2168,
+    2423
+   ],
+   "arriveEndErr": 39.1,
+   "finalPathLen": 406.4,
    "end": [
     2200,
     2400
@@ -50,7 +62,13 @@
    ],
    "arriveTick": 33,
    "arriveSec": 1.1,
-   "pathLen": 234.9,
+   "arrivePathLen": 196.3,
+   "arriveEnd": [
+    1728,
+    2774
+   ],
+   "arriveEndErr": 38.6,
+   "finalPathLen": 234.9,
    "end": [
     1700,
     2800
@@ -68,7 +86,13 @@
    ],
    "arriveTick": 63,
    "arriveSec": 2.1,
-   "pathLen": 444.9,
+   "arrivePathLen": 405.3,
+   "arriveEnd": [
+    1863,
+    1385
+   ],
+   "arriveEndErr": 39.6,
+   "finalPathLen": 444.9,
    "end": [
     1900,
     1400
@@ -86,7 +110,13 @@
    ],
    "arriveTick": 46,
    "arriveSec": 1.53,
-   "pathLen": 333.4,
+   "arrivePathLen": 297.7,
+   "arriveEnd": [
+    2165,
+    2694
+   ],
+   "arriveEndErr": 35.8,
+   "finalPathLen": 333.4,
    "end": [
     2200,
     2700
