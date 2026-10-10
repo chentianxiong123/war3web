@@ -140,6 +140,21 @@ const ok2 = segOk && dtick2 <= 6 && posOk;
 console.log(`碰撞场景 (hold 挡路 + 绕行): ${ok2 ? "OK" : "FAIL"} 路径段数 C ${cSegs} vs JS ${jsSegs} | 到达 tick C ${cArrive2} vs JS ${jsArrive2} | 终位 C [${Math.round(cEnd[0])},${Math.round(cEnd[1])}] vs JS [${Math.round(b2.x)},${Math.round(b2.y)}]`);
 if (!ok2) process.exitCode = 1;
 
+// ---- sim_move 统一接口 smoke（wasm_move 收口）：golden 场景1 单 tick 命令链 ----
+const sm = eng._malloc(4 * 4);
+eng._sim_clear_all();
+eng._sim_spawn(0, 1232, 1040, 0, SPEED, RADIUS, 0, 0);
+let smArrive = null;
+for (let t = 0; t < 45 * 30; t++) {
+  eng._sim_move(0, 1500, 1500, 1 / 30, sm);
+  const bx = eng.HEAPF32[sm >> 2], by = eng.HEAPF32[(sm >> 2) + 1];
+  if (smArrive == null && Math.hypot(bx - 1500, by - 1500) < 40) smArrive = t;
+}
+const smOk = smArrive != null && Math.abs(smArrive - 86) <= 6;
+console.log(`sim_move 收口 smoke: 到达 tick ${smArrive} vs golden 86: ${smOk ? "OK" : "FAIL"}`);
+if (!smOk) process.exitCode = 1;
+eng._free(sm);
+
 eng._free(walkPtr);
 
 

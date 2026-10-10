@@ -38,6 +38,7 @@ typedef struct {
   double speed, radius;
   int alive, pathingOff, fly;
   long long bodyRepathAt;
+  double goalX, goalY;                 // 当前命令目标（重寻路判据）
   double* path; int nPath, capPath;
 } SimUnit;
 static SimUnit U[SIM_MAX];
@@ -47,7 +48,7 @@ void sim_spawn(int id, double x, double y, double facing, double speed, double r
   U[id].x = x; U[id].y = y; U[id].facing = facing;
   U[id].speed = speed; U[id].radius = radius;
   U[id].alive = 1; U[id].fly = fly; U[id].pathingOff = pathingOff;
-  U[id].nPath = 0;
+  U[id].nPath = 0; U[id].goalX = 1e18; U[id].goalY = 1e18;   // 初始目标无效 → 首次必寻路
 }
 void sim_clear_all(void) {
   for (int i = 0; i < SIM_MAX; i++) { U[i].alive = 0; U[i].nPath = 0; }
@@ -491,44 +492,46 @@ int sim_order_move(int id, double tx, double ty) {
   return 1;
 }
 
+/** 单单位 move 分支推进一步（对齐 stepMove 2834-2855；sim_tick 与 sim_move 共用）。 */
+static void step_move_unit(SimUnit* u, int id, double dt) {
+  if (!u->alive || u->nPath == 0) return;
+  const double gx = u->path[0], gy = u->path[1];
+  // turnToward（预算 turnRate·dt/0.03）
+  const double angle = atan2(gy - u->y, gx - u->x);
+  double delta = atan2(sin(angle - u->facing), cos(angle - u->facing));
+  if (fabs(delta) >= 1e-9) {
+    const double budget = 0.6 * dt / 0.03;
+    const double amount = fmin(fabs(delta), budget);
+    u->facing += (delta > 0 ? 1 : -1) * amount;
+    u->facing = atan2(sin(u->facing), cos(u->facing));
+    if (fabs(delta) - amount >= 1e-9) return;   // 转向未到位，本 tick 不动
+  }
+  const double dx = gx - u->x, dy = gy - u->y, d = hypot(dx, dy);
+  const double stepLen = u->speed * dt;
+  const double fraction = d > 0 ? fmin(1, stepLen / d) : 0;
+  const double nx = u->x + dx * fraction, ny = u->y + dy * fraction;
+  int b2[SIM_MAX], nb2 = blockers_for(u, nx, ny, b2);   // step 扫掠矩形候选
+  if (!can_advance(u, nx, ny, nb2, b2)) {
+    // 撞墙：250ms 冷却后重寻路到 path 终点（bodyRepathAt）
+    if (u->bodyRepathAt <= SIM_NOW) {
+      const double ggx = u->path[2 * (u->nPath - 1)], ggy = u->path[2 * (u->nPath - 1) + 1];
+      sim_order_move(id, ggx, ggy);
+      u->bodyRepathAt = SIM_NOW + (long long)(0.25 / dt);
+    }
+    return;
+  }
+  u->x = nx; u->y = ny;
+  if (d <= stepLen) {
+    for (int i = 1; i < u->nPath; i++) { u->path[2 * (i - 1)] = u->path[2 * i]; u->path[2 * (i - 1) + 1] = u->path[2 * i + 1]; }
+    u->nPath--;
+    if (u->nPath == 0) { /* 到达 → idle（path 空即停） */ }
+  }
+}
+
 /** 全单位推进一个 tick（move 分支；对齐 stepMove 2834-2855）。 */
 void sim_tick(double dt) {
   SIM_NOW++;
-  for (int id = 0; id < SIM_MAX; id++) {
-    SimUnit* u = &U[id];
-    if (!u->alive || u->nPath == 0) continue;
-    const double gx = u->path[0], gy = u->path[1];
-    // turnToward（预算 turnRate·dt/0.03）
-    const double angle = atan2(gy - u->y, gx - u->x);
-    double delta = atan2(sin(angle - u->facing), cos(angle - u->facing));
-    if (fabs(delta) >= 1e-9) {
-      const double budget = 0.6 * dt / 0.03;
-      const double amount = fmin(fabs(delta), budget);
-      u->facing += (delta > 0 ? 1 : -1) * amount;
-      u->facing = atan2(sin(u->facing), cos(u->facing));
-      if (fabs(delta) - amount >= 1e-9) continue;   // 转向未到位，本 tick 不动
-    }
-    const double dx = gx - u->x, dy = gy - u->y, d = hypot(dx, dy);
-    const double stepLen = u->speed * dt;
-    const double fraction = d > 0 ? fmin(1, stepLen / d) : 0;
-    const double nx = u->x + dx * fraction, ny = u->y + dy * fraction;
-    int b2[SIM_MAX], nb2 = blockers_for(u, nx, ny, b2);   // step 扫掠矩形候选
-    if (!can_advance(u, nx, ny, nb2, b2)) {
-      // 撞墙：250ms 冷却后重寻路到 path 终点（bodyRepathAt）
-      if (u->bodyRepathAt <= SIM_NOW) {
-        const double ggx = u->path[2 * (u->nPath - 1)], ggy = u->path[2 * (u->nPath - 1) + 1];
-        sim_order_move(id, ggx, ggy);
-        u->bodyRepathAt = SIM_NOW + (long long)(0.25 / dt);
-      }
-      continue;
-    }
-    u->x = nx; u->y = ny;
-    if (d <= stepLen) {
-      for (int i = 1; i < u->nPath; i++) { u->path[2 * (i - 1)] = u->path[2 * i]; u->path[2 * (i - 1) + 1] = u->path[2 * i + 1]; }
-      u->nPath--;
-      if (u->nPath == 0) { /* 到达 → idle（path 空即停） */ }
-    }
-  }
+  for (int id = 0; id < SIM_MAX; id++) step_move_unit(&U[id], id, dt);
 }
 
 /** 读单位状态：out[4] = x, y, facing, nPath。 */
@@ -543,4 +546,19 @@ int sim_get_path(int id, float* out, int maxOut) {
   const int n = U[id].nPath < maxOut ? U[id].nPath : maxOut;
   for (int i = 0; i < n; i++) { out[2 * i] = (float)U[id].path[2 * i]; out[2 * i + 1] = (float)U[id].path[2 * i + 1]; }
   return n;
+}
+
+/** 统一命令接口（wasm_move 收口）：给单位下移动命令并立即推进一个 tick。
+ *  目标变化或路径耗尽时重新寻路；out[3] = x, y, facing, nPath。返回 1 有效。 */
+int sim_move(int id, double tx, double ty, double dt, float* out) {
+  SimUnit* u = &U[id];
+  if (!u->alive) return -1;
+  if (u->nPath == 0 || u->goalX != tx || u->goalY != ty) {
+    if (sim_order_move(id, tx, ty) < 0) return -1;   // 寻路失败（不可达）
+    u->goalX = tx; u->goalY = ty;
+  }
+  SIM_NOW++;
+  step_move_unit(u, id, dt);
+  if (out) { out[0] = (float)u->x; out[1] = (float)u->y; out[2] = (float)u->facing; out[3] = (float)u->nPath; }
+  return 1;
 }
