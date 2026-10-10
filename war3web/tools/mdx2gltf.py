@@ -388,7 +388,24 @@ def convert(path, out_dir=OUTDIR, name=None):
                 # exactly nothing, forever.
                 **_pair('rate', seq_track(n['tracks'].get('KP2E'), M['sequences'],
                                           round(float(n['emissionRate']), 4),
-                                          M['globalSeqs']))))
+                                          M['globalSeqs'])),
+                # The emitter's other parameters animate too -- speed, spread,
+                # gravity, latitude, length, width -- and sit static beside
+                # rate. A breath attack that accelerates, a blast that widens
+                # as it travels: that lived in the track and none of it crossed
+                # into the client.
+                **_pair('speedCurve', seq_track(n['tracks'].get('KP2S'), M['sequences'],
+                                                round(float(n['speed']), 4), M['globalSeqs'])),
+                **_pair('variationCurve', seq_track(n['tracks'].get('KP2R'), M['sequences'],
+                                                    round(float(n['variation']), 4), M['globalSeqs'])),
+                **_pair('gravityCurve', seq_track(n['tracks'].get('KP2G'), M['sequences'],
+                                                  round(float(n['gravity']), 4), M['globalSeqs'])),
+                **_pair('latitudeCurve', seq_track(n['tracks'].get('KP2L'), M['sequences'],
+                                                   round(float(n['latitude']), 4), M['globalSeqs'])),
+                **_pair('lengthCurve', seq_track(n['tracks'].get('KP2N'), M['sequences'],
+                                                 round(float(n['length']), 4), M['globalSeqs'])),
+                **_pair('widthCurve', seq_track(n['tracks'].get('KP2W'), M['sequences'],
+                                                round(float(n['width']), 4), M['globalSeqs']))))
         # An event object fires at a keyframe: blood hits the ground, a foot
         # lands, a body part is thrown, a sound plays. The node's name is a
         # four-character kind and a four-character id into one of Warcraft III's
@@ -415,7 +432,19 @@ def convert(path, out_dir=OUTDIR, name=None):
                 lifespan=n['lifespan'], speed=n['initVelocity'],
                 model=n['spawnModel'],
                 **_pair('vis', seq_visibility(n['tracks'].get('KPEV'),
-                                              M['sequences'], M['globalSeqs']))))
+                                              M['sequences'], M['globalSeqs'])),
+                # ParticleEmitter1's throw parameters (spread, gravity, life,
+                # speed) animate the same way; only visibility crossed over.
+                **_pair('longitudeCurve', seq_track(n['tracks'].get('KPLN'), M['sequences'],
+                                                    round(float(n['longitude']), 4), M['globalSeqs'])),
+                **_pair('latitudeCurve', seq_track(n['tracks'].get('KPLT'), M['sequences'],
+                                                   round(float(n['latitude']), 4), M['globalSeqs'])),
+                **_pair('gravityCurve', seq_track(n['tracks'].get('KPEE'), M['sequences'],
+                                                  round(float(n['gravity']), 4), M['globalSeqs'])),
+                **_pair('lifespanCurve', seq_track(n['tracks'].get('KPEG'), M['sequences'],
+                                                   round(float(n['lifespan']), 4), M['globalSeqs'])),
+                **_pair('speedCurve', seq_track(n['tracks'].get('KPES'), M['sequences'],
+                                               round(float(n['initVelocity']), 4), M['globalSeqs']))))
         # An omni light. Directional ones belong to the day/night cycle models,
         # which nothing here uses, so only point lights are carried across.
         if n.get('type') == 'LITE' and n.get('lightType') == 0:
@@ -438,7 +467,31 @@ def convert(path, out_dir=OUTDIR, name=None):
                 gravity=n['gravity'], texture=uri,
                 filter=(L['filterMode'] if L else 0),
                 **_pair('vis', seq_visibility(n['tracks'].get('KRVS'),
-                                              M['sequences'], M['globalSeqs']))))
+                                              M['sequences'], M['globalSeqs'])),
+                # A ribbon's shape (height above/below, alpha, colour, texture
+                # slot) can animate mid-trail; only visibility was carried over.
+                **_pair('heightAboveCurve', seq_track(n['tracks'].get('KRHA'), M['sequences'],
+                                                      round(float(n['heightAbove']), 4), M['globalSeqs'])),
+                **_pair('heightBelowCurve', seq_track(n['tracks'].get('KRHB'), M['sequences'],
+                                                      round(float(n['heightBelow']), 4), M['globalSeqs'])),
+                **_pair('alphaCurve', seq_track(n['tracks'].get('KRAL'), M['sequences'],
+                                                round(float(n['alpha']), 4), M['globalSeqs'])),
+                **_pair('colorCurve', seq_track_vec(n['tracks'].get('KRCO'), M['sequences'],
+                                                    [float(x) for x in n['color']], 3, M['globalSeqs'])),
+                **_pair('textureSlotCurve', seq_track(n['tracks'].get('KRTX'), M['sequences'],
+                                                      round(float(n['textureSlot']), 4), M['globalSeqs']))))
+        # A bone or helper's flags word carries its display hint: billboard
+        # (face the camera) and per-axis locks. Never decoded here, so a
+        # billboarded sprite rendered as a flat slab in whatever pose the
+        # bone held. Particles already use their flags word for emitter
+        # parameters (PRE2_FLAGS above), so those are left alone.
+        fl = n.get('flags', 0)
+        if fl and n.get('type') not in ('PRE2', 'PREM', 'RIBB', 'LITE', 'event'):
+            bb = dict(billboard=bool(fl & 0x1), lockX=bool(fl & 0x2),
+                      lockY=bool(fl & 0x4), lockZ=bool(fl & 0x8))
+            if any(bb.values()):
+                nd['extras'] = {**nd.get('extras', {}),
+                                'w3node': {k: v for k, v in bb.items() if v}}
         g.j['nodes'].append(nd)
     for n in nodes:
         parent = 0 if n['parentId'] < 0 else nid[n['parentId']]
@@ -498,10 +551,23 @@ def convert(path, out_dir=OUTDIR, name=None):
             s_e, s_s = seq_track_vec(ta.get('KTAS'), M['sequences'], (1.0, 1.0), 2,
                                      M['globalSeqs'])
             uv = dict(t=t_e, tStep=t_s, r=r_e, rStep=r_s, s=s_e, sStep=s_s)
+        # KMTF: a layer can swap which texture it shows mid-animation -- a
+        # shield shedding its glow, a buff's skin breaking. Parsed since the
+        # start, never carried across; hand the (frame, texture) list over so
+        # the client can honour it.
+        swaps = None
+        if L and (L.get('tracks') or {}).get('KMTF'):
+            tr = L['tracks']['KMTF']
+            tex_of = M['textures']
+            swaps = [[round(k[0] / 1000.0, 4),
+                      tex_uri(tex_of[k[1]].get('path'), tex_of[k[1]].get('replaceableId'))
+                      if 0 <= k[1] < len(tex_of) else None]
+                     for k in track_keys(tr)]
         matmeta.append(dict(filter=FILTER_NAME.get(fm, 'none'), unshaded=bool(sh & 0x1),
                             twoSided=bool(sh & 0x10), noDepthTest=bool(sh & 0x40),
                             noDepthSet=bool(sh & 0x80), priority=mat['priorityPlane'],
-                            texture=uri, teamColor=team, uv=uv))
+                            texture=uri, teamColor=team, uv=uv,
+                            textureSwaps=swaps))
 
     # -------------------------------------------------------------- geosets
     prims, geometa = [], []
@@ -527,13 +593,18 @@ def convert(path, out_dir=OUTDIR, name=None):
             for k, b in enumerate(ids):
                 J[vi, k] = boneIndex.get(b, 0)
             W[vi, :len(ids)] = 1.0 / len(ids)
-        prim = dict(attributes=dict(
-                        POSITION=g.acc(V.reshape(-1), 'VEC3', 'f', 34962, minmax=True),
-                        NORMAL=g.acc(N.reshape(-1), 'VEC3', 'f', 34962),
-                        TEXCOORD_0=g.acc(UV.reshape(-1), 'VEC2', 'f', 34962),
-                        JOINTS_0=g.acc(J.reshape(-1), 'VEC4', 'H', 34962),
-                        WEIGHTS_0=g.acc(W.reshape(-1), 'VEC4', 'f', 34962)),
-                    indices=g.acc(IDX, 'SCALAR', 'I', 34963), mode=4)
+        attrs = dict(POSITION=g.acc(V.reshape(-1), 'VEC3', 'f', 34962, minmax=True),
+                     NORMAL=g.acc(N.reshape(-1), 'VEC3', 'f', 34962),
+                     TEXCOORD_0=g.acc(UV.reshape(-1), 'VEC2', 'f', 34962),
+                     JOINTS_0=g.acc(J.reshape(-1), 'VEC4', 'H', 34962),
+                     WEIGHTS_0=g.acc(W.reshape(-1), 'VEC4', 'f', 34962))
+        # A geoset can carry more than one UV layer (coordId > 0); the extra
+        # sets are used by multi-layer materials. Only layer 0 ever crossed.
+        if len(geo['uvs']) > 1:
+            UV1 = np.array(geo['uvs'][1], np.float32).reshape(-1, 2)
+            if len(UV1) == len(V):
+                attrs['TEXCOORD_1'] = g.acc(UV1.reshape(-1), 'VEC2', 'f', 34962)
+        prim = dict(attributes=attrs, indices=g.acc(IDX, 'SCALAR', 'I', 34963), mode=4)
         if geo['materialId'] in matmap: prim['material'] = matmap[geo['materialId']]
         prims.append(prim)
         geometa.append(dict(material=geo['materialId'], tris=len(IDX)//3,
@@ -674,6 +745,25 @@ def convert(path, out_dir=OUTDIR, name=None):
         if any(mcurves):
             sm['matAlphaCurve'] = mcurves
 
+        # The geoset's own colour track (KGAC) is a 3-vector beside the alpha's
+        # scalar -- the red flash of a rage, the blue coat of an ice armour.
+        # It was parsed but never crossed, so every colour change landed on the
+        # static value and the flash played as a texture that was always lit.
+        gcolors = []
+        for gi in range(ngeo):
+            a = geo_of_anim.get(gi)
+            tr = (a.get('tracks') or {}).get('KGAC') if a else None
+            keys = [k for k in track_keys(tr) if s0 <= k[0] <= s1] if tr else []
+            if not keys:
+                gcolors.append(None)
+                continue
+            pts = [[round((k[0] - s0) / 1000.0, 4),
+                    [round(float(x), 4) for x in np.atleast_1d(k[1])[:3]]]
+                   for k in keys]
+            gcolors.append(pts if len({tuple(v) for _, v in pts}) > 1 else None)
+        if any(gcolors):
+            sm['geosetColorCurve'] = gcolors
+
     # ------------------------------------------------- geoset visibility meta
     geoanim = []
     for a in M['geosetAnims']:
@@ -692,7 +782,10 @@ def convert(path, out_dir=OUTDIR, name=None):
                 sequences=seqmeta, materials=matmeta, geosets=geometa,
                 geosetAnims=geoanim,
                 attachments=[dict(name=a['name'], id=a['attachmentId'],
-                                  objectId=a['objectId'], parentId=a['parentId'])
+                                  objectId=a['objectId'], parentId=a['parentId'],
+                                  **_pair('vis', seq_visibility(
+                                      (a.get('tracks') or {}).get('KATV'),
+                                      M['sequences'], M['globalSeqs'])))
                              for a in M['attachments']],
                 collisions=[dict(shape=c['shape'], verts=c['verts'],
                                  radius=c.get('radius')) for c in M['collisions']],
