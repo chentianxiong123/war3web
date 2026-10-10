@@ -1062,7 +1062,7 @@ static void free_ast(Ast* ast) {
 // exec_block，函数调用走 C 递归，natives 用内嵌小表，返回值沿调用链上抛。
 
 typedef struct VArr VArr;
-enum { V_INT, V_REAL, V_BOOL, V_NULL, V_STR, V_ARR };
+enum { V_INT, V_REAL, V_BOOL, V_NULL, V_STR, V_ARR, V_HANDLE };
 typedef struct {
   int k;                 // V_INT V_REAL V_BOOL V_NULL V_STR V_ARR
   long long i;
@@ -1085,6 +1085,8 @@ typedef struct {
   Value* gvals;                  // 全局值（按 GlobalDecl 下标）
   VScope* scope;                 // 当前作用域（用于 natives 的参数求值上下文）
   long long opCount, opLimit;    // 每线程 runaway 护栏（同 JS 8000000）
+  int handles;                   // handle id 分配器（0x100000 起，对齐 JS nextHandleId）
+  const char** callNames; int nCalls, capCalls;  // 已实现 native 调用名（去重，trace 证据）
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1099,6 +1101,11 @@ static Value v_str(Vm* vm, const char* s) {
   v.k = V_STR; v.s = a_str(&vm->ast->ar, s);
   return v;
 }
+static Value v_handle(Vm* vm) {
+  Value v; memset(&v, 0, sizeof v);
+  v.k = V_HANDLE; v.i = 0x100000 + vm->handles++;
+  return v;
+}
 
 static int truthy(Value v) {
   switch (v.k) {
@@ -1106,6 +1113,7 @@ static int truthy(Value v) {
     case V_REAL: return v.f != 0;
     case V_BOOL: return v.i != 0;
     case V_STR: return v.s != NULL;
+    case V_HANDLE: return 1;
     default: return 0;
   }
 }
@@ -1165,39 +1173,169 @@ static const char* r2s_buf(Vm* vm, double f) {
   snprintf(tmp, sizeof tmp, "%.6g", f);
   return a_str(&vm->ast->ar, tmp);
 }
+typedef Value (*NativeFn)(Vm* vm, Expr** args, int nargs, VScope* scope);
+typedef struct { const char* name; NativeFn fn; } NativeEntry;
+
+static Value narg(Vm* vm, Expr** args, int nargs, int idx, VScope* scope) {
+  return idx < nargs ? eval_expr(vm, args[idx], scope) : v_null();
+}
+
+// 环境/配置 natives：对齐 engine.js 的空实现语义（本轮只记录/丢弃）
+static Value n_void(Vm* vm, Expr** a, int n, VScope* s) { (void)vm; (void)a; (void)n; (void)s; return v_null(); }
+// handle 工厂：JS 侧返回 Handle 对象，C 侧用递增 id 的非空值
+static Value n_handle(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_handle(vm); }
+static Value n_0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_real(0); }
+
+static Value n_log(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  if (v.k == V_STR) b_put(&vm->log, v.s);
+  else if (v.k == V_INT) b_put(&vm->log, i2s_buf(vm, v.i));
+  else if (v.k == V_REAL) b_put(&vm->log, r2s_buf(vm, v.f));
+  else b_put(&vm->log, "null");
+  b_put(&vm->log, "\n");
+  return v_null();
+}
+static Value n_i2s(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  return v_str(vm, i2s_buf(vm, v.k == V_INT ? v.i : (long long)v.f));
+}
+static Value n_r2i(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  double d = v.k == V_REAL ? v.f : (double)v.i;
+  return v_int(d < 0 ? (long long)(d - 0.5) : (long long)(d + 0.5));  // trunc 对齐 vm.js
+}
+static Value n_i2r(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  return v_real(v.k == V_INT ? (double)v.i : v.f);
+}
+static Value n_r2s(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  return v_str(vm, r2s_buf(vm, v.k == V_REAL ? v.f : (double)v.i));
+}
+// GetLocalizedString：engine.js 原样返回（wts 解析在别处）
+static Value n_locstr(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  return v.k == V_STR ? v : v_null();
+}
+static Value n_lochotkey(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  return v_int(v.k == V_STR && v.s && *v.s ? (unsigned char)v.s[0] : 0);
+}
+// 确定性 LCG（不对照 JS 的 Math.random；固定种子保证可复现）
+static unsigned long long rng = 1;
+static unsigned rnd32(void) {
+  rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+  return (unsigned)(rng >> 33);
+}
+static Value n_randint(Vm* vm, Expr** a, int n, VScope* s) {
+  Value lo = narg(vm, a, n, 0, s), hi = narg(vm, a, n, 1, s);
+  long long l = lo.k == V_INT ? lo.i : (long long)lo.f;
+  long long h = hi.k == V_INT ? hi.i : (long long)hi.f;
+  if (h < l) return v_int(l);
+  return v_int(l + (long long)(rnd32() % ((unsigned long long)(h - l) + 1)));
+}
+static Value n_randreal(Vm* vm, Expr** a, int n, VScope* s) {
+  Value lo = narg(vm, a, n, 0, s), hi = narg(vm, a, n, 1, s);
+  double l = lo.k == V_REAL ? lo.f : (double)lo.i;
+  double h = hi.k == V_REAL ? hi.f : (double)hi.i;
+  if (h < l) return v_real(l);
+  return v_real(l + (rnd32() / 4294967296.0) * (h - l));
+}
+
+static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
+  Value v = narg(vm, a, n, 0, s);
+  return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
+}
+static Value n_i0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(0); }
+static Value n_i1(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(1); }
+static Value n_i2(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(2); }
+static Value n_r0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_real(0); }
+static Value n_false(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_bool(0); }
+
+static const NativeEntry NATIVES[] = {
+  { "BJDebugMsg", n_log }, { "I2S", n_i2s }, { "R2I", n_r2i }, { "I2R", n_i2r }, { "R2S", n_r2s },
+  { "GetRandomInt", n_randint }, { "GetRandomReal", n_randreal },
+  { "GetCameraMargin", n_0 },
+  { "GetLocalizedString", n_locstr }, { "GetLocalizedHotkey", n_lochotkey },
+  // handle 工厂（stub：返回非空 id；真实对象待 world/渲染层）
+  { "AddWeatherEffect", n_handle }, { "CreateTrigger", n_handle }, { "CreateTimer", n_handle },
+  { "CreateGroup", n_handle }, { "CreateForce", n_handle },
+  { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_handle },
+  { "GetEnumUnit", n_handle }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
+  { "GetExpiredTimer", n_handle },
+  // 环境/配置空实现（对齐 engine.js 空实现语义）
+  { "SetCameraBounds", n_void }, { "SetDayNightModels", n_void }, { "SetTerrainFogEx", n_void },
+  { "SetWaterBaseColor", n_void }, { "EnableWeatherEffect", n_void }, { "NewSoundEnvironment", n_void },
+  { "SetAmbientDaySound", n_void }, { "SetAmbientNightSound", n_void }, { "SetMapMusic", n_void },
+  { "SetMapName", n_void }, { "SetMapDescription", n_void }, { "SetPlayers", n_void },
+  { "SetTeams", n_void }, { "SetGamePlacement", n_void }, { "DefineStartLocation", n_void },
+  { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_void },
+  { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
+  { "SetPlayerColor", n_void }, { "DestroyTrigger", n_void }, { "DestroyGroup", n_void },
+  { "PauseGame", n_void }, { "SetPlayerState", n_void }, { "SetPlayerAlliance", n_void },
+  { "VolumeGroupSetVolume", n_void }, { "PlayCinematic", n_void }, { "StartSound", n_void },
+  { "SetDestructableAnimation", n_void }, { "SetUnitState", n_void }, { "SetUnitAcquireRange", n_void },
+  { "SetPlayerTechMaxAllowed", n_void }, { "SetPlayerTechResearched", n_void },
+  // 第二轮：枚举恒等转换（ConvertXxx，JS C(name)(i) => i）
+  { "ConvertAIDifficulty", n_convint }, { "ConvertAllianceType", n_convint },
+  { "ConvertAttackType", n_convint }, { "ConvertBlendMode", n_convint },
+  { "ConvertCameraField", n_convint }, { "ConvertDamageType", n_convint },
+  { "ConvertDialogEvent", n_convint }, { "ConvertEffectType", n_convint },
+  { "ConvertFGameState", n_convint }, { "ConvertFogState", n_convint },
+  { "ConvertGameDifficulty", n_convint }, { "ConvertGameEvent", n_convint },
+  { "ConvertGameSpeed", n_convint }, { "ConvertGameType", n_convint },
+  { "ConvertIGameState", n_convint }, { "ConvertItemType", n_convint },
+  { "ConvertLimitOp", n_convint }, { "ConvertMapControl", n_convint },
+  { "ConvertMapDensity", n_convint }, { "ConvertMapFlag", n_convint },
+  { "ConvertPathingType", n_convint }, { "ConvertPlacement", n_convint },
+  { "ConvertPlayerColor", n_convint }, { "ConvertPlayerEvent", n_convint },
+  { "ConvertPlayerGameResult", n_convint }, { "ConvertPlayerScore", n_convint },
+  { "ConvertPlayerSlotState", n_convint }, { "ConvertPlayerState", n_convint },
+  { "ConvertPlayerUnitEvent", n_convint }, { "ConvertRace", n_convint },
+  { "ConvertRacePref", n_convint }, { "ConvertRarityControl", n_convint },
+  { "ConvertSoundType", n_convint }, { "ConvertStartLocPrio", n_convint },
+  { "ConvertTexMapFlags", n_convint }, { "ConvertUnitEvent", n_convint },
+  { "ConvertUnitState", n_convint }, { "ConvertUnitType", n_convint },
+  { "ConvertVersion", n_convint }, { "ConvertVolumeGroup", n_convint },
+  { "ConvertWeaponType", n_convint }, { "ConvertWidgetEvent", n_convint },
+  // 第二轮：handle 工厂 / 枚举与布尔默认值 / 空实现
+  { "CreateUnit", n_handle }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
+  { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_handle }, { "TriggerAddAction", n_handle },
+  { "GetGameSpeed", n_i2 }, { "VersionGet", n_i1 }, { "GetFloatGameState", n_r0 },
+  { "GetPlayerController", n_i0 }, { "GetPlayerSlotState", n_i0 },
+  { "GetPlayerTechResearched", n_false }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
+  { "TriggerEvaluate", n_false }, { "TriggerRegisterGameStateEvent", n_false },
+  { "TriggerRegisterPlayerUnitEvent", n_false }, { "TriggerRegisterTimerExpireEvent", n_false },
+  { "TriggerRegisterUnitEvent", n_false },
+  { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
+  { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_void },
+  { "TimerStart", n_void },
+};
+
 static int vm_call_native(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope, Value* out) {
-  if (strcmp(name, "BJDebugMsg") == 0) {
-    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
-    if (v.k == V_STR) b_put(&vm->log, v.s);
-    else if (v.k == V_INT) b_put(&vm->log, i2s_buf(vm, v.i));
-    else if (v.k == V_REAL) b_put(&vm->log, r2s_buf(vm, v.f));
-    else b_put(&vm->log, "null");
-    b_put(&vm->log, "\n");
-    *out = v_null();
-    return 1;
+  for (size_t i = 0; i < sizeof(NATIVES) / sizeof(NATIVES[0]); i++) {
+    if (strcmp(NATIVES[i].name, name) == 0) {
+      // trace：记录调用名（去重，结果 JSON 的 "calls" 字段）
+      int seen = 0;
+      for (int k = 0; k < vm->nCalls; k++) if (strcmp(vm->callNames[k], name) == 0) { seen = 1; break; }
+      if (!seen) {
+        if (vm->nCalls == vm->capCalls) {
+          vm->capCalls = vm->capCalls ? vm->capCalls * 2 : 64;
+          const char** nn = (const char**)realloc(vm->callNames, sizeof(char*) * (size_t)vm->capCalls);
+          vm->callNames = nn;
+        }
+        vm->callNames[vm->nCalls++] = name;
+      }
+      *out = NATIVES[i].fn(vm, args, nargs, scope);
+      return 1;
+    }
   }
-  if (strcmp(name, "I2S") == 0) {
-    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
-    *out = v_str(vm, i2s_buf(vm, v.k == V_INT ? v.i : (long long)v.f));
-    return 1;
-  }
-  if (strcmp(name, "R2I") == 0) {
-    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
-    double d = v.k == V_REAL ? v.f : (double)v.i;
-    *out = v_int(d < 0 ? (long long)(d - 0.5) : (long long)(d + 0.5));  // trunc 对齐 vm.js
-    return 1;
-  }
-  if (strcmp(name, "I2R") == 0) {
-    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
-    *out = v_real(v.k == V_INT ? (double)v.i : v.f);
-    return 1;
-  }
-  if (strcmp(name, "R2S") == 0) {
-    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
-    *out = v_str(vm, r2s_buf(vm, v.k == V_REAL ? v.f : (double)v.i));
-    return 1;
-  }
-  return 0;   // 不是 native
+  // 未实现：log 记录名字 + 返回 null（迭代式补充：跑 main 看 log 缺什么）
+  b_put(&vm->log, "[unimpl:");
+  b_put(&vm->log, name);
+  b_put(&vm->log, "]\n");
+  *out = v_null();
+  return 1;
 }
 
 // ---- 表达式求值
@@ -1224,6 +1362,12 @@ static int jass_cmp(Value a, Value b, const char* op) {
     if (strcmp(op, "<") == 0) return c < 0;
     if (strcmp(op, ">=") == 0) return c >= 0;
     return c <= 0;
+  }
+  if (a.k == V_HANDLE || b.k == V_HANDLE) {
+    int eq = (a.k == V_HANDLE && b.k == V_HANDLE) && a.i == b.i;
+    if (strcmp(op, "==") == 0) return eq;
+    if (strcmp(op, "!=") == 0) return !eq;
+    return 0;
   }
   double x = a.k == V_REAL ? a.f : (double)a.i;
   double y = b.k == V_REAL ? b.f : (double)b.i;
@@ -1324,13 +1468,14 @@ static Value vm_invoke(Vm* vm, FuncDef* f, Expr** args, int nargs, VScope* calle
 }
 
 static Value eval_call(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope) {
-  Value r;
-  if (vm_call_native(vm, name, args, nargs, scope, &r)) return r;
+  // 用户函数优先（Blizzard.j / war3map.j 定义的符号）
   for (int i = 0; i < vm->ast->nfuncs; i++) {
     FuncDef* f = &vm->ast->funcs[i];
     if (f->sig.name && strcmp(f->sig.name, name) == 0)
       return vm_invoke(vm, f, args, nargs, scope);
   }
+  Value r;
+  if (vm_call_native(vm, name, args, nargs, scope, &r)) return r;
   vm_err(vm, "call to undefined function");
   return v_null();
 }
@@ -1445,7 +1590,12 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
   } else {
     b_put(&out, "{\"ok\":true,\"log\":");
     b_str(&out, vm.log.b ? vm.log.b : "");
-    b_put(&out, ",\"globals\":{");
+    b_put(&out, ",\"calls\":[");
+    for (int i = 0; i < vm.nCalls; i++) {
+      if (i) b_put(&out, ",");
+      b_str(&out, vm.callNames[i]);
+    }
+    b_put(&out, "],\"globals\":{");
     int first = 1;
     for (int i = 0; i < ast->nglobals; i++) {
       GlobalDecl* g = &ast->globals[i];
@@ -1459,6 +1609,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  free(vm.callNames);
   free_ast(ast);
   return out.b ? out.b : strdup("{\"ok\":false,\"error\":\"no output\"}");
 }
