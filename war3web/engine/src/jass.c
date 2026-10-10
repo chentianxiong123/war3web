@@ -112,7 +112,7 @@ struct Stmt {
   Expr* idx; Expr* e;                                 // set / exitwhen / return
   const char* cname; Expr** args; int nargs;          // callstmt
   Clause* clauses; int nclauses;                      // if
-  Stmt* els; int nels;                                // if else branch
+  Stmt* els; int nels; int hasElse;                   // if else 分支（空 else 也是 [] 非 null）
   Stmt* body; int nbody;                              // loop
 };
 
@@ -589,6 +589,7 @@ static void parse_stmt(P* p, SArr* out) {
         c->body = b.v; c->nbody = b.n;
       } else if (at_kw(p, K_ELSE)) {
         next(p);
+        s.hasElse = 1;
         static const int else_end[] = {K_ENDIF};
         SArr eb = {0};
         parse_block(p, else_end, 1, &eb);
@@ -738,7 +739,7 @@ static void json_stmt(Buf* b, const Stmt* s) {
         b_put(b, "]}");
       }
       b_put(b, "],\"els\":");
-      if (s->els) {
+      if (s->els || s->hasElse) {
         b_put(b, "[");
         json_stmts(b, s->els, s->nels);
         b_put(b, "]");
