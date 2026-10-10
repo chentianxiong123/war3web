@@ -1100,8 +1100,12 @@ typedef struct {
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; } players[16];
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
-  struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing; } * units;
+  struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
+                 int* abils; int nAbils, capAbils; } * units;
   int nUnits, capUnits;
+  // region 对象表（区域：矩形/格集合）
+  struct VRegion { long long id; long long* rectIds; int nRects, capRects; } * regions;
+  int nRegions, capRegions;
   // rect / location / group 对象表（对象工厂真分配 + 查询/枚举）
   struct VRect { long long id; double minx, miny, maxx, maxy; } * rects;
   int nRects, capRects;
@@ -1932,6 +1936,77 @@ static Value n_remove_item(Vm* vm, Expr** a, int n, VScope* s) {
   return v_null();
 }
 
+// ---- 单位能力（UnitAddAbility 等存单位表，GetUnitAbilityLevel 查询）----
+static Value n_unit_add_ability(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), av = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) {
+    struct VUnit* u = find_unit(vm, uv.i);
+    if (u) {
+      for (int i = 0; i < u->nAbils; i++) if (u->abils[i] == (int)av.i) return v_bool(0);  // 已有
+      if (u->nAbils == u->capAbils) {
+        u->capAbils = u->capAbils ? u->capAbils * 2 : 4;
+        u->abils = (int*)realloc(u->abils, sizeof(int) * (size_t)u->capAbils);
+      }
+      u->abils[u->nAbils++] = (int)av.i;
+      return v_bool(1);
+    }
+  }
+  return v_bool(0);
+}
+static Value n_unit_remove_ability(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), av = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) {
+    struct VUnit* u = find_unit(vm, uv.i);
+    if (u) {
+      for (int i = 0; i < u->nAbils; i++)
+        if (u->abils[i] == (int)av.i) { u->abils[i] = u->abils[--u->nAbils]; return v_bool(0); }
+    }
+  }
+  return v_bool(0);
+}
+static Value n_get_unit_ability_level(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), av = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) {
+    struct VUnit* u = find_unit(vm, uv.i);
+    if (u) {
+      for (int i = 0; i < u->nAbils; i++) if (u->abils[i] == (int)av.i) return v_int(1);  // 等级 1
+    }
+  }
+  return v_int(0);
+}
+
+// ---- region 对象表（CreateRegion + RegionAddRect 等）----
+static struct VRegion* find_region(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nRegions; i++) if (vm->regions[i].id == id) return &vm->regions[i];
+  return NULL;
+}
+static Value n_create_region(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nRegions == vm->capRegions) {
+    vm->capRegions = vm->capRegions ? vm->capRegions * 2 : 8;
+    vm->regions = (struct VRegion*)realloc(vm->regions, sizeof(struct VRegion) * (size_t)vm->capRegions);
+  }
+  struct VRegion* r = &vm->regions[vm->nRegions++];
+  memset(r, 0, sizeof *r);
+  r->id = id;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_region_add_rect(Vm* vm, Expr** a, int n, VScope* s) {
+  Value rv = narg(vm, a, n, 0, s), rectv = narg(vm, a, n, 1, s);
+  struct VRegion* r = rv.k == V_HANDLE ? find_region(vm, rv.i) : NULL;
+  if (r && rectv.k == V_HANDLE) {
+    for (int i = 0; i < r->nRects; i++) if (r->rectIds[i] == rectv.i) return v_null();
+    if (r->nRects == r->capRects) {
+      r->capRects = r->capRects ? r->capRects * 2 : 4;
+      r->rectIds = (long long*)realloc(r->rectIds, sizeof(long long) * (size_t)r->capRects);
+    }
+    r->rectIds[r->nRects++] = rectv.i;
+  }
+  return v_null();
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1940,6 +2015,7 @@ static Value n_i0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)
 static Value n_i1(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(1); }
 static Value n_i2(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(2); }
 static Value n_r0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_real(0); }
+static Value n_str_empty(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_str(vm, ""); }
 static Value n_false(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_bool(0); }
 
 static const NativeEntry NATIVES[] = {
@@ -2025,6 +2101,10 @@ static const NativeEntry NATIVES[] = {
   { "CreateUnit", n_create_unit }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
   { "GetUnitTypeId", n_get_unit_type_id }, { "UnitAlive", n_unit_alive },
   { "KillUnit", n_kill_unit }, { "RemoveUnit", n_kill_unit }, { "DestroyEffect", n_void },
+  { "UnitAddAbility", n_unit_add_ability }, { "UnitRemoveAbility", n_unit_remove_ability },
+  { "GetUnitAbilityLevel", n_get_unit_ability_level }, { "GetUnitName", n_str_empty },
+  { "CreateRegion", n_create_region }, { "RegionAddRect", n_region_add_rect },
+  { "RegionClearRect", n_void }, { "RegionAddCell", n_void }, { "RegionClearCell", n_void },
   { "GetUnitX", n_get_unit_x }, { "GetUnitY", n_get_unit_y },
   { "SetUnitX", n_set_unit_x }, { "SetUnitY", n_set_unit_y },
   { "SetUnitPosition", n_set_unit_position }, { "GetUnitFacing", n_get_unit_facing },
@@ -2357,6 +2437,9 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  for (int i = 0; i < vm.nRegions; i++) free(vm.regions[i].rectIds);
+  free(vm.regions);
+  for (int i = 0; i < vm.nUnits; i++) free(vm.units[i].abils);
   for (int i = 0; i < vm.nForces; i++) free(vm.forces[i].pis);
   free(vm.forces);
   free(vm.items);

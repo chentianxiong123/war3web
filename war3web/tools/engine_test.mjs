@@ -440,6 +440,41 @@ ck('jass(force) ForForce 枚举求和 GetPlayerId=1', rF.globals.fsum, 1);
 ck('jass(物品) CreateItem typeId round-trip=99', rF.globals.itype, 99);
 ck('jass(物品) SetItemPosition 后 GetItemX=300', rF.globals.ix, 300);
 
+// --- 单位能力 + region 对象表语义 ---
+const abilScript = `
+globals
+  unit u = null
+  integer alv1 = -1
+  integer alv2 = -1
+  integer added = -1
+  region rg = null
+  rect r = null
+  integer rgn = 0
+endglobals
+function Init takes nothing returns nothing
+  set u = CreateUnit(Player(0), 222, 0.0, 0.0, 0.0)
+  if UnitAddAbility(u, 88) then
+    set added = 1
+  endif
+  set alv1 = GetUnitAbilityLevel(u, 88)
+  call UnitRemoveAbility(u, 88)
+  set alv2 = GetUnitAbilityLevel(u, 88)
+  set rg = CreateRegion()
+  set r = Rect(0.0, 0.0, 128.0, 128.0)
+  call RegionAddRect(rg, r)
+  call RegionAddRect(rg, r)
+  set rgn = 1
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rA = jassRunC(abilScript, 'main');
+ck('jass(能力) UnitAddAbility 返回 true', rA.globals.added, 1);
+ck('jass(能力) 加入后 GetUnitAbilityLevel=1', rA.globals.alv1, 1);
+ck('jass(能力) 移除后 GetUnitAbilityLevel=0', rA.globals.alv2, 0);
+ck('jass(region) CreateRegion+RegionAddRect 可用', rA.globals.rgn, 1);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
