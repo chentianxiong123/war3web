@@ -121,8 +121,11 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   round-trip；AST 序列化保持 15 位 → 与 JS 最短表示逐字节一致，二者分开）
 - **验证：C(config,main) vs JS boot() 全局强对照——880 全局 0 差异**
   （365 值一致 / 56 null / 459 handle 存在性对账）；对账断言常驻测试
-- 遗留：main 链 stub natives **610 次调用**（Melee 系 CreateUnits 序列化等，
-  深化② 按 `[unimpl:]` 清单逐项实现）
+- 遗留：main 链 stub natives 610 次调用 → **已全部补齐**（仅 6 种：
+  GetPlayerTechMaxAllowed/IsPlayerObserver/SetFloatGameState/Preloader/
+  CreateTimerDialog/TriggerRegisterGameEvent，64e0 提交 51e4ee6 后
+  main+config 全链 **unimpl 归零**）→ 深化② = natives 真语义
+  （玩家对象表/单位表，stub 假 handle → 可查询对象）
 
 ## 四、测试资产与工具
 
