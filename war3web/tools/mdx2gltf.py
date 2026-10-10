@@ -3,6 +3,7 @@ import sys, os, json, math, glob, shutil
 sys.path.insert(0, os.path.dirname(__file__))
 import numpy as np
 import mdx
+import mdl
 from gltf import GLTF
 
 FPS = 30.0
@@ -334,7 +335,7 @@ FILTER_NAME  = {0: 'none', 1: 'transparent', 2: 'blend', 3: 'additive',
                 4: 'addalpha', 5: 'modulate', 6: 'modulate2x'}
 
 def convert(path, out_dir=OUTDIR, name=None):
-    M = mdx.parse(path)
+    M = mdx.parse(path) if path.lower().endswith('.mdx') else mdl.parse(path)
     name = name or os.path.splitext(os.path.basename(path))[0]
     g = GLTF()
     nodes = M['bones'] + M['helpers'] + M['attachments'] + M['collisions'] + M['events'] + M['particles']
@@ -494,7 +495,9 @@ def convert(path, out_dir=OUTDIR, name=None):
                                 'w3node': {k: v for k, v in bb.items() if v}}
         g.j['nodes'].append(nd)
     for n in nodes:
-        parent = 0 if n['parentId'] < 0 else nid[n['parentId']]
+        # MDL text models may reference a parent id that no node defines;
+        # fall back to the root rather than crash the whole conversion
+        parent = 0 if n['parentId'] < 0 else nid.get(n['parentId'], 0)
         g.j['nodes'][parent]['children'].append(nid[n['objectId']])
     for nd in g.j['nodes']:
         if not nd['children']: del nd['children']
@@ -824,11 +827,13 @@ if __name__ == '__main__':
     make_team_textures()
     # match the extension case-insensitively: the map's own imports keep whatever
     # casing the author used, and a plain '*.mdx' glob silently skips ".MDX"
+    # (.mdl text models get the same treatment, so custom assets in the
+    # editor's native format flow through the whole pipeline)
     def find_mdx(root):
         out = []
         for base, _dirs, names in os.walk(root):
             for n in names:
-                if n.lower().endswith('.mdx'):
+                if n.lower().endswith(('.mdx', '.mdl')):
                     out.append(os.path.join(base, n))
         return sorted(out)
     files = find_mdx('extracted') + find_mdx('war3_extracted')
@@ -844,7 +849,8 @@ if __name__ == '__main__':
     # rebuild a model only when its source or this converter is newer than the
     # output; the archives contribute ~800 models that rarely change
     self_mtime = max(os.path.getmtime(__file__), os.path.getmtime(
-        os.path.join(os.path.dirname(__file__), 'mdx.py')))
+        os.path.join(os.path.dirname(__file__), 'mdx.py')),
+        os.path.getmtime(os.path.join(os.path.dirname(__file__), 'mdl.py')))
     index, fails, skipped, built = {}, [], 0, 0
     for p in files:
         try:
