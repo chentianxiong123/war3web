@@ -1,0 +1,97 @@
+{
+ "world": "terenas",
+ "dt": 0.03333333333333333,
+ "seconds": 45,
+ "runs": [
+  {
+   "from": [
+    1232,
+    1040
+   ],
+   "to": [
+    1500,
+    1500
+   ],
+   "arriveTick": 86,
+   "arriveSec": 2.87,
+   "pathLen": 555.7,
+   "end": [
+    1488,
+    1488
+   ],
+   "endErr": 17
+  },
+  {
+   "from": [
+    1872,
+    2640
+   ],
+   "to": [
+    2200,
+    2400
+   ],
+   "arriveTick": 57,
+   "arriveSec": 1.9,
+   "pathLen": 406.4,
+   "end": [
+    2200,
+    2400
+   ],
+   "endErr": 0
+  },
+  {
+   "from": [
+    1872,
+    2640
+   ],
+   "to": [
+    1700,
+    2800
+   ],
+   "arriveTick": 33,
+   "arriveSec": 1.1,
+   "pathLen": 234.9,
+   "end": [
+    1700,
+    2800
+   ],
+   "endErr": 0
+  },
+  {
+   "from": [
+    1488,
+    1232
+   ],
+   "to": [
+    1900,
+    1400
+   ],
+   "arriveTick": 63,
+   "arriveSec": 2.1,
+   "pathLen": 444.9,
+   "end": [
+    1900,
+    1400
+   ],
+   "endErr": 0
+  },
+  {
+   "from": [
+    1872,
+    2640
+   ],
+   "to": [
+    2200,
+    2700
+   ],
+   "arriveTick": 46,
+   "arriveSec": 1.53,
+   "pathLen": 333.4,
+   "end": [
+    2200,
+    2700
+   ],
+   "endErr": 0
+  }
+ ]
+}
