@@ -19,7 +19,7 @@ TRACK_SPEC = {          # tag -> (n components, 'f' float | 'i' int)
     'KP2E': (1, 'f'), 'KP2N': (1, 'f'), 'KP2W': (1, 'f'), 'KP2V': (1, 'f'),
     'KRHA': (1, 'f'), 'KRHB': (1, 'f'), 'KRAL': (1, 'f'), 'KRCO': (3, 'f'),
     'KRTX': (1, 'i'), 'KRVS': (1, 'f'),
-    'KCTR': (1, 'f'), 'KTTR': (1, 'f'), 'KCRL': (1, 'i'),
+    'KCTR': (3, 'f'), 'KTTR': (3, 'f'), 'KCRL': (1, 'f'),
 }
 
 class R:
@@ -268,7 +268,21 @@ def parse(path):
                 n = read_node(r); n['type'] = tag
                 r.o = oend
                 M['particles'].append(n)
-        # CAMS holds no scene nodes
+        elif tag == 'CAMS':
+            # Camera blocks have no node header: name(80) + position(3f) +
+            # fieldOfView + far/near clipping + targetPosition(3f), then the
+            # animation timelines (KCTR position, KCRL roll, KTTR target) --
+            # per MdlxCamera.readMdx (warsmash / HiveWorkshop RMS).
+            while r.left() > 0:
+                obase = r.o; oend = obase + r.i()
+                cam = {'name': r.fixed(80).rstrip('\x00 '),
+                       'position': r.fs(3), 'fieldOfView': r.f(),
+                       'farClippingPlane': r.f(), 'nearClippingPlane': r.f(),
+                       'targetPosition': r.fs(3), 'tracks': {}}
+                while r.o + 4 <= oend and r.peek() in TRACK_SPEC:
+                    k, tr = read_track(r); cam['tracks'][k] = tr
+                r.o = oend
+                M['cameras'].append(cam)
         o += 8 + size
     return M
 

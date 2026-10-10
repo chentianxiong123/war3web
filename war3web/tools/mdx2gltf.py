@@ -776,6 +776,18 @@ def convert(path, out_dir=OUTDIR, name=None):
 
     os.makedirs(out_dir, exist_ok=True)
     safe = name.replace('\\', '~')
+    if M['cameras']:
+        # Model cameras (cinematics/preview) ride on asset.extras: mounting
+        # them as glTF camera nodes would put loose nodes in the scene every
+        # loader would have to skip. Kept as data, keyed by name.
+        g.j['asset']['extras'] = dict(w3cameras=[
+            dict(name=c['name'], position=c['position'],
+                 fieldOfView=c['fieldOfView'],
+                 near=c['nearClippingPlane'], far=c['farClippingPlane'],
+                 target=c['targetPosition'],
+                 tracks={k: dict(interp=v['interp'], globalSeq=v['globalSeq'],
+                                 keys=v['keys']) for k, v in c['tracks'].items()})
+            for c in M['cameras']])
     size = g.save(os.path.join(out_dir, safe + '.glb'))
     meta = dict(name=name, source=os.path.basename(path), version=M['version'],
                 modelName=M['model'].get('name'), extent=M['model'].get('extent'),
