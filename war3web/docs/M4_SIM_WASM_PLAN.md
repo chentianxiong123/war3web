@@ -68,6 +68,51 @@
 - 交付：`wasm_step(dt)` 完整模拟 tick（单位+弹道+经济），JS 只做 IO（输入事件、
   输出快照）
 
+#### 2.1 子系统盘点（world.js 行号实测）
+| 子系统 | 行段 | 核心逻辑 | C 移植量 |
+|---|---|---|---|
+| stepMissiles | 2929-2957 | 导弹推进（homing 追踪/点射、到达判定 destRange 或 距离-目标半径、deadline 超时、onHit 回调） | 小（~30 行） |
+| stepAttack | 2991-3044 | atkTimer 冷却 → 目标扫描（hostile + weaponFor + 距离<atkRange+半径+40）→ turnToward → windup 前摇 → releaseAttack | 中（windup/冷却状态机） |
+| weaponFor | 2960-2983 | 武器选择：atkTargetsAllowed/classifications/targetAs 集合匹配 + magicImmune + 敌对 + 类型（mechanical/organic/hero）过滤 | 中（元数据依赖） |
+| damage | 1084-1133 | 伤害结算（类型/护甲/魔抗/减伤） | 中（需护甲公式） |
+| releaseAttack | 3046-3095 | 近战直击 / 远程发射导弹 / cleave 溅射 | 中 |
+| stepGathers | 1342-1468 | 农民采金（往返金矿/交付）、伐木 | 中（状态机） |
+| hostile/playerOf | 各处 | 玩家关系 → 敌对判定（C 需 team/player 表） | 小 |
+
+#### 2.2 黄金锁定场景设计（行为先锁，C 再对照）
+1. **近战对打**：敌对步兵（hfoo）互打——记录攻击事件时序（攻击 tick/伤害值）、
+   死亡 tick、HP 曲线——门禁：事件序列逐项一致 + 死亡 tick 差 ≤6
+2. **远程对打**：敌对弓箭手（hArcher）——记录发射/命中 tick、导弹飞行耗时、
+   命中伤害——门禁：命中 tick 差 ≤6 + 伤害逐项一致
+3. **经济**：农民采金——记录金矿储量随时间曲线、农民往返周期——门禁：
+   储量曲线采样点差 ≤5%
+4. **触发干扰排查**：Terenas 地图有单位自动 AI（空闲农民自动采金/守卫自动攻击），
+   黄金场景需用 hold 钉住非主角单位（阶段 1 已验证该手段），或选无 AI 场景
+
+#### 2.5 战斗行为锁定进行中（combat_golden）
+- **`tools/combat_golden.mjs`（0f7b38c 后）**：敌对 hfoo 近战对打 3 场景
+  （贴身/需走近/3v1 围攻），录制攻击事件时序 + 死亡 tick + HP 曲线 → 
+  `goldens/combat_trace.json`。
+- **实测数据**：hfoo hp420/dmg11/range90/cd1.35s/attackPoint0.5s；攻击间隔 ≈41 tick
+  (1.37s=atkTimer cd 配额)；贴身死亡 1573 tick(52.4s)、需走近 1594、3v1 1574
+  （攻方死亡，被围者存活）——C 移植后同场景对照攻击序列/死亡 tick。
+
+#### 2.3 C 移植设计
+- sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
+  atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
+- 导弹表（SOA 数组）：x/y/speed/dx/dy/targetId/onHit 类型+伤害参数——复用
+  launchMissile 快照语义
+- 伤害公式：先无 buff 纯数值（护甲减伤/魔法抗性表），buff 依赖留给 ability 桥
+- `wasm_step(dt)`：单位循环（移动→攻击→经济）+ 导弹推进 + 事件出队（attack/
+  missileEnd/death 事件 push 出 heap，JS 消费——阶段 2 事件桥）
+
+#### 2.4 风险
+- weaponFor 元数据依赖（atkTargetsAllowed/classifications 是字符串集合）——
+  C 侧用位集/枚举编码预编译，避免字符串匹配
+- damage 依赖护甲/buff/敌对链——阶段 2 先无 buff 纯数值对照，buff 挂能力桥
+- 地图 AI 干扰黄金场景——hold 钉住或选受控场景（阶段 1 已验证）
+- 事件桥（attack/missileEnd/death 时序）——事件 push 出 heap + JS 消费对齐
+
 ### 阶段 3：快照序列化进 WASM（SOA）
 - **SOA 快照**：把单位属性按列布局（x[]/y[]/life[]/facing[]...）写入 wasm 连续 buffer
 - 交付：`wasm_snapshot()` 直接产字节 buffer（对齐 M5 的 wasm heap → WebGPU buffer
