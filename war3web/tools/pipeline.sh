@@ -12,7 +12,8 @@ $PY tools/extract_final.py
 
 echo "== 2. map object data"
 $PY tools/objdata.py extracted/war3map.w3u extracted/war3map.w3t \
-                     extracted/war3map.w3a extracted/war3map.w3h extracted/war3map.w3q
+                     extracted/war3map.w3a extracted/war3map.w3h extracted/war3map.w3q \
+                     extracted/war3map.w3d extracted/war3map.w3b
 $PY tools/w3i.py               # full map info: players/forces/camera/tileset/fog
 $PY tools/unitsdoo.py          # pre-placed units: hp/mana/inventory/hero stats
 $PY tools/terrain.py

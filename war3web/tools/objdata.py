@@ -44,6 +44,11 @@ def parse(path):
 if __name__ == '__main__':
     os.makedirs('data', exist_ok=True)
     for p in sys.argv[1:]:
+        if not os.path.exists(p):
+            # maps only carry the object tables they edit -- Terenas has no
+            # w3d/w3b at all -- so a missing file is a map fact, not a break
+            print('skip  %-18s (not in this map)' % os.path.basename(p))
+            continue
         d = parse(p)
         out = os.path.join('data', os.path.basename(p) + '.json')
         json.dump(d, open(out, 'w'), indent=1)
