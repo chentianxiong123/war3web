@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 // ------------------------------------------------------------------ tokens
 
@@ -1105,6 +1106,7 @@ typedef struct {
   int nTimers, capTimers;
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
+                   int controller; int startLoc; int slotState;
                    struct { int tech; int lvl; int max; } * ts; int nTs, capTs; } players[16];
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
@@ -1714,6 +1716,69 @@ static Value n_get_tech_max(Vm* vm, Expr** a, int n, VScope* s) {
   return v_int(0);
 }
 
+// ---- 玩家属性（controller/startLoc/slotState 存储，对齐 engine.js）----
+static Value n_set_player_controller(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), c = narg(vm, a, n, 1, s);
+  if (p.k == V_HANDLE) vm->players[player_index_of(vm, p.i)].controller = (int)c.i;
+  return v_null();
+}
+static Value n_get_player_controller(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);
+  if (p.k == V_HANDLE) return v_int(vm->players[player_index_of(vm, p.i)].controller);  // mapcontrol 值（0=USER）
+  return v_int(0);
+}
+static Value n_set_player_startloc(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), i = narg(vm, a, n, 1, s);
+  if (p.k == V_HANDLE) vm->players[player_index_of(vm, p.i)].startLoc = (int)i.i;
+  return v_null();
+}
+static Value n_get_player_startloc(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);
+  if (p.k == V_HANDLE) return v_int(player_index_of(vm, p.i));  // 对齐 engine.js: p.index
+  return v_int(0);
+}
+static Value n_get_player_slot_state(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);
+  if (p.k == V_HANDLE) return v_int(vm->players[player_index_of(vm, p.i)].slotState);
+  return v_int(0);
+}
+
+// ---- 数学族（对齐 engine.js：Math.* + 正余数取模）----
+static Value n_math_sin(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(sin(x.k == V_REAL ? x.f : (double)x.i)); }
+static Value n_math_cos(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(cos(x.k == V_REAL ? x.f : (double)x.i)); }
+static Value n_math_tan(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(tan(x.k == V_REAL ? x.f : (double)x.i)); }
+static Value n_math_asin(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(asin(x.k == V_REAL ? x.f : (double)x.i)); }
+static Value n_math_acos(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(acos(x.k == V_REAL ? x.f : (double)x.i)); }
+static Value n_math_atan(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(atan(x.k == V_REAL ? x.f : (double)x.i)); }
+static Value n_math_atan2(Vm* vm, Expr** a, int n, VScope* s) {
+  Value y = narg(vm, a, n, 0, s), x = narg(vm, a, n, 1, s);
+  return v_real(atan2(y.k == V_REAL ? y.f : (double)y.i, x.k == V_REAL ? x.f : (double)x.i));
+}
+static Value n_math_sqrt(Vm* vm, Expr** a, int n, VScope* s) {
+  Value x = narg(vm, a, n, 0, s); double d = x.k == V_REAL ? x.f : (double)x.i;
+  return v_real(d < 0 ? 0 : sqrt(d));  // 对齐 JS SquareRoot
+}
+static Value n_math_pow(Vm* vm, Expr** a, int n, VScope* s) {
+  Value va = narg(vm, a, n, 0, s), vb = narg(vm, a, n, 1, s);
+  return v_real(pow(va.k == V_REAL ? va.f : (double)va.i, vb.k == V_REAL ? vb.f : (double)vb.i));
+}
+static Value n_math_mod_int(Vm* vm, Expr** a, int n, VScope* s) {
+  Value av = narg(vm, a, n, 0, s), bv = narg(vm, a, n, 1, s);
+  long long b = bv.i;
+  if (b == 0) return v_int(0);
+  long long r = av.i % b;
+  if (r < 0) r += b;   // 对齐 JS 正余数
+  return v_int((int)r);
+}
+static Value n_math_mod_real(Vm* vm, Expr** a, int n, VScope* s) {
+  Value va = narg(vm, a, n, 0, s), vb = narg(vm, a, n, 1, s);
+  double aa = va.k == V_REAL ? va.f : (double)va.i, bb = vb.k == V_REAL ? vb.f : (double)vb.i;
+  if (bb == 0) return v_real(0);
+  double r = fmod(aa, bb);
+  if (r < 0) r += bb;   // 对齐 JS 正余数
+  return v_real(r);
+}
+
 // ---- GetHandleId / 字符串工具（对齐 engine.js）----
 static Value n_get_handle_id(Vm* vm, Expr** a, int n, VScope* s) {
   Value h = narg(vm, a, n, 0, s);
@@ -2252,6 +2317,10 @@ static Value n_false(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (vo
 
 static const NativeEntry NATIVES[] = {
   { "BJDebugMsg", n_log }, { "I2S", n_i2s }, { "R2I", n_r2i }, { "I2R", n_i2r }, { "R2S", n_r2s },
+  { "Sin", n_math_sin }, { "Cos", n_math_cos }, { "Tan", n_math_tan },
+  { "Asin", n_math_asin }, { "Acos", n_math_acos }, { "Atan", n_math_atan },
+  { "Atan2", n_math_atan2 }, { "SquareRoot", n_math_sqrt }, { "Pow", n_math_pow },
+  { "ModuloInteger", n_math_mod_int }, { "ModuloReal", n_math_mod_real },
   { "GetRandomInt", n_randint }, { "GetRandomReal", n_randreal },
   { "GetCameraMargin", n_0 },
   { "GetLocalizedString", n_locstr }, { "GetLocalizedHotkey", n_lochotkey },
@@ -2299,7 +2368,7 @@ static const NativeEntry NATIVES[] = {
   { "SetAmbientDaySound", n_void }, { "SetAmbientNightSound", n_void }, { "SetMapMusic", n_void },
   { "SetMapName", n_void }, { "SetMapDescription", n_void }, { "SetPlayers", n_void },
   { "SetTeams", n_void }, { "SetGamePlacement", n_void }, { "DefineStartLocation", n_void },
-  { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_void },
+  { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_set_player_controller },
   { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
   { "SetPlayerColor", n_set_player_color }, { "GetPlayerColor", n_get_player_color }, { "DestroyTrigger", n_void }, { "DestroyGroup", n_void },
   { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_void },
@@ -2350,7 +2419,7 @@ static const NativeEntry NATIVES[] = {
   { "IsPlayerObserver", n_false }, { "SetFloatGameState", n_void },
   { "Preloader", n_void }, { "CreateTimerDialog", n_handle },
   { "GetGameSpeed", n_i2 }, { "VersionGet", n_i1 }, { "GetFloatGameState", n_r0 },
-  { "GetPlayerController", n_i0 }, { "GetPlayerSlotState", n_i0 },
+  { "GetPlayerController", n_get_player_controller }, { "GetPlayerSlotState", n_get_player_slot_state },
   { "GetPlayerTechResearched", n_get_tech_researched }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
   { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_false },
   { "TriggerRegisterPlayerUnitEvent", n_trig_reg_player_unit_event }, { "TriggerRegisterTimerExpireEvent", n_trig_reg_timer_expire },
@@ -2362,7 +2431,8 @@ static const NativeEntry NATIVES[] = {
   { "TriggerRegisterUnitInRange", n_trig_reg_unit_in_range }, { "TriggerRegisterPlayerChatEvent", n_trig_reg_player_chat },
   // 第三轮（config 链）：GetPlayerId 暂返 0（player 对象表留待深化）
   { "GetPlayerId", n_i0 }, { "GetGameTypeSelected", n_i0 },
-  { "SetPlayerStartLocation", n_void }, { "SetStartLocPrio", n_void }, { "SetStartLocPrioCount", n_void },
+  { "SetPlayerStartLocation", n_set_player_startloc }, { "SetStartLocPrio", n_void }, { "SetStartLocPrioCount", n_void },
+  { "GetPlayerStartLocation", n_get_player_startloc },
 };
 
 static int vm_call_native(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope, Value* out) {

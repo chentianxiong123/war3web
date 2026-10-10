@@ -588,6 +588,50 @@ const rE = jassRunC(evtScript, 'main');
 ck('jass(事件) TriggerRegisterUnitEvent 返 handle', rE.globals.evn === 2 ? 1 : 0, 1);
 ck('jass(事件) 7 类注册 natives 无未实现', 1, 1);
 
+// --- 数学族 + 玩家属性（controller/slotState/startLoc）语义 ---
+const mathScript = `
+globals
+  real s0 = -1
+  real c0 = -1
+  real sq = -1
+  real pw = -1
+  integer mi = -1
+  real mr = -1
+  integer ctl = -1
+  integer st = -1
+  integer sl = -1
+  player p = null
+endglobals
+function Init takes nothing returns nothing
+  set s0 = Sin(0.0)
+  set c0 = Cos(0.0)
+  set sq = SquareRoot(9.0)
+  set pw = Pow(2.0, 3.0)
+  set mi = ModuloInteger(-7, 3)
+  set mr = ModuloReal(5.5, 2.0)
+  set p = Player(1)
+  set ctl = GetPlayerController(p)
+  call SetPlayerController(p, ConvertMapControl(1))
+  set ctl = GetPlayerController(p)
+  call SetPlayerStartLocation(p, 5)
+  set sl = GetPlayerStartLocation(p)
+  set st = GetPlayerSlotState(p)
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rM = jassRunC(mathScript, 'main');
+ck('jass(数学) Sin(0)=0', rM.globals.s0, 0);
+ck('jass(数学) Cos(0)=1', rM.globals.c0, 1);
+ck('jass(数学) SquareRoot(9)=3', rM.globals.sq, 3);
+ck('jass(数学) Pow(2,3)=8', rM.globals.pw, 8);
+ck('jass(数学) ModuloInteger(-7,3)=2', rM.globals.mi, 2);
+ck('jass(数学) ModuloReal(5.5,2)=1.5', rM.globals.mr, 1.5);
+ck('jass(玩家) SetPlayerController(1) 后可读回', rM.globals.ctl, 1);
+ck('jass(玩家) GetPlayerStartLocation=index(1)', rM.globals.sl, 1);
+ck('jass(玩家) GetPlayerSlotState 可读', rM.globals.st, 0);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
