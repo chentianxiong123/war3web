@@ -256,6 +256,41 @@ ck('jass(单位) GetUnitTypeId round-trip', rU.globals.utype, rU.globals.uid);
 ck('jass(单位) UnitAlive=1 且 KillUnit 后=0', rU.globals.ualive, 0);
 ck('jass(单位) GetOwningPlayer 还原所属玩家=2', rU.globals.uowner, 2);
 
+// --- 单位坐标/朝向 + 玩家资源（GOLD=1/LUMBER=2 进玩家表）---
+const coordScript = `
+globals
+  unit u = null
+  real ux = 0
+  real uy = 0
+  real uf = 0
+  integer pg = -1
+  integer pl = -1
+  player p1 = null
+endglobals
+function Init takes nothing returns nothing
+  set p1 = Player(1)
+  set u = CreateUnit(Player(1), 1751479663, 100.5, 200.25, 90.0)
+  call SetUnitPosition(u, 300.0, 400.0)
+  set ux = GetUnitX(u)
+  set uy = GetUnitY(u)
+  call SetUnitFacing(u, 180.0)
+  set uf = GetUnitFacing(u)
+  call SetPlayerState(p1, ConvertPlayerState(1), 555)
+  set pg = GetPlayerState(p1, ConvertPlayerState(1))
+  call SetPlayerState(p1, ConvertPlayerState(2), 777)
+  set pl = GetPlayerState(p1, ConvertPlayerState(2))
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rC = jassRunC(coordScript, 'main');
+ck('jass(坐标) SetUnitPosition 后 GetUnitX=300', rC.globals.ux, 300);
+ck('jass(坐标) SetUnitPosition 后 GetUnitY=400', rC.globals.uy, 400);
+ck('jass(坐标) SetUnitFacing 后 GetUnitFacing=180', rC.globals.uf, 180);
+ck('jass(资源) SetPlayerState GOLD=555 可读回', rC.globals.pg, 555);
+ck('jass(资源) SetPlayerState LUMBER=777 可读回', rC.globals.pl, 777);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

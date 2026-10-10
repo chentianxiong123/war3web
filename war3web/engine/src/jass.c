@@ -1098,9 +1098,9 @@ typedef struct {
   struct VTrigger { long long id; const char** actions; int nActions, capActions; } * triggers;
   int nTriggers, capTriggers;
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
-  struct VPlayer { long long id; } players[16];
-  // 单位表（CreateUnit 真分配：typeId/所属玩家/存活；查询类 natives 由此还原）
-  struct VUnit { long long id; int typeId; int pi; int alive; } * units;
+  struct VPlayer { long long id; int gold, lumber; } players[16];
+  // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
+  struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing; } * units;
   int nUnits, capUnits;
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
@@ -1360,7 +1360,7 @@ static int player_index_of(Vm* vm, long long pid) {
 static Value n_create_unit(Vm* vm, Expr** a, int n, VScope* s) {
   Value p = narg(vm, a, n, 0, s);      // player
   Value ti = narg(vm, a, n, 1, s);     // unittype id
-  (void)narg(vm, a, n, 2, s); (void)narg(vm, a, n, 3, s); (void)narg(vm, a, n, 4, s); // x/y/face
+  Value x = narg(vm, a, n, 2, s), y = narg(vm, a, n, 3, s), fc = narg(vm, a, n, 4, s); // x/y/face
   long long id = 0x100000 + vm->handles++;
   if (vm->nUnits == vm->capUnits) {
     vm->capUnits = vm->capUnits ? vm->capUnits * 2 : 64;
@@ -1372,6 +1372,9 @@ static Value n_create_unit(Vm* vm, Expr** a, int n, VScope* s) {
   u->typeId = (int)ti.i;
   u->pi = p.k == V_HANDLE ? player_index_of(vm, p.i) : 0;
   u->alive = 1;
+  u->x = x.k == V_REAL ? x.f : (double)x.i;
+  u->y = y.k == V_REAL ? y.f : (double)y.i;
+  u->facing = fc.k == V_REAL ? fc.f * 0.017453292519943295 : (double)fc.i * 0.017453292519943295; // 度→弧度（对齐 GetUnitFacing 输出）
   Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
   return v;
 }
@@ -1397,6 +1400,63 @@ static Value n_kill_unit(Vm* vm, Expr** a, int n, VScope* s) {
   Value u = narg(vm, a, n, 0, s);
   if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) p->alive = 0; }
   return v_null();
+}
+static double unit_coord(Vm* vm, Value u, int which) {  // 0=x 1=y 2=facing
+  if (u.k == V_HANDLE) {
+    struct VUnit* p = find_unit(vm, u.i);
+    if (p) return which == 0 ? p->x : which == 1 ? p->y : p->facing;
+  }
+  return 0;
+}
+static Value n_get_unit_xy(Vm* vm, Expr** a, int n, VScope* s, int which) {
+  Value u = narg(vm, a, n, 0, s);
+  return v_real(unit_coord(vm, u, which));
+}
+static Value n_get_unit_x(Vm* vm, Expr** a, int n, VScope* s) { return n_get_unit_xy(vm, a, n, s, 0); }
+static Value n_get_unit_y(Vm* vm, Expr** a, int n, VScope* s) { return n_get_unit_xy(vm, a, n, s, 1); }
+static Value n_get_unit_facing(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s);
+  return v_real(unit_coord(vm, u, 2) * 57.29577951308232);  // 弧度→度
+}
+static Value n_set_unit_xy(Vm* vm, Expr** a, int n, VScope* s, int which) {
+  Value u = narg(vm, a, n, 0, s), v = narg(vm, a, n, 1, s);
+  double d = v.k == V_REAL ? v.f : (double)v.i;
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) { if (which == 0) p->x = d; else p->y = d; } }
+  return v_null();
+}
+static Value n_set_unit_x(Vm* vm, Expr** a, int n, VScope* s) { return n_set_unit_xy(vm, a, n, s, 0); }
+static Value n_set_unit_y(Vm* vm, Expr** a, int n, VScope* s) { return n_set_unit_xy(vm, a, n, s, 1); }
+static Value n_set_unit_position(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s), x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p) {
+    p->x = x.k == V_REAL ? x.f : (double)x.i; p->y = y.k == V_REAL ? y.f : (double)y.i; } }
+  return v_null();
+}
+static Value n_set_unit_facing(Vm* vm, Expr** a, int n, VScope* s) {
+  Value u = narg(vm, a, n, 0, s), d = narg(vm, a, n, 1, s);
+  if (u.k == V_HANDLE) { struct VUnit* p = find_unit(vm, u.i); if (p)
+    p->facing = (d.k == V_REAL ? d.f : (double)d.i) * 0.017453292519943295; }  // 度→弧度存
+  return v_null();
+}
+// ---- 玩家资源（SetPlayerState/GetPlayerState：GOLD=1/LUMBER=2 进玩家表）----
+static Value n_set_player_state(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), st = narg(vm, a, n, 1, s), v = narg(vm, a, n, 2, s);
+  if (p.k == V_HANDLE) {
+    int pi = player_index_of(vm, p.i);
+    int val = (int)v.i;
+    if (st.i == 1) vm->players[pi].gold = val;
+    else if (st.i == 2) vm->players[pi].lumber = val;
+  }
+  return v_null();
+}
+static Value n_get_player_state(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), st = narg(vm, a, n, 1, s);
+  if (p.k == V_HANDLE) {
+    int pi = player_index_of(vm, p.i);
+    if (st.i == 1) return v_int(vm->players[pi].gold);
+    if (st.i == 2) return v_int(vm->players[pi].lumber);
+  }
+  return v_int(0);
 }
 
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
@@ -1430,7 +1490,8 @@ static const NativeEntry NATIVES[] = {
   { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_void },
   { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
   { "SetPlayerColor", n_void }, { "DestroyTrigger", n_void }, { "DestroyGroup", n_void },
-  { "PauseGame", n_void }, { "SetPlayerState", n_void }, { "SetPlayerAlliance", n_void },
+  { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_void },
+  { "GetPlayerState", n_get_player_state },
   { "VolumeGroupSetVolume", n_void }, { "PlayCinematic", n_void }, { "StartSound", n_void },
   { "SetDestructableAnimation", n_void }, { "SetUnitState", n_void }, { "SetUnitAcquireRange", n_void },
   { "SetPlayerTechMaxAllowed", n_void }, { "SetPlayerTechResearched", n_void },
@@ -1460,6 +1521,10 @@ static const NativeEntry NATIVES[] = {
   { "CreateUnit", n_create_unit }, { "CreateSoundFromLabel", n_handle }, { "CreateMIDISound", n_handle },
   { "GetUnitTypeId", n_get_unit_type_id }, { "UnitAlive", n_unit_alive },
   { "KillUnit", n_kill_unit }, { "RemoveUnit", n_kill_unit }, { "DestroyEffect", n_void },
+  { "GetUnitX", n_get_unit_x }, { "GetUnitY", n_get_unit_y },
+  { "SetUnitX", n_set_unit_x }, { "SetUnitY", n_set_unit_y },
+  { "SetUnitPosition", n_set_unit_position }, { "GetUnitFacing", n_get_unit_facing },
+  { "SetUnitFacing", n_set_unit_facing }, { "SetUnitFacingTimed", n_set_unit_facing },
   { "Filter", n_handle }, { "Rect", n_handle }, { "Player", n_player },
   { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
