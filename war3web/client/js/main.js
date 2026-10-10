@@ -476,6 +476,8 @@ let dayNightCurves = {};
 
 // ---------------------------------------------------------------------- boot
 async function boot(m) {
+  // M2: WebGPU 渲染器异步 init；首帧前必须就绪（WebGL 路径恒 resolved）
+  await view.rendererReady;
   const [terr, heightsBuf, doodads, dests, unitModels, ubersplats,
          splatTable, spawnTable, animSounds, boltTable, uiSounds, buffArt,
          dncCurves] = await Promise.all([
@@ -1272,4 +1274,5 @@ window.FOC = { view, S, ui, net, overlay, audio, refitConsole, shopFor,
 ui.setLoading('connecting…', 0.1);
 try { net.token = sessionStorage.getItem('war3web.token') || null; } catch { /* private mode */ }
 net.connect(savedName);
-frame();
+// M2: WebGPU 渲染器 init 完成后才启动首帧（WebGL 恒立即）
+view.rendererReady.then(() => frame());

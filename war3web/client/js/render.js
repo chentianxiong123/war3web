@@ -249,10 +249,20 @@ function cloneModel(scene) {
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    // M2: WebGPU 试点开关（localStorage.webgpu=1 切 WebGPURenderer，默认 WebGL）。
+    // WebGPURenderer 在 r152+ 主构建导出；异步 init 见 rendererReady。
+    const webgpu = typeof localStorage !== 'undefined' && localStorage.getItem('webgpu') === '1';
+    this.webgpu = webgpu;
+    this.renderer = webgpu
+      ? new THREE.WebGPURenderer({ canvas, antialias: true })
+      : new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.rendererReady = webgpu ? this.renderer.init() : Promise.resolve();
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = false;
+    // M2: WebGPU 渲染器无 capabilities.getMaxAnisotropy(), 固定 8 保底。
+    this.aniso = () => (this.renderer.capabilities && this.renderer.capabilities.getMaxAnisotropy
+      ? this.renderer.capabilities.getMaxAnisotropy() : 8);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0c12);
@@ -385,7 +395,7 @@ export class Renderer {
     // two looked like different materials where they meet: at an RTS camera
     // angle every ground texel is seen edge-on, and without anisotropy that
     // smears while the cliff beside it stays sharp.
-    tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    tex.anisotropy = this.aniso();
     const mat = new THREE.MeshLambertMaterial({ map: tex });
     const mesh = new THREE.Mesh(geo, mat);
     this.scene.add(mesh);
@@ -430,7 +440,7 @@ export class Renderer {
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.flipY = false;
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+        tex.anisotropy = this.aniso();
       } catch { tex = null; }
       const mat = new THREE.MeshLambertMaterial(tex ? { map: tex } : { color: 0x6b6b73 });
       group.add(new THREE.Mesh(geo, mat));
