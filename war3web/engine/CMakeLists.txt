@@ -63,6 +63,7 @@ set(STORMLIB_LZMA
 add_executable(engine
   src/math.c
   src/w3x.c
+  src/jass.c
   ${STORMLIB_CORE}
   ${STORMLIB_SUB}
   ${STORMLIB_LZMA}
@@ -78,7 +79,7 @@ if(EMSCRIPTEN)
   target_link_options(engine PRIVATE
     -Oz
     --no-entry
-    "-sEXPORTED_FUNCTIONS=_w3x_check_header,_w3x_get_version,_w3x_open,_w3x_close,_w3x_has_file,_w3x_read,_vec3_lenf,_vec3_dotf,_vec3_crossf,_malloc,_free"
+    "-sEXPORTED_FUNCTIONS=_w3x_check_header,_w3x_get_version,_w3x_open,_w3x_close,_w3x_has_file,_w3x_read,_vec3_lenf,_vec3_dotf,_vec3_crossf,_jass_parse,_malloc,_free"
     -sMODULARIZE
     -sEXPORT_NAME=createEngine
     -sENVIRONMENT=node,web
