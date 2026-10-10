@@ -1,5 +1,5 @@
-// M1: 无头浏览器加载 wasm 页面，验证 war3core 在浏览器端可用。
-// 依赖构建产物 wasm/out/war3core.{js,wasm}（先跑 bash tools/build_wasm.sh）。
+// wasm 模块浏览器端验证：无头 Chrome 加载 wasm/test_page.html，等 body[data-passed]。
+// 依赖构建产物 wasm/out/war3core.{mjs,wasm}（先跑 npm run wasm）。
 import { createServer } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,7 @@ const PORT = process.env.PORT || '8078';
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
   '.wasm': 'application/wasm',
   '.json': 'application/json',
   '.css': 'text/css',
