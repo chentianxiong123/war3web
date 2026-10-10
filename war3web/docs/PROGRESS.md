@@ -208,6 +208,13 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 单位状态存储：SetUnitState/GetUnitState life/mana/max（UNIT_STATE 常量 0-3）
 - 断言 5 项；81/81 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.17 触发器事件注册表（提交 1e82dca）
+- TriggerRegisterXxx 8 类存事件到触发器表（kind: unit/playerunit/player/
+  game/timer/timerexpire/unitinrange/chat + 单位/玩家/事件常量/过滤函数）
+- 返回 event handle（对齐 engine.js H('event')）；TimerExpire 关联计时器→触发器
+- 事件驱动执行的前置：注册侧完整，触发侧（jass_run 后事件循环）待做
+- 断言 2 项；83/83 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
