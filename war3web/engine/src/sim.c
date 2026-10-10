@@ -20,6 +20,82 @@ static const uint8_t* W;               // walk 数据（0/1）
 static int GW, GH;
 static double OX, OY;
 
+static int clear_footprint(double x0, double y0, double x1, double y1, double radius);   // 定义在下方
+
+// ---- 实体碰撞 occupancy（JS movementPath 的 circles 桶等价物，全量遍历）----
+static double OCX[256], OCY[256], OCR2[256];
+static int OCN;
+static int occ_clear(double px, double py) {
+  for (int i = 0; i < OCN; i++)
+    if ((px - OCX[i]) * (px - OCX[i]) + (py - OCY[i]) * (py - OCY[i]) < OCR2[i] - 1e-6) return 0;
+  return 1;
+}
+
+// ---- 单位表（多单位）----
+#define SIM_MAX 1024
+typedef struct {
+  double x, y, facing;
+  double speed, radius;
+  int alive, pathingOff, fly;
+  long long bodyRepathAt;
+  double* path; int nPath, capPath;
+} SimUnit;
+static SimUnit U[SIM_MAX];
+
+void sim_spawn(int id, double x, double y, double facing, double speed, double radius, int fly, int pathingOff) {
+  if (id < 0 || id >= SIM_MAX) return;
+  U[id].x = x; U[id].y = y; U[id].facing = facing;
+  U[id].speed = speed; U[id].radius = radius;
+  U[id].alive = 1; U[id].fly = fly; U[id].pathingOff = pathingOff;
+  U[id].nPath = 0;
+}
+void sim_clear_all(void) {
+  for (int i = 0; i < SIM_MAX; i++) { U[i].alive = 0; U[i].nPath = 0; }
+  OCN = 0;
+}
+
+/** 实体阻挡列表（JS movementBlockers）：同类型 + blocksMovement + 扫掠矩形候选。
+ *  x<0 表示全量（路径搜索端点省略场景）。 */
+static int blockers_for(SimUnit* u, double x, double y, int* out) {
+  int n = 0;
+  for (int i = 0; i < SIM_MAX; i++) {
+    SimUnit* t = &U[i];
+    if (!t->alive || t->pathingOff || t == u) continue;
+    if (t->fly != u->fly) continue;
+    const double r = u->radius + t->radius;
+    if (x >= 0 && (t->x < fmin(u->x, x) - r || t->x > fmax(u->x, x) + r ||
+                   t->y < fmin(u->y, y) - r || t->y > fmax(u->y, y) + r)) continue;
+    out[n++] = i;
+  }
+  return n;
+}
+
+/** canAdvance（JS 全量）：地形扫掠 + 实体投影距离。 */
+static int can_advance(SimUnit* u, double x, double y, int nb, const int* b) {
+  if (!clear_footprint(u->x, u->y, x, y, u->pathingOff ? 0 : u->radius)) return 0;
+  const double dx = x - u->x, dy = y - u->y, len2 = dx * dx + dy * dy;
+  for (int i = 0; i < nb; i++) {
+    const SimUnit* t = &U[b[i]];
+    const double ax = t->x - u->x, ay = t->y - u->y;
+    const double start2 = ax * ax + ay * ay;
+    const double f = len2 ? fmax(0, fmin(1, (ax * dx + ay * dy) / len2)) : 0;
+    const double distance2 = (ax - f * dx) * (ax - f * dx) + (ay - f * dy) * (ay - f * dy);
+    const double need2 = (u->radius + t->radius) * (u->radius + t->radius);
+    if (distance2 < fmin(start2, need2) - 1e-6) return 0;
+  }
+  return 1;
+}
+
+/** 设路径（世界坐标 float2 对）。 */
+static void sim_set_path_u(SimUnit* u, const double* pts, int n) {
+  if (n > u->capPath) {
+    u->capPath = n ? n + 8 : 16;
+    u->path = (double*)realloc(u->path, sizeof(double) * 2 * (size_t)u->capPath);
+  }
+  for (int i = 0; i < n; i++) { u->path[2 * i] = pts[2 * i]; u->path[2 * i + 1] = pts[2 * i + 1]; }
+  u->nPath = n;
+}
+
 void sim_grid_init(uint8_t* walk, int w, int h, double ox, double oy) {
   W = walk; GW = w; GH = h; OX = ox; OY = oy;
 }
@@ -82,12 +158,12 @@ static int clear_footprint(double x0, double y0, double x1, double y1, double ra
   return 1;
 }
 
-/** 最近可行走格（有界螺旋搜索，pass = 半径足迹检查，对齐 JS pathing pass）。 */
+/** 最近可行走格（有界螺旋搜索，pass = 半径足迹 + 实体 occupancy，对齐 JS pathing pass）。 */
 static void nearest_walkable(double x, double y, int maxR, double radius, int* ocx, int* ocy) {
   int cx = (int)floor((x - OX) / SIM_PCELL), cy = (int)floor((y - OY) / SIM_PCELL);
   if (walkable(cx, cy)) {
     double pwx = OX + (cx + 0.5) * SIM_PCELL, pwy = OY + (cy + 0.5) * SIM_PCELL;
-    if (clear_footprint(pwx, pwy, pwx, pwy, radius)) { *ocx = cx; *ocy = cy; return; }
+    if (clear_footprint(pwx, pwy, pwx, pwy, radius) && occ_clear(pwx, pwy)) { *ocx = cx; *ocy = cy; return; }
   }
   for (int r = 1; r <= maxR; r++)
     for (int dx = -r; dx <= r; dx++)
@@ -95,7 +171,7 @@ static void nearest_walkable(double x, double y, int maxR, double radius, int* o
         if (fmax(abs(dx), abs(dy)) != r) continue;
         if (walkable(cx + dx, cy + dy)) {
           double pwx = OX + (cx + dx + 0.5) * SIM_PCELL, pwy = OY + (cy + dy + 0.5) * SIM_PCELL;
-          if (clear_footprint(pwx, pwy, pwx, pwy, radius)) { *ocx = cx + dx; *ocy = cy + dy; return; }
+          if (clear_footprint(pwx, pwy, pwx, pwy, radius) && occ_clear(pwx, pwy)) { *ocx = cx + dx; *ocy = cy + dy; return; }
         }
       }
   *ocx = -1; *ocy = -1;
@@ -130,7 +206,7 @@ static int connected_idx(int start, int goal) {
 static double* heap;      // open 堆（存格索引）
 static int heapLen, heapCap;
 static int* hpos;         // 格索引 → 堆位置
-static double* g; static double* f; static int* from;
+static float* g; static float* f; static int* from;   // float32 对齐 JS Float32Array（f 相等性影响堆序）
 
 static int less_f(int a, int b) { return f[a] < f[b] || (f[a] == f[b] && a < b); }
 static void heap_rise(int i) {
@@ -176,6 +252,7 @@ static int clear_line(double x0, double y0, double x1, double y1, double radius)
     const double t = steps ? (double)i / steps : 0;
     const double x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
     if (!walkable_at(x, y)) return 0;
+    if (!occ_clear(x, y)) return 0;   // JS _trace 把 occupancy 原函数传给 clearLine（无 clear 单点）
   }
   return 1;
 }
@@ -196,14 +273,14 @@ int sim_find_path_r(double sx, double sy, double tx, double ty, float* out, int 
   const int start = s1 * GW + s0, goal = t1 * GW + t0;
   if (!connected_idx(start, goal)) return -1;
   const int N = GW * GH;
-  g = (double*)malloc(sizeof(double) * (size_t)N);
-  f = (double*)malloc(sizeof(double) * (size_t)N);
+  g = (float*)malloc(sizeof(float) * (size_t)N);
+  f = (float*)malloc(sizeof(float) * (size_t)N);
   from = (int*)malloc(sizeof(int) * (size_t)N);
   hpos = (int*)malloc(sizeof(int) * (size_t)N);
   uint8_t* closed = (uint8_t*)calloc((size_t)N, 1);
   heap = NULL; heapLen = 0; heapCap = 0;
   for (int i = 0; i < N; i++) { g[i] = INFINITY; f[i] = INFINITY; from[i] = -1; hpos[i] = -1; }
-  g[start] = 0; f[start] = hx(start, t0, t1); heap_push(start);
+  g[start] = 0; f[start] = (float)hx(start, t0, t1); heap_push(start);
   int expanded = 0, found = 0;
   while (heapLen) {
     const int cur = heap_pop();
@@ -217,13 +294,22 @@ int sim_find_path_r(double sx, double sy, double tx, double ty, float* out, int 
       if (!inside(nx, ny)) continue;
       const int ni = ny * GW + nx;
       if (closed[ni] || !walkable(nx, ny)) continue;
-      if (dx && dy && (!walkable(cx + dx, cy) || !walkable(cx, cy + dy))) continue;
       const double pwx0 = OX + (cx + 0.5) * SIM_PCELL, pwy0 = OY + (cy + 0.5) * SIM_PCELL;
       const double pwx1 = OX + (nx + 0.5) * SIM_PCELL, pwy1 = OY + (ny + 0.5) * SIM_PCELL;
-      if (!clear_footprint(pwx0, pwy0, pwx1, pwy1, radius)) continue;
-      const double ng = g[cur] + (dx && dy ? SIM_SQRT2 : 1);
-      if (ng < g[ni]) {
-        g[ni] = ng; from[ni] = cur; f[ni] = ng + hx(ni, t0, t1);
+      // passable（JS pathing）：格中心 clear 单点 + occupancy
+      if (!clear_footprint(pwx1, pwy1, pwx1, pwy1, radius)) continue;
+      if (!occ_clear(pwx1, pwy1)) continue;
+      if (dx && dy) {
+        if (!walkable(cx + dx, cy) || !walkable(cx, cy + dy)) continue;   // JS 对角 walkable
+        const double pxc = OX + (cx + dx + 0.5) * SIM_PCELL, pyc = OY + (cy + 0.5) * SIM_PCELL;
+        const double pxc2 = OX + (cx + 0.5) * SIM_PCELL, pyc2 = OY + (cy + dy + 0.5) * SIM_PCELL;
+        if (!clear_footprint(pxc, pyc, pxc, pyc, radius) || !occ_clear(pxc, pyc)) continue;
+        if (!clear_footprint(pxc2, pyc2, pxc2, pyc2, radius) || !occ_clear(pxc2, pyc2)) continue;
+      }
+      if (!clear_footprint(pwx0, pwy0, pwx1, pwy1, radius)) continue;   // 段扫掠（JS 无 occupancy）
+      const double ngd = (double)g[cur] + (dx && dy ? SIM_SQRT2 : 1);   // JS: float+double → double 比较
+      if (ngd < (double)g[ni]) {
+        g[ni] = (float)ngd; from[ni] = cur; f[ni] = (float)(ngd + hx(ni, t0, t1));
         if (hpos[ni] < 0) heap_push(ni); else heap_rise(hpos[ni]);
       }
     }
@@ -355,4 +441,106 @@ int sim_run_move(double sx, double sy, double tx, double ty,
   outState[4] = (float)hypot(U_X - tx, U_Y - ty);  // endErr
   outState[5] = arrive >= 0 ? 1 : 0;
   return arrive >= 0 ? 1 : 0;
+}
+
+// ------------------------------------------------------------------ 多单位世界
+// 单位表已定义于头部（SimUnit U[SIM_MAX]）。sim_order_move：movementPath 含实体
+// （快路径 canAdvance 含实体 + 慢路径 occupancy）；sim_tick：全单位 stepMove
+// move 分支（turnToward 预算 + canAdvance 实体段 + 撞墙 250ms 冷却重寻路）。
+
+static long long SIM_NOW;   // tick 计数（模拟 world.now）
+
+/** movementPath（含实体阻挡）→ 设路径；返回 1 成功 / -1 无路径。 */
+int sim_order_move(int id, double tx, double ty) {
+  SimUnit* u = &U[id];
+  if (!u->alive) return -1;
+  const double radius = u->pathingOff ? 0 : u->radius;
+  int b[SIM_MAX], nb = blockers_for(u, -1, -1, b);
+  // occupancy 快照（circles：r2 = min(半径和², 当前距离²)）
+  OCN = 0;
+  for (int i = 0; i < nb && OCN < 256; i++) {
+    const SimUnit* t = &U[b[i]];
+    double r2 = (u->radius + t->radius) * (u->radius + t->radius);
+    const double d2 = (u->x - t->x) * (u->x - t->x) + (u->y - t->y) * (u->y - t->y);
+    if (d2 < r2) r2 = d2;
+    OCX[OCN] = t->x; OCY[OCN] = t->y; OCR2[OCN] = r2; OCN++;
+  }
+  // 快路径：直线可达（含实体）
+  if (can_advance(u, tx, ty, nb, b)) {
+    double p[2] = { tx, ty };
+    sim_set_path_u(u, p, 1);
+    OCN = 0;
+    return 1;
+  }
+  // 慢路径：入口 + A*（occupancy 全局生效）
+  int s0, s1, t0, t1;
+  nearest_walkable(u->x, u->y, 24, radius, &s0, &s1);
+  nearest_walkable(tx, ty, 24, radius, &t0, &t1);
+  if (s0 < 0 || t0 < 0) { OCN = 0; return -1; }
+  const double ex = OX + (s0 + 0.5) * SIM_PCELL, ey = OY + (s1 + 0.5) * SIM_PCELL;
+  if (!can_advance(u, ex, ey, nb, b)) { OCN = 0; return -1; }
+  float buf[1024];
+  const int n = sim_find_path_r(ex, ey, tx, ty, buf, 512, radius);
+  OCN = 0;
+  if (n < 0) return -1;
+  double* pts = (double*)malloc(sizeof(double) * 2 * (size_t)(n + 1));
+  pts[0] = ex; pts[1] = ey;
+  for (int i = 0; i < n; i++) { pts[2 * (i + 1)] = buf[2 * i]; pts[2 * (i + 1) + 1] = buf[2 * i + 1]; }
+  sim_set_path_u(u, pts, n + 1);
+  free(pts);
+  return 1;
+}
+
+/** 全单位推进一个 tick（move 分支；对齐 stepMove 2834-2855）。 */
+void sim_tick(double dt) {
+  SIM_NOW++;
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive || u->nPath == 0) continue;
+    const double gx = u->path[0], gy = u->path[1];
+    // turnToward（预算 turnRate·dt/0.03）
+    const double angle = atan2(gy - u->y, gx - u->x);
+    double delta = atan2(sin(angle - u->facing), cos(angle - u->facing));
+    if (fabs(delta) >= 1e-9) {
+      const double budget = 0.6 * dt / 0.03;
+      const double amount = fmin(fabs(delta), budget);
+      u->facing += (delta > 0 ? 1 : -1) * amount;
+      u->facing = atan2(sin(u->facing), cos(u->facing));
+      if (fabs(delta) - amount >= 1e-9) continue;   // 转向未到位，本 tick 不动
+    }
+    const double dx = gx - u->x, dy = gy - u->y, d = hypot(dx, dy);
+    const double stepLen = u->speed * dt;
+    const double fraction = d > 0 ? fmin(1, stepLen / d) : 0;
+    const double nx = u->x + dx * fraction, ny = u->y + dy * fraction;
+    int b2[SIM_MAX], nb2 = blockers_for(u, nx, ny, b2);   // step 扫掠矩形候选
+    if (!can_advance(u, nx, ny, nb2, b2)) {
+      // 撞墙：250ms 冷却后重寻路到 path 终点（bodyRepathAt）
+      if (u->bodyRepathAt <= SIM_NOW) {
+        const double ggx = u->path[2 * (u->nPath - 1)], ggy = u->path[2 * (u->nPath - 1) + 1];
+        sim_order_move(id, ggx, ggy);
+        u->bodyRepathAt = SIM_NOW + (long long)(0.25 / dt);
+      }
+      continue;
+    }
+    u->x = nx; u->y = ny;
+    if (d <= stepLen) {
+      for (int i = 1; i < u->nPath; i++) { u->path[2 * (i - 1)] = u->path[2 * i]; u->path[2 * (i - 1) + 1] = u->path[2 * i + 1]; }
+      u->nPath--;
+      if (u->nPath == 0) { /* 到达 → idle（path 空即停） */ }
+    }
+  }
+}
+
+/** 读单位状态：out[4] = x, y, facing, nPath。 */
+void sim_get(int id, float* out) {
+  if (id < 0 || id >= SIM_MAX || !U[id].alive) { for (int i = 0; i < 4; i++) out[i] = 0; return; }
+  out[0] = (float)U[id].x; out[1] = (float)U[id].y; out[2] = (float)U[id].facing; out[3] = (float)U[id].nPath;
+}
+
+/** 读单位路径点：out 为 float2 对（世界坐标）；返回段数。-1 无效。 */
+int sim_get_path(int id, float* out, int maxOut) {
+  if (id < 0 || id >= SIM_MAX || !U[id].alive) return -1;
+  const int n = U[id].nPath < maxOut ? U[id].nPath : maxOut;
+  for (int i = 0; i < n; i++) { out[2 * i] = (float)U[id].path[2 * i]; out[2 * i + 1] = (float)U[id].path[2 * i + 1]; }
+  return n;
 }

@@ -101,6 +101,45 @@ for (const r of golden.runs) {
 eng._free(outState);
 console.log(`\nsim_move vs golden: ${mvPass}/${golden.runs.length} 到达行为一致`);
 if (mvFail) process.exitCode = 1;
+
+// ---- M4 阶段1 多单位碰撞对照：hold 挡路 + 移动单位绕行 ----
+const w2 = new World();
+const ph2 = { index: 0, team: 0 };
+const a2 = w2.createUnit(ph2, "hpea", 1232, 1040, 0);
+const b2 = w2.createUnit(ph2, "hpea", 1152, 1040, 0);
+const aSpawn = [a2.x, a2.y], bSpawn = [b2.x, b2.y];   // spawn 后初始位置（freeSpotNear 微调后）
+w2.order(a2, { type: "hold" });
+w2.order(b2, { type: "move", x: 1500, y: 1500 });
+const jsSegs = b2.path?.length ?? -1;
+let jsArrive2 = null;
+for (let t = 0; t < 45 * 30; t++) {
+  w2.step();
+  if (jsArrive2 == null && Math.hypot(b2.x - 1500, b2.y - 1500) < 40) jsArrive2 = t;
+}
+eng._sim_clear_all();
+eng._sim_spawn(0, aSpawn[0], aSpawn[1], 0, SPEED, RADIUS, 0, 0);   // hold 挡路（spawn 位置）
+eng._sim_spawn(1, bSpawn[0], bSpawn[1], 0, SPEED, RADIUS, 0, 0);
+eng._sim_order_move(1, 1500, 1500);
+const sg = eng._malloc(4 * 4);
+eng._sim_get(1, sg);
+const cSegs = eng.HEAPF32[(sg >> 2) + 3];
+let cArrive2 = null;
+for (let t = 0; t < 45 * 30; t++) {
+  eng._sim_tick(1 / 30);
+  eng._sim_get(1, sg);
+  const bx = eng.HEAPF32[sg >> 2], by = eng.HEAPF32[(sg >> 2) + 1];
+  if (cArrive2 == null && Math.hypot(bx - 1500, by - 1500) < 40) cArrive2 = t;
+}
+eng._sim_get(1, sg);
+const cEnd = [eng.HEAPF32[sg >> 2], eng.HEAPF32[(sg >> 2) + 1]];
+eng._free(sg);
+const segOk = cSegs === jsSegs;
+const dtick2 = Math.abs((cArrive2 ?? 45 * 30) - (jsArrive2 ?? 45 * 30));
+const posOk = Math.hypot(cEnd[0] - b2.x, cEnd[1] - b2.y) <= 8;
+const ok2 = segOk && dtick2 <= 6 && posOk;
+console.log(`碰撞场景 (hold 挡路 + 绕行): ${ok2 ? "OK" : "FAIL"} 路径段数 C ${cSegs} vs JS ${jsSegs} | 到达 tick C ${cArrive2} vs JS ${jsArrive2} | 终位 C [${Math.round(cEnd[0])},${Math.round(cEnd[1])}] vs JS [${Math.round(b2.x)},${Math.round(b2.y)}]`);
+if (!ok2) process.exitCode = 1;
+
 eng._free(walkPtr);
 
 

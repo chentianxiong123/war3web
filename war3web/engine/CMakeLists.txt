@@ -80,7 +80,7 @@ if(EMSCRIPTEN)
   target_link_options(engine PRIVATE
     -Oz
     --no-entry
-    "-sEXPORTED_FUNCTIONS=_w3x_check_header,_w3x_get_version,_w3x_open,_w3x_close,_w3x_has_file,_w3x_read,_vec3_lenf,_vec3_dotf,_vec3_crossf,_jass_parse,_jass_run,_sim_grid_init,_sim_find_path,_sim_find_path_r,_sim_clear_foot,_sim_connected_i,_sim_set_unit,_sim_set_path,_sim_run_move,_malloc,_free"
+    "-sEXPORTED_FUNCTIONS=_w3x_check_header,_w3x_get_version,_w3x_open,_w3x_close,_w3x_has_file,_w3x_read,_vec3_lenf,_vec3_dotf,_vec3_crossf,_jass_parse,_jass_run,_sim_grid_init,_sim_find_path,_sim_find_path_r,_sim_clear_foot,_sim_connected_i,_sim_set_unit,_sim_set_path,_sim_run_move,_sim_spawn,_sim_clear_all,_sim_order_move,_sim_tick,_sim_get,_sim_get_path,_malloc,_free"
     -sMODULARIZE
     -sEXPORT_NAME=createEngine
     -sENVIRONMENT=node,web
