@@ -250,19 +250,29 @@ export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     // M2: WebGPU 试点开关（localStorage.webgpu=1 切 WebGPURenderer，默认 WebGL）。
-    // WebGPURenderer 在 r152+ 主构建导出；异步 init 见 rendererReady。
+    // r185 默认构建不含 WebGPURenderer（在 three/webgpu 构建），WebGPU 分支
+    // 动态 import + 异步 init；rendererReady 供 boot/首帧等待。
     const webgpu = typeof localStorage !== 'undefined' && localStorage.getItem('webgpu') === '1';
     this.webgpu = webgpu;
-    this.renderer = webgpu
-      ? new THREE.WebGPURenderer({ canvas, antialias: true })
-      : new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.rendererReady = webgpu ? this.renderer.init() : Promise.resolve();
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = false;
-    // M2: WebGPU 渲染器无 capabilities.getMaxAnisotropy(), 固定 8 保底。
-    this.aniso = () => (this.renderer.capabilities && this.renderer.capabilities.getMaxAnisotropy
-      ? this.renderer.capabilities.getMaxAnisotropy() : 8);
+    const cfg = () => {
+      this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+      this.renderer.shadowMap.enabled = false;
+      // WebGPU 无 capabilities.getMaxAnisotropy(), 固定 8 保底。
+      this.aniso = () => (this.renderer.capabilities && this.renderer.capabilities.getMaxAnisotropy
+        ? this.renderer.capabilities.getMaxAnisotropy() : 8);
+    };
+    this.rendererReady = webgpu
+      ? import('three/webgpu').then((wg) => {
+          this.renderer = new wg.WebGPURenderer({ canvas, antialias: true });
+          cfg();
+          return this.renderer.init();
+        })
+      : new Promise((res) => {
+          this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+          cfg();
+          res();
+        });
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0c12);
@@ -317,7 +327,9 @@ export class Renderer {
 
   resize() {
     const w = innerWidth, h = innerHeight;
-    this.renderer.setSize(w, h, false);
+    // M2: WebGPU 分支 renderer 异步就绪，setSize 延时到 rendererReady 后
+    if (this.renderer) this.renderer.setSize(w, h, false);
+    else this.rendererReady.then(() => { if (this.renderer) this.renderer.setSize(w, h, false); });
     this.camera.aspect = w / h;
     // The console covers the bottom of the screen and the world is drawn behind
     // it, so the middle of the window is not the middle of what can be seen.
