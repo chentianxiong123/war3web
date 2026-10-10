@@ -50,6 +50,13 @@
   40 距离到达门禁）。**sim_test 端到端对照 golden：5/5 到达行为一致**
   （到达 tick 差 ≤3、路径长度完全一致、endErr 一致）。
   golden 基准已升级为 **arrive 时刻快照**（arrivePathLen/arriveEndErr）。
+- **多单位 + 实体碰撞完成（aa24d4e）**：sim 单位表（sim_spawn/sim_order_move/
+  sim_tick/sim_get）+ `canAdvance` 实体投影距离（JS 逐字移植）+ occupancy 绕行
+  （快路径含实体检查、慢路径 occupancy 圆集）+ 撞墙 250ms 冷却重寻路。
+  **关键发现：JS A* 的 g/f 是 Float32Array——C 用 double 导致 f 相等比较不同、
+  堆序不同、路径不同（根因）→ C g/f 改 float32 后完全对齐**。
+  **sim_test 碰撞场景（hold 挡路+绕行）完全一致：路径段数 4=4、到达 tick 93=93、
+  终位 [1488,1488] 一致**。
 - 输入：单位意图（order 目标/路径点）→ WASM 内寻路（现有 walk.bin/fload.bin 二进制
   数据直接加载进 wasm heap）→ 输出：单位新坐标/朝向
 - 交付：`wasm_move(unitId, target, dt)` 导出 + Node 端对照 JS 寻路结果
