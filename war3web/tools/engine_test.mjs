@@ -4,6 +4,7 @@ import createEngine from '../engine/out/engine.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseJs } from '../server/jass/parse.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAP_PATH = path.join(ROOT, 'terenas.w3x');
@@ -58,6 +59,75 @@ if (!fs.existsSync(MAP_PATH)) {
   ck('w3i version >= 4', version >= 4 ? 1 : 0, 1);
   console.log(`  info   terenas.w3x: ${bytes.length} 字节, w3i v${version}, 文件数(抽样 ${['war3map.w3i', 'war3map.j', 'war3map.w3e'].length})`);
   m._free(w3i);
+}
+
+// --- JASS 解析（WASM 版 vs JS 版 parse() 对照）---
+const jassC = (s) => {
+  const b = m._malloc(s.length + 1);
+  m.stringToUTF8(s, b, s.length + 1);
+  const ptr = m._jass_parse(b, s.length);
+  const json = JSON.parse(m.UTF8ToString(ptr));
+  m._free(ptr); m._free(b);
+  return json;
+};
+const mini = `
+globals
+  integer x = 5
+  constant real PI = 3.14
+  unit array units
+endglobals
+type unit extends handle
+native Test takes integer a, string b returns boolean
+function Add takes integer a, integer b returns integer
+  local integer r = a + b
+  loop
+    exitwhen r > 100
+    set r = r + 1
+  endloop
+  call Test(r, "hi")
+  return r
+endfunction
+function Main takes nothing returns nothing
+  if x == 5 then
+    call Add(1, 2)
+  elseif x < 0 then
+    return
+  else
+    set x = x + 1
+  endif
+endfunction
+`;
+const cm = jassC(mini);
+const jm = parseJs(mini, 'mini');
+ck('jass(小) types', cm.types.length, jm.types.length);
+ck('jass(小) globals', cm.globals, jm.globals.length);
+ck('jass(小) natives', cm.native_count, jm.natives.length);
+ck('jass(小) functions', cm.function_count, jm.functions.length);
+const cAdd = cm.functions.find((f) => f.name === 'Add');
+const jAdd = jm.functions.find((f) => f.name === 'Add');
+ck('jass(小) Add.stmts', cAdd.stmts, jAdd.body.length);
+ck('jass(小) Add.params', cAdd.params.length, jAdd.params.length);
+ck('jass(小) Add.ret', cAdd.ret === jAdd.ret ? 1 : 0, 1);
+ck('jass(小) Main.ret=nothing', cm.functions.find((f) => f.name === 'Main').ret === 'nothing' ? 1 : 0, 1);
+
+const JASS_PATH = path.join(ROOT, 'extracted', 'war3map.j');
+if (!fs.existsSync(JASS_PATH)) {
+  console.log('  SKIP  war3map.j 对照（缺 extracted/war3map.j）');
+} else {
+  const src = fs.readFileSync(JASS_PATH, 'utf8');
+  const cm2 = jassC(src);
+  const jm2 = parseJs(src, 'war3map.j');
+  ck('jass(地图) types', cm2.types.length, jm2.types.length);
+  ck('jass(地图) globals', cm2.globals, jm2.globals.length);
+  ck('jass(地图) natives', cm2.native_count, jm2.natives.length);
+  ck('jass(地图) functions', cm2.function_count, jm2.functions.length);
+  const jFn = jm2.functions.find((f) => f.name === 'InitGlobals');
+  const cFn = cm2.functions.find((f) => f.name === 'InitGlobals');
+  ck('jass(地图) InitGlobals.stmts', cFn ? cFn.stmts : -1, jFn ? jFn.body.length : -1);
+  const jDrop = jm2.functions.find((f) => f.name.endsWith('_DropItems'));
+  const cDrop = cm2.functions.find((f) => f.name.endsWith('_DropItems'));
+  ck('jass(地图) DropItems 参数数', cDrop ? cDrop.params.length : -1, jDrop ? jDrop.params.length : -1);
+  console.log(`  info   war3map.j: ${cm2.function_count} 函数 / ${cm2.native_count} 原生 / ${cm2.globals} 全局`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
