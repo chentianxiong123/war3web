@@ -3,15 +3,16 @@
 > 本文件记录已交付成果：功能、验证证据、提交哈希、验证命令。新增成果必须
 > 追加记录并随提交更新——"成果必须有文档证据"。
 >
-> 仓库 `Z:\war3`，项目 `war3web\`。完整解析覆盖审计在
+> 仓库 `C:\Users\a1\war3`（2026-10-10 从 NFS `Z:\war3` 迁入本地），项目 `war3web\`。
+> 完整解析覆盖审计在
 > `C:\Users\a1\Desktop\war3web-解析覆盖审计-2026.md`（每轮追加）。
 
 ## 验证命令（所有成果的可复现入口）
 
 ```bash
-# 引擎（WASM）单元 + 对照测试：当前 31 项全绿
+# 引擎（WASM）单元 + 对照测试：当前 38 项全绿
 npm run engine          # Emscripten + CMake + Ninja 构建 → engine/out/
-npm run engine:test     # vec3/w3x/MPQ(StormLib) + JASS AST 逐字节对照 + VM 执行对照
+npm run engine:test     # vec3/w3x/MPQ(StormLib) + JASS AST 逐字节对照 + VM 执行对照 + C/JS 全局强对照
 
 # 资产管线（tools/*.py，系统 Python314 + numpy + pillow）
 python tools/mapdata_test.py          # 地图数据解析回归
@@ -103,10 +104,31 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   GetGameTypeSelected/SetPlayerStartLocation/SetStartLocPrio/SetStartLocPrioCount）；
   config 调用序断言常驻（38/38 全绿）
 
+### 3.6 natives 语义深化①：触发器同步执行 + C/JS 全局强对照
+- **V_CODE 类型 + E_FUNCREF 求值**：`function Xxx` 实参 → 动作函数名
+  （TriggerAddAction/ExecuteFunc 的 code 参数）
+- **触发器对象表**（Vm.triggers）：`CreateTrigger` 真分配 handle + 动作表；
+  `TriggerAddAction` 存动作函数名；`TriggerEvaluate`/`TriggerExecute`
+  同步执行动作（Evaluate 返回 true）；`ExecuteFunc` 按名调用
+- **效果**：war3map.j 触发器链真实执行——`RunInitializationTriggers`
+  → `ConditionalTriggerExecute(gg_trg_Melee_Initialization)`
+  → `Trig_Melee_Initialization_Actions` → MeleeStartingVisibility/HeroLimit/
+  GrantHeroItems/Resources/ClearExcessUnits/StartingUnits/StartingAI/
+  InitVictoryDefeat（8 函数链，bj_meleeGrantHeroItems 等被正确 set）
+- **jass_run 多入口顺序执行**：entry 支持逗号分隔（`"config,main"`，
+  同一 VM 状态连续跑——对齐 engine.js `boot()` = initGlobals+config+main）
+- **b_real17**：globals 的 real 输出 17 位有效数字（对齐 JS JSON.stringify
+  round-trip；AST 序列化保持 15 位 → 与 JS 最短表示逐字节一致，二者分开）
+- **验证：C(config,main) vs JS boot() 全局强对照——880 全局 0 差异**
+  （365 值一致 / 56 null / 459 handle 存在性对账）；对账断言常驻测试
+- 遗留：main 链 stub natives **610 次调用**（Melee 系 CreateUnits 序列化等，
+  深化② 按 `[unimpl:]` 清单逐项实现）
+
 ## 四、测试资产与工具
 
-- 引擎测试：tools/engine_test.mjs（31 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
-  AST 逐字节 2 + VM 3），最终一行 `N passed, M failed`，失败退出码 1
+- 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
+  AST 逐字节 2 + VM 3 + main/config 调用序 2 + 全局强对照 1），最终一行
+  `N passed, M failed`，失败退出码 1
 - JASS 对照：C 版（engine.mjs 导出 `_jass_parse`/`_jass_run`）vs JS 版
   （server/jass/parse.js + vm.js）——**计数、AST 字符串、执行 log 三重视角**
 
@@ -115,6 +137,7 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - M0/M1（WASM 骨架）✅；解析保真（D/E/F 系列）✅
 - **M3（JASS 引擎）：3.1 词法语法 ✅ → 3.2 完整 AST ✅ → 3.3 拼接全量解析 ✅
   （670KB 逐字节一致）→ 3.4 VM 执行器 ✅ → 3.5 natives 分发表 ✅
-  （~140 个，war3map.j main 全链跑通）→ 剩余：natives 语义深化
-  （world 交互类接 M2 世界对象）+ config/触发器执行链对照**
+  （~140 个，war3map.j main 全链跑通）→ 3.6 触发器同步执行 + C/JS 全局强对照 ✅
+  （880 全局 0 差异）→ 剩余：natives 语义深化②（Melee 系 610 次 stub：
+  CreateUnits 序列化/玩家对象表/事件注册）
 - M2（WebGPU 渲染）/ M5（zero-copy）：未开始
