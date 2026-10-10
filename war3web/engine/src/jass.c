@@ -1098,7 +1098,8 @@ typedef struct {
   struct VTrigger { long long id; const char** actions; int nActions, capActions; } * triggers;
   int nTriggers, capTriggers;
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
-  struct VPlayer { long long id; int gold, lumber; } players[16];
+  struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
+                   struct { int tech; int lvl; int max; } * ts; int nTs, capTs; } players[16];
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
                  int* abils; int nAbils, capAbils; } * units;
@@ -1478,6 +1479,68 @@ static Value n_get_player_state(Vm* vm, Expr** a, int n, VScope* s) {
     int pi = player_index_of(vm, p.i);
     if (st.i == 1) return v_int(vm->players[pi].gold);
     if (st.i == 2) return v_int(vm->players[pi].lumber);
+  }
+  return v_int(0);
+}
+
+// ---- 玩家颜色 + 科技（techs 表：level/max 双字段，对齐 engine.js p.techs）----
+static void player_tech_set(Vm* vm, int pi, int tech, int lvl, int max) {
+  if (pi < 0 || pi >= 16) return;
+  struct VPlayer* p = &vm->players[pi];
+  for (int i = 0; i < p->nTs; i++)
+    if (p->ts[i].tech == tech) { if (lvl >= 0) p->ts[i].lvl = lvl; if (max >= 0) p->ts[i].max = max; return; }
+  if (p->nTs == p->capTs) {
+    p->capTs = p->capTs ? p->capTs * 2 : 4;
+    p->ts = (void*)realloc(p->ts, sizeof(*p->ts) * (size_t)p->capTs);
+  }
+  p->ts[p->nTs].tech = tech;
+  p->ts[p->nTs].lvl = lvl;
+  p->ts[p->nTs].max = max;
+  p->nTs++;
+}
+static Value n_set_player_color(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), c = narg(vm, a, n, 1, s);
+  if (p.k == V_HANDLE) {
+    int pi = player_index_of(vm, p.i);
+    int cc = (int)c.i; if (cc < 0) cc = 0; if (cc > 15) cc = 15;
+    vm->players[pi].color = cc;
+  }
+  return v_null();
+}
+static Value n_get_player_color(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);
+  if (p.k == V_HANDLE) {
+    int pi = player_index_of(vm, p.i);
+    return v_int(vm->players[pi].color == -1 ? pi : vm->players[pi].color);  // 默认=index
+  }
+  return v_int(0);
+}
+static Value n_set_tech_researched(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), tech = narg(vm, a, n, 1, s), lv = narg(vm, a, n, 2, s);
+  if (p.k == V_HANDLE) player_tech_set(vm, player_index_of(vm, p.i), (int)tech.i, (int)lv.i, -1);
+  return v_null();
+}
+static Value n_get_tech_researched(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), tech = narg(vm, a, n, 1, s);
+  (void)narg(vm, a, n, 2, s);  // specifier 忽略（对齐 engine.js）
+  if (p.k == V_HANDLE) {
+    struct VPlayer* pp = &vm->players[player_index_of(vm, p.i)];
+    for (int i = 0; i < pp->nTs; i++)
+      if (pp->ts[i].tech == (int)tech.i) return v_bool(pp->ts[i].lvl > 0);
+  }
+  return v_bool(0);
+}
+static Value n_set_tech_max(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), tech = narg(vm, a, n, 1, s), mx = narg(vm, a, n, 2, s);
+  if (p.k == V_HANDLE) player_tech_set(vm, player_index_of(vm, p.i), (int)tech.i, -1, (int)mx.i);
+  return v_null();
+}
+static Value n_get_tech_max(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s), tech = narg(vm, a, n, 1, s);
+  if (p.k == V_HANDLE) {
+    struct VPlayer* pp = &vm->players[player_index_of(vm, p.i)];
+    for (int i = 0; i < pp->nTs; i++)
+      if (pp->ts[i].tech == (int)tech.i) return v_int(pp->ts[i].max);
   }
   return v_int(0);
 }
@@ -2069,12 +2132,12 @@ static const NativeEntry NATIVES[] = {
   { "SetTeams", n_void }, { "SetGamePlacement", n_void }, { "DefineStartLocation", n_void },
   { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_void },
   { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
-  { "SetPlayerColor", n_void }, { "DestroyTrigger", n_void }, { "DestroyGroup", n_void },
+  { "SetPlayerColor", n_set_player_color }, { "GetPlayerColor", n_get_player_color }, { "DestroyTrigger", n_void }, { "DestroyGroup", n_void },
   { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_void },
   { "GetPlayerState", n_get_player_state },
   { "VolumeGroupSetVolume", n_void }, { "PlayCinematic", n_void }, { "StartSound", n_void },
   { "SetDestructableAnimation", n_void }, { "SetUnitState", n_void }, { "SetUnitAcquireRange", n_void },
-  { "SetPlayerTechMaxAllowed", n_void }, { "SetPlayerTechResearched", n_void },
+  { "SetPlayerTechMaxAllowed", n_set_tech_max }, { "SetPlayerTechResearched", n_set_tech_researched },
   // 第二轮：枚举恒等转换（ConvertXxx，JS C(name)(i) => i）
   { "ConvertAIDifficulty", n_convint }, { "ConvertAllianceType", n_convint },
   { "ConvertAttackType", n_convint }, { "ConvertBlendMode", n_convint },
@@ -2113,12 +2176,12 @@ static const NativeEntry NATIVES[] = {
   { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
   { "ExecuteFunc", n_execute_func },
-  { "TriggerRegisterGameEvent", n_handle }, { "GetPlayerTechMaxAllowed", n_void },
+  { "TriggerRegisterGameEvent", n_handle }, { "GetPlayerTechMaxAllowed", n_get_tech_max },
   { "IsPlayerObserver", n_false }, { "SetFloatGameState", n_void },
   { "Preloader", n_void }, { "CreateTimerDialog", n_handle },
   { "GetGameSpeed", n_i2 }, { "VersionGet", n_i1 }, { "GetFloatGameState", n_r0 },
   { "GetPlayerController", n_i0 }, { "GetPlayerSlotState", n_i0 },
-  { "GetPlayerTechResearched", n_false }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
+  { "GetPlayerTechResearched", n_get_tech_researched }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
   { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_false },
   { "TriggerRegisterPlayerUnitEvent", n_false }, { "TriggerRegisterTimerExpireEvent", n_false },
   { "TriggerRegisterUnitEvent", n_false },
@@ -2396,6 +2459,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
   Vm vm; memset(&vm, 0, sizeof vm);
   vm.ast = ast;
   vm.opLimit = 8000000;
+  for (int i = 0; i < 16; i++) vm.players[i].color = -1;  // 默认 color=index（对齐 engine.js）
   vm_init_globals(&vm);
   FuncDef* target = NULL;
   // entry 支持逗号分隔多入口顺序执行（如 "config,main"，共享同一 VM 状态）
@@ -2437,6 +2501,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  for (int i = 0; i < 16; i++) free(vm.players[i].ts);
   for (int i = 0; i < vm.nRegions; i++) free(vm.regions[i].rectIds);
   free(vm.regions);
   for (int i = 0; i < vm.nUnits; i++) free(vm.units[i].abils);

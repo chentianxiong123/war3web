@@ -475,6 +475,37 @@ ck('jass(能力) 加入后 GetUnitAbilityLevel=1', rA.globals.alv1, 1);
 ck('jass(能力) 移除后 GetUnitAbilityLevel=0', rA.globals.alv2, 0);
 ck('jass(region) CreateRegion+RegionAddRect 可用', rA.globals.rgn, 1);
 
+// --- 玩家颜色 + 科技（默认 color=index；SetXxx 后可读回）---
+const pcScript = `
+globals
+  player p = null
+  integer col = -1
+  integer col2 = -1
+  integer tech = -1
+  integer techmax = -1
+endglobals
+function Init takes nothing returns nothing
+  set p = Player(3)
+  set col = GetPlayerColor(p)
+  call SetPlayerColor(p, ConvertPlayerColor(7))
+  set col2 = GetPlayerColor(p)
+  call SetPlayerTechResearched(p, 999, 1)
+  if GetPlayerTechResearched(p, 999) then
+    set tech = 1
+  endif
+  call SetPlayerTechMaxAllowed(p, 888, 3)
+  set techmax = GetPlayerTechMaxAllowed(p, 888)
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rPC = jassRunC(pcScript, 'main');
+ck('jass(颜色) 默认 GetPlayerColor=index(3)', rPC.globals.col, 3);
+ck('jass(颜色) SetPlayerColor(7) 后可读回', rPC.globals.col2, 7);
+ck('jass(科技) SetPlayerTechResearched 后查询=true', rPC.globals.tech, 1);
+ck('jass(科技) SetPlayerTechMaxAllowed 后可读回', rPC.globals.techmax, 3);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
