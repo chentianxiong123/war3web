@@ -184,6 +184,12 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - natives 深化累计：player/unit/trigger/rect/location/group/force/item/
   hashtable/region + 坐标/资源/能力/字符串/哈希（~70 个真语义 natives）
 
+### 3.14 玩家颜色 + 科技（提交 1881e2e）
+- SetPlayerColor/GetPlayerColor（默认 color=index，对齐 engine.js `p.color ?? p.index`）
+- SetPlayerTechResearched/GetPlayerTechResearched（level>0 → bool）
+- SetPlayerTechMaxAllowed/GetPlayerTechMaxAllowed（上限存储）
+- 断言 4 项；75/75 全绿 + 880 对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
