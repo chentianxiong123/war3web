@@ -251,6 +251,12 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - ForceEnumPlayers 清空后加入玩家 0-11（对齐 engine.js），ForForce 可枚举求和
 - 断言 4 项；109/109 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.23 触发器清空 + region 格（提交 ac69e3b）
+- TriggerClearActions/TriggerClearConditions 真清空（空触发器 Execute 不动作）+
+  TriggerRemoveAction/Condition 返回 true
+- region 格存储：RegionAddCell（去重）/RegionClearCell（cell 坐标对编码）
+- 断言 3 项；112/112 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
