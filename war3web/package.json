@@ -13,7 +13,9 @@
     "dev": "node --watch server/index.js",
     "test": "node tools/run_tests.mjs",
     "wasm": "node tools/build_wasm.mjs",
-    "wasm:test": "node tools/wasm_test.mjs && node tools/wasm_browser_test.mjs"
+    "wasm:test": "node tools/wasm_test.mjs && node tools/wasm_browser_test.mjs",
+    "engine": "node tools/build_engine.mjs",
+    "engine:test": "node tools/engine_test.mjs"
   },
   "dependencies": {
     "three": "^0.185.1",

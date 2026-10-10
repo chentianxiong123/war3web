@@ -39,3 +39,6 @@ __pycache__/
 # screenshots and scratch output from the verification tools
 *.png
 !docs/**/*.png
+
+# engine build intermediates (out/ holds the committed artifacts)
+engine/build-web/
