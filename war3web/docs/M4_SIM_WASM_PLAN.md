@@ -44,6 +44,12 @@
   nearestWalkable 螺旋 + clearLine），`_sim_grid_init/_sim_find_path/_sim_clear_foot/
   _sim_connected_i` 导出。**`tools/sim_test.mjs` 门禁：5/5 场景 C/JS 寻路一致**
   （段数 + 每段坐标容差 0.5），`npm run sim:test` 独立脚本。
+- **移动推进 C 复现完成（1de6e98）**：`sim_run_move` —— world.js stepMove 的 move
+  分支全量复现（movementPath 直线快路径 + 慢路径 A*、turnToward 转向预算
+  turnRate·dt/0.03、沿 path 推进 stepLen=moveSpeed·dt、canAdvance 扫掠圆盘、
+  40 距离到达门禁）。**sim_test 端到端对照 golden：5/5 到达行为一致**
+  （到达 tick 差 ≤3、路径长度完全一致、endErr 一致）。
+  golden 基准已升级为 **arrive 时刻快照**（arrivePathLen/arriveEndErr）。
 - 输入：单位意图（order 目标/路径点）→ WASM 内寻路（现有 walk.bin/fload.bin 二进制
   数据直接加载进 wasm heap）→ 输出：单位新坐标/朝向
 - 交付：`wasm_move(unitId, target, dt)` 导出 + Node 端对照 JS 寻路结果
