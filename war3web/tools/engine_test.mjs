@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseJs } from '../server/jass/parse.js';
+import { VM } from '../server/jass/vm.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MAP_PATH = path.join(ROOT, 'terenas.w3x');
@@ -136,6 +137,71 @@ if (!fs.existsSync(JASS_PATH)) {
   ck('jass(地图) functions', cm2.functions.length, jm2.functions.length);
   console.log(`  info   war3map.j: ${cm2.functions.length} 函数 / ${cm2.natives.length} 原生 / ${cm2.globals.length} 全局 (AST ${cm2Str.length} 字节)`);
 }
+
+// --- JASS VM 执行（C 版 vs JS 版 vm.js 对照）---
+const jassRunC = (src, entry) => {
+  const b = m._malloc(src.length + 1);
+  m.stringToUTF8(src, b, src.length + 1);
+  const eb = m._malloc(entry.length + 1);
+  m.stringToUTF8(entry, eb, entry.length + 1);
+  const errp = m._malloc(4);
+  const ptr = m._jass_run(b, src.length, eb, errp);
+  const json = m.UTF8ToString(ptr);
+  m._free(ptr); m._free(errp); m._free(eb); m._free(b);
+  return JSON.parse(json);
+};
+const vmScript = `
+globals
+  integer counter = 0
+  integer array scores
+endglobals
+function Add takes integer a, integer b returns integer
+  return a + b
+endfunction
+function Fact takes integer n returns integer
+  if n <= 1 then
+    return 1
+  endif
+  return n * Fact(n - 1)
+endfunction
+function Main takes nothing returns nothing
+  local integer x = Add(2, 3)
+  local integer i = 0
+  set counter = Fact(5)
+  set scores[0] = x
+  set scores[1] = counter
+  loop
+    exitwhen i >= 3
+    set i = i + 1
+  endloop
+  call BJDebugMsg("fact5=" + I2S(counter))
+  call BJDebugMsg("x=" + I2S(x))
+  call BJDebugMsg("s0=" + I2S(scores[0]))
+  call BJDebugMsg("i=" + I2S(i))
+endfunction`;
+const cr = jassRunC(vmScript, 'Main');
+const runJsVm = (src, entry) => {
+  const ast = parseJs(src, 'vm');
+  const vm = new VM();
+  vm.addTypes(ast);
+  vm.addFunctions(ast);
+  vm.addGlobals(ast);
+  const log = [];
+  vm.registerNative('BJDebugMsg', (s) => { log.push(s); });
+  vm.registerNative('I2S', (i) => String(Math.trunc(i)));
+  const ig = vm.initGlobals();
+  for (const _ of ig) {}
+  const gen = vm.runFunction(entry, []);
+  for (const _ of gen) {}
+  const g = {};
+  for (const [k, v] of vm.globals) if (!v.isArr) g[k] = v.value;
+  return { log: log.join('\n'), globals: g };
+};
+const jr = runJsVm(vmScript, 'Main');
+ck('jass(VM) ok', cr.ok ? 1 : 0, 1);
+ck('jass(VM) log 一致', cr.log.trim().split('\n').join('\n') === jr.log ? 1 : 0, 1);
+if (cr.log.trim().split('\n').join('\n') !== jr.log) console.log('  diff log:\n  C 「' + cr.log + '」\n  JS「' + jr.log + '」');
+ck('jass(VM) counter=120', cr.globals.counter, jr.globals.counter);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
