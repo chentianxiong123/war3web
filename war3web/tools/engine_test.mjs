@@ -756,6 +756,38 @@ ck('jass(联盟) 未设联盟 IsPlayerEnemy=true', rA2.globals.enemy, 1);
 ck('jass(loc) RemoveLocation 无错', rA2.globals.lr, 1);
 ck('jass(玩家) SetPlayerTeam 无错', rA2.globals.teamok, 1);
 
+// --- 出生点坐标 + ForceEnumPlayers ---
+const startLocScript = `
+globals
+  real sx = -1
+  real sy = -1
+  force f = null
+  integer fcount = -1
+  integer fsum = 0
+endglobals
+function AddP takes nothing returns nothing
+  set fsum = fsum + GetPlayerId(GetEnumPlayer())
+endfunction
+function Init takes nothing returns nothing
+  call DefineStartLocation(3, 1234.0, 5678.0)
+  call SetPlayerStartLocation(Player(2), 3)
+  set sx = GetPlayerStartLocationX(Player(2))
+  set sy = GetPlayerStartLocationY(Player(2))
+  set f = CreateForce()
+  call ForceEnumPlayers(f, null)
+  set fcount = ForceCountPlayers(f)
+  call ForForce(f, function AddP)
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rS = jassRunC(startLocScript, 'main');
+ck('jass(出生点) GetPlayerStartLocationX=1234', rS.globals.sx, 1234);
+ck('jass(出生点) GetPlayerStartLocationY=5678', rS.globals.sy, 5678);
+ck('jass(枚举) ForceEnumPlayers 加入 12 玩家', rS.globals.fcount, 12);
+ck('jass(枚举) ForForce 求和=66', rS.globals.fsum, 66);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

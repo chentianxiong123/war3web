@@ -1105,6 +1105,7 @@ typedef struct {
   struct VTimer { long long id; const char* handler; long long trigger; } * timers;
   int nTimers, capTimers;
   long long ctxTrigger;   // 触发执行上下文（GetTriggeringTrigger 读取）
+  double startLocX[16], startLocY[16];   // 出生点表（DefineStartLocation 存，GetPlayerStartLocationX/Y 读）
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
                    int controller; int startLoc; int slotState; int team;
@@ -2439,6 +2440,42 @@ static Value n_set_player_team(Vm* vm, Expr** a, int n, VScope* s) {
   if (pv.k == V_HANDLE) vm->players[player_index_of(vm, pv.i)].team = (int)t.i;
   return v_null();
 }
+static Value n_define_start_loc(Vm* vm, Expr** a, int n, VScope* s) {
+  Value iv = narg(vm, a, n, 0, s), x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  int idx = (int)iv.i;
+  if (idx >= 0 && idx < 16) {
+    vm->startLocX[idx] = x.k == V_REAL ? x.f : (double)x.i;
+    vm->startLocY[idx] = y.k == V_REAL ? y.f : (double)y.i;
+  }
+  return v_null();
+}
+static Value n_get_player_startloc_xy(Vm* vm, Expr** a, int n, VScope* s, int which) {
+  Value pv = narg(vm, a, n, 0, s);
+  if (pv.k == V_HANDLE) {
+    int idx = vm->players[player_index_of(vm, pv.i)].startLoc;
+    if (idx >= 0 && idx < 16) return v_real(which == 0 ? vm->startLocX[idx] : vm->startLocY[idx]);
+  }
+  return v_real(0);
+}
+static Value n_get_player_startloc_x(Vm* vm, Expr** a, int n, VScope* s) { return n_get_player_startloc_xy(vm, a, n, s, 0); }
+static Value n_get_player_startloc_y(Vm* vm, Expr** a, int n, VScope* s) { return n_get_player_startloc_xy(vm, a, n, s, 1); }
+static Value n_force_enum_players(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s);
+  (void)narg(vm, a, n, 1, s);  // filter 忽略
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  if (f) {
+    f->n = 0;   // 清空后加入 0-11 玩家（对齐 engine.js）
+    for (int i = 0; i < 12; i++) {
+      if (vm->players[i].id == 0) vm->players[i].id = 0x100000 + vm->handles++;
+      if (f->n == f->cap) {
+        f->cap = f->cap ? f->cap * 2 : 12;
+        f->pis = (int*)realloc(f->pis, sizeof(int) * (size_t)f->cap);
+      }
+      f->pis[f->n++] = i;
+    }
+  }
+  return v_null();
+}
 static Value n_i2(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(2); }
 static Value n_r0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_real(0); }
 static Value n_str_empty(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_str(vm, ""); }
@@ -2496,7 +2533,8 @@ static const NativeEntry NATIVES[] = {
   { "SetWaterBaseColor", n_void }, { "EnableWeatherEffect", n_void }, { "NewSoundEnvironment", n_void },
   { "SetAmbientDaySound", n_void }, { "SetAmbientNightSound", n_void }, { "SetMapMusic", n_void },
   { "SetMapName", n_void }, { "SetMapDescription", n_void }, { "SetPlayers", n_void },
-  { "SetTeams", n_void }, { "SetGamePlacement", n_void }, { "DefineStartLocation", n_void },
+  { "SetTeams", n_void }, { "SetGamePlacement", n_void }, { "DefineStartLocation", n_define_start_loc },
+  { "GetPlayerStartLocationX", n_get_player_startloc_x }, { "GetPlayerStartLocationY", n_get_player_startloc_y },
   { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_set_player_controller },
   { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
   { "SetPlayerColor", n_set_player_color }, { "GetPlayerColor", n_get_player_color }, { "DestroyTrigger", n_destroy_trigger }, { "DestroyGroup", n_destroy_group },
@@ -2555,7 +2593,7 @@ static const NativeEntry NATIVES[] = {
   { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_trig_reg_game_state },
   { "TriggerRegisterPlayerUnitEvent", n_trig_reg_player_unit_event }, { "TriggerRegisterTimerExpireEvent", n_trig_reg_timer_expire },
   { "TriggerRegisterUnitEvent", n_trig_reg_unit_event },
-  { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
+  { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_force_enum_players }, { "SetAllItemTypeSlots", n_void },
   { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_set_resource_amount }, { "GetResourceAmount", n_get_resource_amount }, { "SetUnitColor", n_set_unit_color }, { "GetUnitColor", n_get_unit_color },
   { "TimerStart", n_timer_start }, { "TimerGetElapsed", n_timer_elapsed },
   { "TriggerRegisterTimerEvent", n_trig_reg_timer_event }, { "TriggerRegisterPlayerEvent", n_trig_reg_player_event },
