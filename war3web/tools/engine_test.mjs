@@ -203,5 +203,25 @@ ck('jass(VM) log 一致', cr.log.trim().split('\n').join('\n') === jr.log ? 1 : 
 if (cr.log.trim().split('\n').join('\n') !== jr.log) console.log('  diff log:\n  C 「' + cr.log + '」\n  JS「' + jr.log + '」');
 ck('jass(VM) counter=120', cr.globals.counter, jr.globals.counter);
 
+// --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
+const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
+const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
+if (fs.existsSync(COMMON_J) && fs.existsSync(BLIZZARD_J)) {
+  const readLib = (p) => fs.readFileSync(p, 'latin1').replace(/\r\n?/g, '\n');
+  const full = readLib(COMMON_J) + '\n' + readLib(BLIZZARD_J) + '\n' + readLib(JASS_PATH);
+  const cFull = jassC(full);
+  const jFull = JSON.stringify(parseJs(full, 'concat'));
+  ck('jass(拼接670KB) AST 逐字节一致', cFull === jFull ? 1 : 0, 1);
+  if (cFull !== jFull) {
+    let d = 0;
+    while (d < cFull.length && d < jFull.length && cFull[d] === jFull[d]) d++;
+    console.log('  首个差异 @' + d + ' (C ' + cFull.length + ' / JS ' + jFull.length + '):\n  C 「' + cFull.slice(Math.max(0, d - 60), d + 60) + '」\n  JS「' + jFull.slice(Math.max(0, d - 60), d + 60) + '」');
+  }
+  const pFull = JSON.parse(cFull);
+  console.log(`  info   拼接: ${full.length} 字节源 → ${pFull.functions.length} 函数 / ${pFull.natives.length} natives / ${pFull.globals.length} 全局 / ${pFull.types.length} 类型`);
+} else {
+  console.log('  SKIP  拼接对照（缺 war3_extracted/Scripts 库文件）');
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

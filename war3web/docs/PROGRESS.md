@@ -61,10 +61,12 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 后补修复：空 else 块 → `"els":[]`（非 null），hasElse 标志
 
 ### 3.3 拼接全量解析（common.j + Blizzard.j + war3map.j，655900 字节）
-- 与 JS 拼接 parse **逐字节对照**：C 端 36ms 解析，（除进行中字符串乱码项外）一致
+- 与 JS 拼接 parse **逐字节对照一致**：C 端 36ms 解析，**1007915 字节 AST 完全相等**
 - 规模：964 函数 / 1160 natives / 898 globals / 91 types
-- 进行中：`str lexer` 个别字符串出现 4 字节乱码（`"scripts\\OrcMelee.pld"` →
-  `scripts\mlbHOrcMelee.pld`），最小复现已锁定，定位中
+- 修复 2 个对照差异（ASAN 定位）：
+  1. 空 else 块 → `"els":[]` 非 null（hasElse 标志）
+  2. **b_str 转义分支 `char e[2] = {'\\', c}` 缺 '\0'** → strlen 越界读栈内存
+     （乱码每次运行不同，源自未初始化栈数据）→ `char e[3]`
 
 ### 3.4 C 版 VM 执行器（提交 6f82610 + b4c2b6c + 7cf00a7 + 2c0069c）
 - **重构**：jass_parse 拆 parse_ast（内存 AST，arena 随 AST 存活）+ ast_to_json
@@ -88,7 +90,7 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 ## 五、路线图位置（docs/WEBGPU_WASM_PLAN.md）
 
 - M0/M1（WASM 骨架）✅；解析保真（D/E/F 系列）✅
-- **M3（JASS 引擎）：3.1 词法语法 ✅ → 3.2 完整 AST ✅ → 3.3 拼接全量解析
-  进行中（字符串乱码项）→ 3.4 VM 执行器 ✅ → 剩余：natives 全量移植
+- **M3（JASS 引擎）：3.1 词法语法 ✅ → 3.2 完整 AST ✅ → 3.3 拼接全量解析 ✅
+  （670KB 逐字节一致）→ 3.4 VM 执行器 ✅ → 剩余：natives 全量移植
   （engine.js 1506 行）+ war3map.j 实际执行 + blizzard 初始化链**
 - M2（WebGPU 渲染）/ M5（zero-copy）：未开始
