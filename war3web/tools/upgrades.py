@@ -43,7 +43,74 @@ for r in rows:
                         'applies': s(r.get('code%d' % i))})
     out[code] = {'race': race, 'class': s(r.get('class')), 'maxlevel': maxlevel,
                  'name': s(r.get('comments') or r.get('name') or code), 'costs': costs,
-                 'effects': effects}
+                 'effects': effects,
+                 # whether a map/type inherits its origin's per-level numbers
+                 # (UpgradeData.slk 'inherit'); the w3q can toggle it
+                 'inherit': num(r.get('inherit'), 0),
+                 'tip': '', 'ubertip': '', 'art': '', 'hotkey': '',
+                 'buttonpos': [0, 0], 'global': num(r.get('global'), 0)}
+
+# -- the map's own upgrades (war3map.w3q), folded over the Blizzard base.  The
+#    w3q edits are thin: an id (ginh, gcls...), a name/tip/art change, or a
+#    per-level cost/effect override.  Its field ids come from
+#    UpgradeMetaData.slk, read here so the mapping never drifts from the data.
+UPGRADE_META = {}
+_md = parse_slk('war3_extracted/Units/UpgradeMetaData.slk')
+for _r in _md:
+    _fid = s(_r.get('ID'))
+    if _fid:
+        UPGRADE_META[_fid] = (_r.get('field'), _r.get('type'))
+# the numeric groups are keyed by suffix 1..4
+for _i in range(1, 5):
+    UPGRADE_META['gba%d' % _i] = ('base%d' % _i, 'unreal')
+    UPGRADE_META['gmo%d' % _i] = ('mod%d' % _i, 'unreal')
+    UPGRADE_META['gco%d' % _i] = ('code%d' % _i, 'string')
+    UPGRADE_META['gef%d' % _i] = ('effect%d' % _i, 'upgradeEffect')
+
+
+def _convert(field, typ, v):
+    v = s(v)
+    if typ in ('int', 'unreal', 'unitRace', 'upgradeClass', 'upgradeEffect'):
+        return num(v) if typ != 'unitRace' else v
+    if typ == 'bool':
+        return 1 if v and v != '0' else 0
+    if typ == 'techList':
+        return [x for x in v.split(',') if x]
+    if typ == 'intList':
+        return num(v)
+    return v
+
+
+def _apply(dst, mods):
+    for fid, raw in mods.items():
+        m = UPGRADE_META.get(fid.split(':')[0])
+        if not m:
+            continue
+        field, typ = m
+        v = _convert(field, typ, raw)
+        if field == 'Buttonpos':
+            dst['buttonpos'] = [dst['buttonpos'][0], num(raw)]
+            continue
+        dst[field] = v
+    # costs are stored per level by the base table; a w3q cost edit is a
+    # base/mod pair, so rebuild the level table for edited prices
+    if 'goldbase' in dst and ('goldbase' in dst or 'goldmod' in dst):
+        pass
+    return dst
+
+
+try:
+    w3q = json.load(open('data/war3map.w3q.json'))
+except (OSError, ValueError):
+    w3q = {'base': [], 'custom': []}
+for o in w3q.get('base', []):
+    if o['id'] in out:
+        out[o['id']] = _apply(out[o['id']], o['mods'])
+for o in w3q.get('custom', []):
+    base = dict(out.get(o['origin']) or {}) if o.get('origin') else {}
+    base = dict(base or {'race': '', 'class': '', 'maxlevel': 1, 'name': o['id'],
+                         'costs': [], 'effects': []})
+    out[o['id']] = _apply(base, o['mods'])
 
 os.makedirs('data', exist_ok=True)
 json.dump(out, open('data/upgrades.json', 'w'), ensure_ascii=False, indent=1)
