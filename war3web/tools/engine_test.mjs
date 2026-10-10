@@ -398,6 +398,48 @@ ck('jass(哈希) SaveHandle/LoadHandle 非空', rH.globals.hh, 1);
 ck('jass(哈希) HaveSavedInteger=true', rH.globals.have, 1);
 ck('jass(哈希) FlushChildHashtable 后 HaveSaved=false', rH.globals.flush, 0);
 
+// --- force 集合 + 物品对象表语义 ---
+const forceScript = `
+globals
+  force f = null
+  integer fcount = 0
+  integer fp = -1
+  integer fsum = 0
+  item it = null
+  integer itype = -1
+  real ix = -1
+endglobals
+function AddP takes nothing returns nothing
+  set fsum = fsum + GetPlayerId(GetEnumPlayer())
+endfunction
+function Init takes nothing returns nothing
+  set f = CreateForce()
+  call ForceAddPlayer(f, Player(0))
+  call ForceAddPlayer(f, Player(1))
+  call ForceAddPlayer(f, Player(1))
+  set fcount = ForceCountPlayers(f)
+  if ForceHasPlayer(f, Player(1)) then
+    set fp = 1
+  endif
+  call ForForce(f, function AddP)
+  call ForceRemovePlayer(f, Player(0))
+  set fcount = ForceCountPlayers(f)
+  set it = CreateItem(99, 100.0, 200.0)
+  set itype = GetItemTypeId(it)
+  call SetItemPosition(it, 300.0, 400.0)
+  set ix = GetItemX(it)
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rF = jassRunC(forceScript, 'main');
+ck('jass(force) 去重+移除后 ForceCountPlayers=1', rF.globals.fcount, 1);
+ck('jass(force) ForceHasPlayer(Player(1))=true', rF.globals.fp, 1);
+ck('jass(force) ForForce 枚举求和 GetPlayerId=1', rF.globals.fsum, 1);
+ck('jass(物品) CreateItem typeId round-trip=99', rF.globals.itype, 99);
+ck('jass(物品) SetItemPosition 后 GetItemX=300', rF.globals.ix, 300);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

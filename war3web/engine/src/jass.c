@@ -1114,6 +1114,13 @@ typedef struct {
   struct VEntry { long long p, c; int kind; long long i; double f; char* s; };  // kind: 0=int 1=real 2=str 3=handle
   struct VHashtable { long long id; struct VEntry* es; int n, cap; } * htables;
   int nHtables, capHtables;
+  // force 对象表（玩家集合，ForForce 枚举）
+  struct VForce { long long id; int* pis; int n, cap; } * forces;
+  int nForces, capForces;
+  long long enumPlayer;  // ForForce 当前枚举玩家（GetEnumPlayer 读取）
+  // 物品对象表（typeId/坐标）
+  struct VItem { long long id; int typeId; double x, y; } * items;
+  int nItems, capItems;
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1789,6 +1796,142 @@ static Value n_get_player_name(Vm* vm, Expr** a, int n, VScope* s) {
   return v_str(vm, "");  // null → ''
 }
 
+// ---- force 对象表（玩家集合，对齐 engine.js H('force',{players:Set})）----
+static struct VForce* find_force(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nForces; i++) if (vm->forces[i].id == id) return &vm->forces[i];
+  return NULL;
+}
+static Value n_create_force(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nForces == vm->capForces) {
+    vm->capForces = vm->capForces ? vm->capForces * 2 : 8;
+    vm->forces = (struct VForce*)realloc(vm->forces, sizeof(struct VForce) * (size_t)vm->capForces);
+  }
+  struct VForce* f = &vm->forces[vm->nForces++];
+  memset(f, 0, sizeof *f);
+  f->id = id;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_force_add_player(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s), pv = narg(vm, a, n, 1, s);
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  if (f && pv.k == V_HANDLE) {
+    int pi = player_index_of(vm, pv.i);
+    for (int i = 0; i < f->n; i++) if (f->pis[i] == pi) return v_null();
+    if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 4; f->pis = (int*)realloc(f->pis, sizeof(int) * (size_t)f->cap); }
+    f->pis[f->n++] = pi;
+  }
+  return v_null();
+}
+static Value n_force_remove_player(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s), pv = narg(vm, a, n, 1, s);
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  if (f && pv.k == V_HANDLE) {
+    int pi = player_index_of(vm, pv.i);
+    for (int i = 0; i < f->n; i++)
+      if (f->pis[i] == pi) { f->pis[i] = f->pis[--f->n]; break; }
+  }
+  return v_null();
+}
+static Value n_force_clear(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s);
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  if (f) f->n = 0;
+  return v_null();
+}
+static Value n_force_has_player(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s), pv = narg(vm, a, n, 1, s);
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  if (f && pv.k == V_HANDLE) {
+    int pi = player_index_of(vm, pv.i);
+    for (int i = 0; i < f->n; i++) if (f->pis[i] == pi) return v_bool(1);
+  }
+  return v_bool(0);
+}
+static Value n_force_count(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s);
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  return v_int(f ? f->n : 0);
+}
+static Value n_for_force(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s), cv = narg(vm, a, n, 1, s);
+  struct VForce* f = fv.k == V_HANDLE ? find_force(vm, fv.i) : NULL;
+  if (f && cv.k == V_CODE) {
+    FuncDef* fn = NULL;
+    for (int k = 0; k < vm->ast->nfuncs; k++)
+      if (vm->ast->funcs[k].sig.name && strcmp(vm->ast->funcs[k].sig.name, cv.s) == 0) { fn = &vm->ast->funcs[k]; break; }
+    if (fn) {
+      for (int i = 0; i < f->n; i++) {
+        if (vm->players[f->pis[i]].id == 0) vm->players[f->pis[i]].id = 0x100000 + vm->handles++;
+        vm->enumPlayer = vm->players[f->pis[i]].id;
+        vm_invoke(vm, fn, NULL, 0, NULL);
+      }
+      vm->enumPlayer = 0;
+    }
+  }
+  return v_null();
+}
+static Value n_get_enum_player(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  if (vm->enumPlayer != 0) {
+    Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->enumPlayer;
+    return v;
+  }
+  if (vm->players[0].id == 0) vm->players[0].id = 0x100000 + vm->handles++;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->players[0].id;
+  return v;  // 对齐 engine.js: eng.ctx.enumPlayer || P(0)
+}
+
+// ---- 物品对象表（CreateItem(typeId,x,y) + 查询）----
+static struct VItem* find_item(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nItems; i++) if (vm->items[i].id == id) return &vm->items[i];
+  return NULL;
+}
+static Value n_create_item(Vm* vm, Expr** a, int n, VScope* s) {
+  Value ti = narg(vm, a, n, 0, s), x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nItems == vm->capItems) {
+    vm->capItems = vm->capItems ? vm->capItems * 2 : 16;
+    vm->items = (struct VItem*)realloc(vm->items, sizeof(struct VItem) * (size_t)vm->capItems);
+  }
+  struct VItem* it = &vm->items[vm->nItems++];
+  memset(it, 0, sizeof *it);
+  it->id = id;
+  it->typeId = (int)ti.i;
+  it->x = x.k == V_REAL ? x.f : (double)x.i;
+  it->y = y.k == V_REAL ? y.f : (double)y.i;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_get_item_type_id(Vm* vm, Expr** a, int n, VScope* s) {
+  Value iv = narg(vm, a, n, 0, s);
+  if (iv.k == V_HANDLE) { struct VItem* it = find_item(vm, iv.i); if (it) return v_int(it->typeId); }
+  return v_int(0);
+}
+static Value n_item_coord(Vm* vm, Expr** a, int n, VScope* s, int which) {
+  Value iv = narg(vm, a, n, 0, s);
+  if (iv.k == V_HANDLE) { struct VItem* it = find_item(vm, iv.i); if (it) return v_real(which == 0 ? it->x : it->y); }
+  return v_real(0);
+}
+static Value n_get_item_x(Vm* vm, Expr** a, int n, VScope* s) { return n_item_coord(vm, a, n, s, 0); }
+static Value n_get_item_y(Vm* vm, Expr** a, int n, VScope* s) { return n_item_coord(vm, a, n, s, 1); }
+static Value n_set_item_position(Vm* vm, Expr** a, int n, VScope* s) {
+  Value iv = narg(vm, a, n, 0, s), x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  if (iv.k == V_HANDLE) { struct VItem* it = find_item(vm, iv.i); if (it) {
+    it->x = x.k == V_REAL ? x.f : (double)x.i; it->y = y.k == V_REAL ? y.f : (double)y.i; } }
+  return v_null();
+}
+static Value n_remove_item(Vm* vm, Expr** a, int n, VScope* s) {
+  Value iv = narg(vm, a, n, 0, s);
+  if (iv.k == V_HANDLE) {
+    struct VItem* it = find_item(vm, iv.i);
+    if (it) { it->typeId = 0; it->x = 0; it->y = 0; }  // 失效标记
+  }
+  return v_null();
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1825,7 +1968,14 @@ static const NativeEntry NATIVES[] = {
   // handle 工厂（stub：返回非空 id；真实对象待 world/渲染层）
   { "AddWeatherEffect", n_handle }, { "CreateTimer", n_handle },
   { "CreateTrigger", n_create_trigger },
-  { "CreateGroup", n_create_group }, { "CreateForce", n_handle },
+  { "CreateGroup", n_create_group }, { "CreateForce", n_create_force },
+  { "ForceAddPlayer", n_force_add_player }, { "ForceRemovePlayer", n_force_remove_player },
+  { "ForceClear", n_force_clear }, { "ForceHasPlayer", n_force_has_player },
+  { "ForceCountPlayers", n_force_count }, { "ForForce", n_for_force },
+  { "GetEnumPlayer", n_get_enum_player },
+  { "CreateItem", n_create_item }, { "GetItemTypeId", n_get_item_type_id },
+  { "GetItemX", n_get_item_x }, { "GetItemY", n_get_item_y },
+  { "SetItemPosition", n_set_item_position }, { "RemoveItem", n_remove_item },
   { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_get_owning_player },
   { "GetEnumUnit", n_get_enum_unit }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
   { "GroupAddUnit", n_group_add_unit }, { "GroupRemoveUnit", n_group_remove_unit },
@@ -2207,6 +2357,9 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  for (int i = 0; i < vm.nForces; i++) free(vm.forces[i].pis);
+  free(vm.forces);
+  free(vm.items);
   for (int i = 0; i < vm.nHtables; i++) free(vm.htables[i].es);
   free(vm.htables);
   for (int i = 0; i < vm.nGroups; i++) free(vm.groups[i].items);
