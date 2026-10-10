@@ -143,6 +143,24 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 深化方向：CreateUnits 批量（BJ 已基于 CreateUnit）、单位坐标/状态查询、
   触发器事件注册（事件驱动执行）
 
+### 3.9 单位坐标/朝向 + 玩家资源（提交 b9460eb）
+- 单位表加 x/y/facing：CreateUnit 存坐标；GetUnitX/Y、SetUnitPosition、
+  GetUnitFacing（弧度↔度双向，对齐 engine.js DEG/RAD）、SetUnitFacing
+- 玩家表加 gold/lumber：SetPlayerState/GetPlayerState（GOLD=1/LUMBER=2）
+  ——MeleeStartingResources 起始资源语义生效
+- 断言 5 项（坐标 round-trip + 金木读回）；47/47 全绿 + 880 对账保持
+
+### 3.10 对象表批量 + 相机边界（提交 58bc737）
+- GetHandleId（handle id 直返）+ StringLength/SubString（对齐 JS）
+- **rect 表**：Rect 真分配（minx/miny/maxx/maxy）+ 8 查询
+  （Center/Min/Max/Width/Height）+ SetRect
+- **location 表**：Location/MoveLocation/GetLocationX/Y
+- **group 表**：CreateGroup/GroupAddUnit（去重）/GroupRemoveUnit/GroupClear/
+  GroupCountUnits/FirstOfGroup/**ForGroup（同步枚举 + GetEnumUnit 上下文）**
+- GetCameraBoundMinX/Y/MaxX/MaxY 补 stub（BJ GetCurrentCameraBoundsMapRectBJ）
+- 断言 9 项（rect 中心/宽、loc 移动、字符串、句柄、group 枚举求和/计数）
+  56/56 全绿 + 880 对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
