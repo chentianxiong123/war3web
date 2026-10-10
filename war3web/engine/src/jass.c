@@ -2498,6 +2498,33 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
       b_put(&out, ":");
       json_value(&out, vm.gvals[i]);
     }
+    b_put(&out, "},\"arrays\":{");
+    int afirst = 1;
+    for (int i = 0; i < ast->nglobals; i++) {
+      GlobalDecl* g = &ast->globals[i];
+      if (!g->isArr) continue;
+      VArr* a = vm.gvals[i].arr;
+      if (!a) continue;
+      if (!afirst) b_put(&out, ",");
+      afirst = 0;
+      b_str(&out, g->name);
+      b_put(&out, ":{");
+      int fe = 1;
+      for (int j = 0; j < a->n; j++) {
+        Value v = a->items[j];
+        int def = (v.k == V_INT && v.i == 0) || (v.k == V_REAL && v.f == 0) ||
+                  (v.k == V_BOOL && v.i == 0) || v.k == V_NULL || v.k == V_CODE ||
+                  (v.k == V_STR && (!v.s || !*v.s)) || (v.k == V_HANDLE && v.i == 0);
+        if (def) continue;
+        if (!fe) b_put(&out, ",");
+        fe = 0;
+        b_put(&out, "\"");
+        b_num(&out, j);
+        b_put(&out, "\":");
+        json_value(&out, v);
+      }
+      b_put(&out, "}");
+    }
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;

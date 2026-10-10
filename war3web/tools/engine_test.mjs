@@ -556,9 +556,9 @@ if (fs.existsSync(COMMON_J) && fs.existsSync(BLIZZARD_J)) {
   if (cfgGot.length !== cfgSeq.length) console.log('  缺调用证据: ' + cfgSeq.filter((n) => !cfgGot.includes(n)).join(', '));
   console.log(`  info   config 链执行: ${cfgCalls.length} 个 natives 被调用`);
 
-  // --- C(config,main) vs JS boot() 全局强对照（880 全局零差异）---
+  // --- C(config,main) vs JS boot() 全局强对照（880 全局 + 18 数组零差异）---
   const rBoot = jassRunC(full, 'config,main');
-  const jsGlobals = (() => {
+  const jsSide = (() => {
     const world = new Proxy({}, {
       get(t, k) { if (k in t) return t[k]; return (...a) => new Handle(String(k)); },
       set(t, k, v) { t[k] = v; return true; },
@@ -568,8 +568,32 @@ if (fs.existsSync(COMMON_J) && fs.existsSync(BLIZZARD_J)) {
     eng.boot();  // boot = initGlobals + config + main（官方引导顺序）
     const g = {};
     for (const [k, v] of eng.vm.globals) if (!v.isArr) g[k] = v.value;
-    return g;
+    // 数组非默认元素（对齐 C arrays 段：真实 handle→null；Convert(v) → v，v=0 视为默认；
+    // number 0 / boolean false / 空串 / JS null 视为默认）
+    const a = {};
+    for (const [k, v] of eng.vm.globals) {
+      if (!v.isArr) continue;
+      const arr = v.value || [];
+      const map = {};
+      for (let i = 0; i < arr.length; i++) {
+        const val = arr[i];
+        if (val === undefined || val === null) continue;
+        if (val instanceof Handle) {
+          if (val.v === undefined) { map[i] = null; continue; }
+          if (val.v === 0) continue;
+          map[i] = val.v;
+          continue;
+        }
+        if (typeof val === 'number' && val === 0) continue;
+        if (typeof val === 'boolean' && !val) continue;
+        if (typeof val === 'string' && !val) continue;
+        map[i] = val;
+      }
+      a[k] = map;
+    }
+    return { g, a };
   })();
+  const jsGlobals = jsSide.g, jsArrays = jsSide.a;
   const diffs = [];
   for (const k of Object.keys(jsGlobals)) {
     const jv = jsGlobals[k], cv = rBoot.globals[k];
@@ -583,6 +607,16 @@ if (fs.existsSync(COMMON_J) && fs.existsSync(BLIZZARD_J)) {
   ck('jass(config,main) C/JS 全局对账零差异', diffs.length === 0 ? 1 : 0, 1);
   if (diffs.length) console.log('  差异: ' + diffs.slice(0, 5).join('; '));
   console.log(`  info   C(config,main)/JS(boot) 对账: ${Object.keys(jsGlobals).length} 全局 0 差异`);
+  // 数组对账（bj_slotControl/ForForce/bj_meleeDefeated 等 18 个数组非默认元素）
+  const cArrs = rBoot.arrays || {};
+  const aDiffs = [];
+  for (const k of new Set([...Object.keys(cArrs), ...Object.keys(jsArrays)])) {
+    const cStr = JSON.stringify(cArrs[k]), jStr = JSON.stringify(jsArrays[k]);
+    if (cStr !== jStr) aDiffs.push(`${k}: C=${cStr} JS=${jStr}`);
+  }
+  ck('jass(config,main) C/JS 数组对账零差异', aDiffs.length === 0 ? 1 : 0, 1);
+  if (aDiffs.length) console.log('  数组差异: ' + aDiffs.slice(0, 4).join('; '));
+  console.log(`  info   数组对账: ${Object.keys(jsArrays).length} 个数组非默认元素 0 差异`);
 } else {
   console.log('  SKIP  拼接对照（缺 war3_extracted/Scripts 库文件）');
 }
