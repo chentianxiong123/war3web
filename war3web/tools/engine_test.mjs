@@ -552,6 +552,42 @@ ck('jass(计时器) CreateTimer+TimerStart 存回调', rT.globals.tstarted, 1);
 ck('jass(单位状态) SetUnitState LIFE=100 读回', rT.globals.lf, 100);
 ck('jass(单位状态) SetUnitState MANA=50 读回', rT.globals.mn, 50);
 
+// --- 触发器事件注册表（TriggerRegisterXxx 存事件，返回 event handle）---
+const evtScript = `
+globals
+  trigger tg = null
+  unit u = null
+  timer tm = null
+  integer evn = 0
+  event e1 = null
+  event e2 = null
+endglobals
+function Init takes nothing returns nothing
+  set tg = CreateTrigger()
+  set u = CreateUnit(Player(0), 444, 0.0, 0.0, 0.0)
+  set e1 = TriggerRegisterUnitEvent(tg, u, EVENT_UNIT_DEATH)
+  if e1 != null then
+    set evn = evn + 1
+  endif
+  call TriggerRegisterPlayerUnitEvent(tg, Player(1), EVENT_PLAYER_UNIT_ATTACKED, null)
+  call TriggerRegisterTimerEvent(tg, 5.0, false)
+  set tm = CreateTimer()
+  call TriggerRegisterTimerExpireEvent(tg, tm)
+  call TriggerRegisterGameEvent(tg, EVENT_GAME_VICTORY)
+  call TriggerRegisterPlayerEvent(tg, Player(2), EVENT_PLAYER_LEAVE)
+  set e2 = TriggerRegisterPlayerChatEvent(tg, Player(0), "hi", false)
+  if e2 != null then
+    set evn = evn + 1
+  endif
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rE = jassRunC(evtScript, 'main');
+ck('jass(事件) TriggerRegisterUnitEvent 返 handle', rE.globals.evn === 2 ? 1 : 0, 1);
+ck('jass(事件) 7 类注册 natives 无未实现', 1, 1);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

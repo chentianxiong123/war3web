@@ -1094,12 +1094,14 @@ typedef struct {
   long long opCount, opLimit;    // 每线程 runaway 护栏（同 JS 8000000）
   int handles;                   // handle id 分配器（0x100000 起，对齐 JS nextHandleId）
   const char** callNames; int nCalls, capCalls;  // 已实现 native 调用名（去重，trace 证据）
-  // 触发器表（同步执行：动作/条件函数按名注册/调用）
+  // 触发器表（同步执行：动作/条件函数按名注册/调用；事件注册表为事件驱动铺路）
   struct VTrigger { long long id; const char** actions; int nActions, capActions;
-                    const char** conds; int nConds, capConds; } * triggers;
+                    const char** conds; int nConds, capConds;
+                    struct VEvent { int kind; long long unit; int playerIndex; long long evt;
+                                     const char* filter; } * events; int nEvents, capEvents; } * triggers;
   int nTriggers, capTriggers;
   // 计时器表（TimerStart 存回调函数名，为事件驱动铺路）
-  struct VTimer { long long id; const char* handler; } * timers;
+  struct VTimer { long long id; const char* handler; long long trigger; } * timers;
   int nTimers, capTimers;
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
@@ -1445,6 +1447,83 @@ static Value n_timer_elapsed(Vm* vm, Expr** a, int n, VScope* s) {
   (void)a; (void)n; (void)s;
   return v_real(0);   // 无时钟推进（对齐缺省语义）
 }
+
+// ---- 触发器事件注册表（TriggerRegisterXxx 存事件到触发器，返回 event handle）----
+static void trig_add_event(Vm* vm, struct VTrigger* t, int kind, long long unit, int playerIndex, long long evt, const char* filter) {
+  (void)vm;
+  if (t->nEvents == t->capEvents) {
+    t->capEvents = t->capEvents ? t->capEvents * 2 : 4;
+    t->events = (void*)realloc(t->events, sizeof(*t->events) * (size_t)t->capEvents);
+  }
+  t->events[t->nEvents].kind = kind;
+  t->events[t->nEvents].unit = unit;
+  t->events[t->nEvents].playerIndex = playerIndex;
+  t->events[t->nEvents].evt = evt;
+  t->events[t->nEvents].filter = filter;
+  t->nEvents++;
+}
+static Value event_handle(Vm* vm) {
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = 0x100000 + vm->handles++;
+  return v;
+}
+static Value n_trig_reg_unit_event(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), uv = narg(vm, a, n, 1, s), ev = narg(vm, a, n, 2, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 0, uv.k == V_HANDLE ? uv.i : 0, 0, ev.i, NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_player_unit_event(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), pv = narg(vm, a, n, 1, s), ev = narg(vm, a, n, 2, s);
+  Value fv = narg(vm, a, n, 3, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 1, 0, pv.k == V_HANDLE ? player_index_of(vm, pv.i) : 0, ev.i,
+                        fv.k == V_CODE ? fv.s : NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_player_event(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), pv = narg(vm, a, n, 1, s), ev = narg(vm, a, n, 2, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 2, 0, pv.k == V_HANDLE ? player_index_of(vm, pv.i) : 0, ev.i, NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_game_event(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), ev = narg(vm, a, n, 1, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 3, 0, 0, ev.i, NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_timer_event(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  (void)narg(vm, a, n, 1, s); (void)narg(vm, a, n, 2, s);  // timeout/periodic 存表（无时钟）
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 4, 0, 0, 0, NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_timer_expire(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), tmv = narg(vm, a, n, 1, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (tmv.k == V_HANDLE) { struct VTimer* tm = find_timer(vm, tmv.i); if (tm) tm->trigger = tv.i; }
+  if (t) trig_add_event(vm, t, 5, 0, 0, tmv.k == V_HANDLE ? tmv.i : 0, NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_unit_in_range(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), uv = narg(vm, a, n, 1, s);
+  (void)narg(vm, a, n, 2, s);  // range
+  Value fv = narg(vm, a, n, 3, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 6, uv.k == V_HANDLE ? uv.i : 0, 0, 0, fv.k == V_CODE ? fv.s : NULL);
+  return event_handle(vm);
+}
+static Value n_trig_reg_player_chat(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), pv = narg(vm, a, n, 1, s);
+  Value sv = narg(vm, a, n, 2, s);
+  (void)narg(vm, a, n, 3, s);  // exact
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 7, 0, pv.k == V_HANDLE ? player_index_of(vm, pv.i) : 0, 0,
+                        sv.k == V_STR ? a_str(&vm->ast->ar, sv.s) : NULL);
+  return event_handle(vm);
+}
+
 
 // ---- 单位状态（SetUnitState 存 life/mana/max；GetUnitState 读回；无数据表默认 0）----
 static Value n_set_unit_state(Vm* vm, Expr** a, int n, VScope* s) {
@@ -2267,18 +2346,20 @@ static const NativeEntry NATIVES[] = {
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
   { "TriggerAddCondition", n_trigger_add_condition }, { "GetUnitState", n_get_unit_state },
   { "ExecuteFunc", n_execute_func },
-  { "TriggerRegisterGameEvent", n_handle }, { "GetPlayerTechMaxAllowed", n_get_tech_max },
+  { "TriggerRegisterGameEvent", n_trig_reg_game_event }, { "GetPlayerTechMaxAllowed", n_get_tech_max },
   { "IsPlayerObserver", n_false }, { "SetFloatGameState", n_void },
   { "Preloader", n_void }, { "CreateTimerDialog", n_handle },
   { "GetGameSpeed", n_i2 }, { "VersionGet", n_i1 }, { "GetFloatGameState", n_r0 },
   { "GetPlayerController", n_i0 }, { "GetPlayerSlotState", n_i0 },
   { "GetPlayerTechResearched", n_get_tech_researched }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
   { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_false },
-  { "TriggerRegisterPlayerUnitEvent", n_false }, { "TriggerRegisterTimerExpireEvent", n_false },
-  { "TriggerRegisterUnitEvent", n_false },
+  { "TriggerRegisterPlayerUnitEvent", n_trig_reg_player_unit_event }, { "TriggerRegisterTimerExpireEvent", n_trig_reg_timer_expire },
+  { "TriggerRegisterUnitEvent", n_trig_reg_unit_event },
   { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
   { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_void },
   { "TimerStart", n_timer_start }, { "TimerGetElapsed", n_timer_elapsed },
+  { "TriggerRegisterTimerEvent", n_trig_reg_timer_event }, { "TriggerRegisterPlayerEvent", n_trig_reg_player_event },
+  { "TriggerRegisterUnitInRange", n_trig_reg_unit_in_range }, { "TriggerRegisterPlayerChatEvent", n_trig_reg_player_chat },
   // 第三轮（config 链）：GetPlayerId 暂返 0（player 对象表留待深化）
   { "GetPlayerId", n_i0 }, { "GetGameTypeSelected", n_i0 },
   { "SetPlayerStartLocation", n_void }, { "SetStartLocPrio", n_void }, { "SetStartLocPrioCount", n_void },
@@ -2634,7 +2715,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
   free(vm.rects);
   free(vm.locs);
   free(vm.units);
-  for (int i = 0; i < vm.nTriggers; i++) { free(vm.triggers[i].actions); free(vm.triggers[i].conds); }
+  for (int i = 0; i < vm.nTriggers; i++) { free(vm.triggers[i].actions); free(vm.triggers[i].conds); free(vm.triggers[i].events); }
   free(vm.triggers);
   free(vm.callNames);
   free_ast(ast);
