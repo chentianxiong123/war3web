@@ -1,0 +1,55 @@
+// Minimal MDL: one triangle, one bone with a translation, one sequence.
+Version {
+	800,
+}
+Model "TestCube" {
+	BlendTime 150,
+	Extent { BoundsRadius 100.0, Minimum { -50, -50, -50 }, Maximum { 50, 50, 50 }, },
+}
+Sequences {
+	Anim "Stand" {
+		Interval { 0, 1000 },
+	}
+}
+GlobalSequences { 333, }
+Textures {
+	Bitmap { Image "Textures\\White.blp", }
+}
+Materials {
+	Material {
+		Layer {
+			FilterMode None,
+			Shading 1,
+			TextureID 0,
+		}
+	}
+}
+Geoset {
+	Vertices { {0,0,0}, {10,0,0}, {10,10,0}, }
+	Normals { {0,0,1}, {0,0,1}, {0,0,1}, }
+	Face {
+		Triangles { {0,1,2}, }
+	}
+	Groups { 0, }
+	MatrixGroup { {0}, }
+	Matrix { {0}, }
+	MaterialID 0,
+	SelectionGroup 0,
+	SelectionScaling 0,
+	TextureUVs {
+		UV { {0,0}, {1,0}, {1,1}, }
+	}
+	Extent { BoundsRadius 10.0, Minimum { 0,0,0 }, Maximum { 10,10,0 }, }
+}
+GeosetAnim {
+	Alpha 1,
+	Color { 1, 1, 1 },
+	GeosetId 0,
+}
+Bone "Bone1" {
+	ObjectId 0,
+	GeosetId -1,
+	GeosetAnimId -1,
+	Translation { 0, { 0, 0, 0 }, }
+}
+PivotPoints { {0, 0, 0}, }

@@ -1,0 +1,63 @@
+// Extended MDL: particle emitter 2, camera, event, multi-frame tracks.
+Version {
+	800,
+}
+Model "FxTest" {
+	BlendTime 150,
+}
+Sequences {
+	Anim "Stand" {
+		Interval { 0, 2000 },
+	}
+}
+GlobalSequences { 400, }
+Textures {
+	Bitmap { Image "Textures\\White.blp", }
+}
+Materials {
+	Material {
+		Layer {
+			FilterMode Additive,
+			Shading 1,
+			TextureID 0,
+		}
+	}
+}
+ParticleEmitter2 "Rune" {
+	ObjectId 0,
+	Parent 1,
+	Speed { 0, { 300, }, 1000, { 200, }, },
+	Variation 40,
+	Latitude 25,
+	Gravity 120,
+	Visibility { 400, { 0, }, },
+	LifeSpan 2,
+	EmissionRate 200,
+	Length 100,
+	Width 100,
+	Blend 0,
+	Rows 1,
+	Columns 1,
+	HeadOrTail 1,
+	TailLength 80,
+	Time 0.5,
+	SegmentColor { { 1, 0, 0, }, { 1, 1, 0, }, { 1, 1, 1, }, },
+	Alpha { 255, 128, },
+	ParticleTextureID 0,
+	Squirt 1,
+	PriorityPlane 0,
+	ReplaceableId 0,
+}
+Camera "Cam1" {
+	Position { 100, 200, 300 },
+	FieldOfView 0.6,
+	FarClip 5000,
+	NearClip 100,
+	Target { 0, 0, 50 },
+	Translation { 0, { 0, 0, 0 }, },
+}
+EventObject "Blood" {
+	ObjectId 2,
+	Parent -1,
+}
+PivotPoints { { 0, 0, 0 }, }
