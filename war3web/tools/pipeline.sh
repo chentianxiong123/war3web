@@ -16,6 +16,7 @@ $PY tools/objdata.py extracted/war3map.w3u extracted/war3map.w3t \
                      extracted/war3map.w3d extracted/war3map.w3b
 $PY tools/w3i.py               # full map info: players/forces/camera/tileset/fog
 $PY tools/unitsdoo.py          # pre-placed units: hp/mana/inventory/hero stats
+$PY tools/w3r.py               # regions: weather/ambience rectangles
 $PY tools/terrain.py
 $PY tools/jass_fmt.py
 # the day/night light curves, out of Warcraft III's own DNC models
