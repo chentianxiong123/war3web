@@ -788,6 +788,46 @@ ck('jass(出生点) GetPlayerStartLocationY=5678', rS.globals.sy, 5678);
 ck('jass(枚举) ForceEnumPlayers 加入 12 玩家', rS.globals.fcount, 12);
 ck('jass(枚举) ForForce 求和=66', rS.globals.fsum, 66);
 
+// --- 触发器清空 + region 格 + TriggerRemoveAction ---
+const clearScript = `
+globals
+  trigger tg = null
+  integer ac = 0
+  integer cleared = -1
+  region rg = null
+  integer cellok = -1
+  integer rem = -1
+endglobals
+function ActA takes nothing returns nothing
+  set ac = ac + 1
+endfunction
+function Init takes nothing returns nothing
+  set tg = CreateTrigger()
+  call TriggerAddAction(tg, function ActA)
+  call TriggerClearActions(tg)
+  call TriggerExecute(tg)
+  if ac == 0 then
+    set cleared = 1
+  endif
+  set rem = 1
+  if TriggerRemoveAction(tg, 0) then
+    set rem = 2
+  endif
+  set rg = CreateRegion()
+  call RegionAddCell(rg, 10, 20)
+  call RegionAddCell(rg, 10, 20)
+  call RegionClearCell(rg, 10, 20)
+  set cellok = 1
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rCl = jassRunC(clearScript, 'main');
+ck('jass(触发) TriggerClearActions 后 Execute 不执行', rCl.globals.cleared, 1);
+ck('jass(触发) TriggerRemoveAction 返回 true', rCl.globals.rem, 2);
+ck('jass(region) RegionAddCell/ClearCell 可用', rCl.globals.cellok, 1);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

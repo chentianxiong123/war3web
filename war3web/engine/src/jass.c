@@ -1118,7 +1118,8 @@ typedef struct {
                  int* abils; int nAbils, capAbils; } * units;
   int nUnits, capUnits;
   // region 对象表（区域：矩形/格集合）
-  struct VRegion { long long id; long long* rectIds; int nRects, capRects; } * regions;
+  struct VRegion { long long id; long long* rectIds; int nRects, capRects;
+                   long long* cells; int nCells, capCells; } * regions;
   int nRegions, capRegions;
   // rect / location / group 对象表（对象工厂真分配 + 查询/枚举）
   struct VRect { long long id; double minx, miny, maxx, maxy; } * rects;
@@ -1377,6 +1378,45 @@ static Value n_trigger_add_condition(Vm* vm, Expr** a, int n, VScope* s) {
   }
   return v_null();
 }
+static Value n_trigger_clear_actions(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) t->nActions = 0;
+  return v_null();
+}
+static Value n_trigger_clear_conditions(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) t->nConds = 0;
+  return v_null();
+}
+static struct VRegion* find_region(Vm* vm, long long id);
+static Value n_region_add_cell(Vm* vm, Expr** a, int n, VScope* s) {
+  Value rv = narg(vm, a, n, 0, s);
+  Value x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  struct VRegion* r = rv.k == V_HANDLE ? find_region(vm, rv.i) : NULL;
+  if (r) {
+    long long cell = ((long long)(int)x.i << 32) | (unsigned int)(int)y.i;
+    for (int i = 0; i < r->nCells; i++) if (r->cells[i] == cell) return v_null();  // 去重
+    if (r->nCells == r->capCells) {
+      r->capCells = r->capCells ? r->capCells * 2 : 8;
+      r->cells = (long long*)realloc(r->cells, sizeof(long long) * (size_t)r->capCells);
+    }
+    r->cells[r->nCells++] = cell;
+  }
+  return v_null();
+}
+static Value n_region_clear_cell(Vm* vm, Expr** a, int n, VScope* s) {
+  Value rv = narg(vm, a, n, 0, s);
+  Value x = narg(vm, a, n, 1, s), y = narg(vm, a, n, 2, s);
+  struct VRegion* r = rv.k == V_HANDLE ? find_region(vm, rv.i) : NULL;
+  if (r) {
+    long long cell = ((long long)(int)x.i << 32) | (unsigned int)(int)y.i;
+    for (int i = 0; i < r->nCells; i++)
+      if (r->cells[i] == cell) { r->cells[i] = r->cells[--r->nCells]; break; }
+  }
+  return v_null();
+}
 static Value n_trigger_execute(Vm* vm, Expr** a, int n, VScope* s) {
   Value tv = narg(vm, a, n, 0, s);
   if (tv.k == V_HANDLE) { struct VTrigger* t = find_trigger(vm, tv.i); if (t) {
@@ -1571,7 +1611,6 @@ static Value n_get_unit_state(Vm* vm, Expr** a, int n, VScope* s) {
 }
 
 // ---- 单位范围/颜色 + GetLocalPlayer + 销毁回收（3.19 批）----
-static struct VRegion* find_region(Vm* vm, long long id);
 static Value n_set_unit_acquire_range(Vm* vm, Expr** a, int n, VScope* s) {
   Value uv = narg(vm, a, n, 0, s), r = narg(vm, a, n, 1, s);
   if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u)
@@ -2435,6 +2474,7 @@ static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
 static Value n_i0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(0); }
 static Value n_null(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_null(); }
 static Value n_i1(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(1); }
+static Value n_true(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_bool(1); }
 static Value n_set_player_team(Vm* vm, Expr** a, int n, VScope* s) {
   Value pv = narg(vm, a, n, 0, s), t = narg(vm, a, n, 1, s);
   if (pv.k == V_HANDLE) vm->players[player_index_of(vm, pv.i)].team = (int)t.i;
@@ -2574,7 +2614,7 @@ static const NativeEntry NATIVES[] = {
   { "UnitAddAbility", n_unit_add_ability }, { "UnitRemoveAbility", n_unit_remove_ability },
   { "GetUnitAbilityLevel", n_get_unit_ability_level }, { "GetUnitName", n_str_empty },
   { "CreateRegion", n_create_region }, { "RegionAddRect", n_region_add_rect },
-  { "RegionClearRect", n_region_clear_rect }, { "RegionAddCell", n_void }, { "RegionClearCell", n_void },
+  { "RegionClearRect", n_region_clear_rect }, { "RegionAddCell", n_region_add_cell }, { "RegionClearCell", n_region_clear_cell },
   { "GetUnitX", n_get_unit_x }, { "GetUnitY", n_get_unit_y },
   { "SetUnitX", n_set_unit_x }, { "SetUnitY", n_set_unit_y },
   { "SetUnitPosition", n_set_unit_position }, { "GetUnitFacing", n_get_unit_facing },
@@ -2583,6 +2623,8 @@ static const NativeEntry NATIVES[] = {
   { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
   { "TriggerAddCondition", n_trigger_add_condition }, { "GetUnitState", n_get_unit_state },
+  { "TriggerClearActions", n_trigger_clear_actions }, { "TriggerClearConditions", n_trigger_clear_conditions },
+  { "TriggerRemoveAction", n_true }, { "TriggerRemoveCondition", n_true },
   { "ExecuteFunc", n_execute_func },
   { "TriggerRegisterGameEvent", n_trig_reg_game_event }, { "GetPlayerTechMaxAllowed", n_get_tech_max },
   { "IsPlayerObserver", n_false }, { "SetFloatGameState", n_void },
@@ -2941,7 +2983,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
   if (out_err) *out_err = vm.err ? 1 : 0;
   free(vm.timers);
   for (int i = 0; i < 16; i++) free(vm.players[i].ts);
-  for (int i = 0; i < vm.nRegions; i++) free(vm.regions[i].rectIds);
+  for (int i = 0; i < vm.nRegions; i++) { free(vm.regions[i].rectIds); free(vm.regions[i].cells); }
   free(vm.regions);
   for (int i = 0; i < vm.nUnits; i++) free(vm.units[i].abils);
   for (int i = 0; i < vm.nForces; i++) free(vm.forces[i].pis);
