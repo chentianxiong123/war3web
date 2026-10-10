@@ -161,6 +161,13 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 断言 9 项（rect 中心/宽、loc 移动、字符串、句柄、group 枚举求和/计数）
   56/56 全绿 + 880 对账保持
 
+### 3.11 哈希表族 + 玩家名 + 文本显示（提交 e676948）
+- 哈希表：InitHashtable + SaveInteger/SaveReal/SaveString/SaveHandle 4 类型
+  存取（同 key 覆盖）+ LoadInteger/LoadReal/LoadString/LoadHandle +
+  HaveSaved*（按类型匹配）+ FlushChildHashtable/FlushParentHashtable
+- GetPlayerName（对齐 engine.js `Player N` 命名）、DisplayTextToPlayer 三件套
+- 断言 5 项（4 类型 round-trip + flush 后失效）；62/62 全绿 + 880 对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
