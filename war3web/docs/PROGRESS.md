@@ -257,6 +257,13 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - region 格存储：RegionAddCell（去重）/RegionClearCell（cell 坐标对编码）
 - 断言 3 项；112/112 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.24 natives 收尾批（提交 73682a0）
+- SetWidgetLife/GetWidgetLife：单位表 life 统一存储（与 GetUnitState LIFE 一致）
+- AddSpecialEffectLoc/AddSpecialEffectTarget 条目（每次新 handle 对齐 JS）
+- **natives 深化至此收尾**：累计 ~115 个真语义 natives；
+  剩余 stub 仅环境/音频/UI 类合理空操作（天气/音效/镜头/对话框，无对应渲染系统）
+- 断言 2 项；114/114 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
