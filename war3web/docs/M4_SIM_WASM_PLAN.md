@@ -33,6 +33,12 @@
 ## 2. 移植策略（分阶段，每阶段独立可验证）
 
 ### 阶段 1：移动/寻路/碰撞进 WASM（P1 单位+orders 子集）
+- **行为锁定已建立（7ab300f）**：`tools/path_golden.mjs` + `goldens/path_trace.json`——
+  真实 Terenas 地图 5 场景单单位移动黄金基准（到达耗时 1.1-2.9s、路径长度、
+  终点误差门禁 endErr<=40 全部通过）。C 移植后同场景对照。
+- **关键实测发现**：JS 寻路是**轻量直线段 + 碰撞回退**架构（movementPath 返回
+  稀疏段，撞障碍 canAdvance 失败即停）；多单位同场实体碰撞会互相阻挡——
+  C 移植需复现这两条语义。
 - 输入：单位意图（order 目标/路径点）→ WASM 内寻路（现有 walk.bin/fload.bin 二进制
   数据直接加载进 wasm heap）→ 输出：单位新坐标/朝向
 - 交付：`wasm_move(unitId, target, dt)` 导出 + Node 端对照 JS 寻路结果
