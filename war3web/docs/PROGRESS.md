@@ -245,6 +245,12 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - RemoveLocation 真回收（交换删除）
 - 断言 5 项；105/105 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.22 出生点坐标 + 全玩家枚举（提交 8895b9e）
+- 出生点表：DefineStartLocation 存 (x,y)，GetPlayerStartLocationX/Y 按
+  玩家 startLoc 索引还原（地图出生点定位）
+- ForceEnumPlayers 清空后加入玩家 0-11（对齐 engine.js），ForForce 可枚举求和
+- 断言 4 项；109/109 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
