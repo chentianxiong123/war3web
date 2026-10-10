@@ -409,7 +409,17 @@ static Expr* parse_atom(P* p) {
   }
   if (t->kind == T_INT) { next(p); Expr* e = e_k(p, E_INT); e->i = t->i; return e; }
   if (t->kind == T_REAL) { next(p); Expr* e = e_k(p, E_REAL); e->f = t->f; return e; }
-  if (t->kind == T_STR) { next(p); Expr* e = e_k(p, E_STR); e->s = t->s; return e; }
+  if (t->kind == T_STR) {
+    next(p);
+    Expr* e = e_k(p, E_STR);
+    e->s = t->s;
+#ifdef DBG
+    fprintf(stderr, "[atom STR] t->s=%p bytes:", (void*)t->s);
+    for (const char* q = t->s; q && *q; q++) fprintf(stderr, "%02X ", (unsigned char)*q);
+    fprintf(stderr, "| e->s=%p\n", (void*)e->s);
+#endif
+    return e;
+  }
   if (at_kw(p, K_TRUE)) { next(p); Expr* e = e_k(p, E_BOOL); e->bv = 1; return e; }
   if (at_kw(p, K_FALSE)) { next(p); Expr* e = e_k(p, E_BOOL); e->bv = 0; return e; }
   if (at_kw(p, K_NULL)) { next(p); Expr* e = e_k(p, E_NULL); return e; }
@@ -660,7 +670,7 @@ static void b_str(Buf* b, const char* s) {
   b_put(b, "\"");
   for (const char* q = s ? s : ""; *q; q++) {
     char c = *q;
-    if (c == '"' || c == '\\') { char e[2] = {'\\', c}; b_put(b, e); }
+    if (c == '"' || c == '\\') { char e[3] = {'\\', c, 0}; b_put(b, e); }
     else if (c == '\n') b_put(b, "\\n");
     else if (c == '\r') b_put(b, "\\r");
     else if (c == '\t') b_put(b, "\\t");
@@ -673,7 +683,16 @@ static void json_expr(Buf* b, const Expr* e) {
   switch (e->k) {
     case E_INT: b_put(b, "{\"k\":\"int\",\"v\":"); b_num(b, e->i); b_put(b, "}"); break;
     case E_REAL: b_put(b, "{\"k\":\"real\",\"v\":"); b_real(b, e->f); b_put(b, "}"); break;
-    case E_STR: b_put(b, "{\"k\":\"str\",\"v\":"); b_str(b, e->s); b_put(b, "}"); break;
+    case E_STR:
+#ifdef DBG
+      {
+        const unsigned char* qq = (const unsigned char*)e->s;
+        fprintf(stderr, "[json STR] %p:", (void*)e->s);
+        for (int k = 0; k < 40; k++) fprintf(stderr, "%02X ", qq[k]);
+        fprintf(stderr, "\n");
+      }
+#endif
+      b_put(b, "{\"k\":\"str\",\"v\":"); b_str(b, e->s); b_put(b, "}"); break;
     case E_BOOL: b_put(b, e->bv ? "{\"k\":\"bool\",\"v\":true}" : "{\"k\":\"bool\",\"v\":false}"); break;
     case E_NULL: b_put(b, "{\"k\":\"null\"}"); break;
     case E_FUNCREF: b_put(b, "{\"k\":\"funcref\",\"name\":"); b_str(b, e->name); b_put(b, "}"); break;
