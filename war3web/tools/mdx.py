@@ -20,6 +20,13 @@ TRACK_SPEC = {          # tag -> (n components, 'f' float | 'i' int)
     'KRHA': (1, 'f'), 'KRHB': (1, 'f'), 'KRAL': (1, 'f'), 'KRCO': (3, 'f'),
     'KRTX': (1, 'i'), 'KRVS': (1, 'f'),
     'KCTR': (3, 'f'), 'KTTR': (3, 'f'), 'KCRL': (1, 'f'),
+    # Fresnel shader gains (1.30+ material layers), per AnimationMap.java
+    'KFC3': (3, 'f'), 'KFCA': (1, 'f'), 'KFTC': (1, 'i'),
+    # Popcorn particle emitters (1.32+ ParticleEmitterCorn) -- no v800 asset in
+    # the archives carries these, but the spec is settled: alpha/color/rate/
+    # lifespan/speed/visibility
+    'KPPA': (1, 'f'), 'KPPC': (3, 'f'), 'KPPE': (1, 'f'),
+    'KPPL': (1, 'f'), 'KPPS': (1, 'f'), 'KPPV': (1, 'f'),
 }
 
 class R:
