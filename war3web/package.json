@@ -11,7 +11,9 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node tools/run_tests.mjs"
+    "test": "node tools/run_tests.mjs",
+    "wasm": "node tools/build_wasm.mjs",
+    "wasm:test": "node tools/wasm_test.mjs && node tools/wasm_browser_test.mjs"
   },
   "dependencies": {
     "three": "^0.185.1",

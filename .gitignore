@@ -89,6 +89,7 @@ serve/
 .venv/
 __pycache__/
 .claude/
+wasm/out/
 
 # ===== 参考源码区（可从各自上游重新拉取，不入库）=====
 refs/

@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>war3core wasm 浏览器加载测试</title>
+<h1>war3core wasm 浏览器加载测试</h1>
+<pre id="log">loading…</pre>
+<script>
+  // war3core.wasm 是 zig cc 编出的裸 wasm（无 JS glue），浏览器直接 fetch + instantiate。
+  fetch('./out/war3core.wasm')
+    .then((r) => r.arrayBuffer())
+    .then((buf) => WebAssembly.instantiate(buf))
+    .then(({ instance }) => {
+      const core = instance.exports;
+      const checks = [
+        ['add(2, 3)', core.add(2, 3), 5],
+        ['add(-5, 5)', core.add(-5, 5), 0],
+        ['multiply(6, 7)', core.multiply(6, 7), 42],
+        ['fib(10)', core.fib(10), 55],
+        ['fib(1)', core.fib(1), 1],
+      ];
+      let ok = 0, bad = 0;
+      const lines = checks.map(([name, got, want]) => {
+        const pass = got === want;
+        if (pass) ok++; else bad++;
+        return `${pass ? 'ok  ' : 'FAIL'} ${name} = ${got}${pass ? '' : ' (want ' + want + ')'}`;
+      });
+      lines.push(`\n${ok} passed, ${bad} failed`);
+      document.getElementById('log').textContent = lines.join('\n');
+      document.body.dataset.passed = bad === 0 ? 'yes' : 'no';
+    }).catch((e) => {
+      document.getElementById('log').textContent = '加载失败: ' + e;
+      document.body.dataset.passed = 'no';
+    });
+</script>
