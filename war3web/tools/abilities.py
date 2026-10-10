@@ -127,6 +127,24 @@ BUFF_ART_FIELDS = {'ftat': 'target', 'fsat': 'special', 'feat': 'effect',
 # buff can hang the same model off both hands.
 BUFF_POINT_FIELDS = {'fta0': 0, 'fta1': 1, 'fta2': 2, 'fta3': 3, 'fta4': 4, 'fta5': 5}
 
+# The buff entries in *AbilityFunc.txt spell their fields in title case
+# (Buffart, Effectsound...), which never matched the lowercase ART_FUNC keys,
+# so every Blizzard buff's art read as absent and the map's w3h overrides were
+# the only thing that ever filled a slot. Field name -> buffart.json key.
+BUFF_FUNC_FIELDS = {
+    'buffart': 'icon',                     # command-button BLP, not a model
+    'targetart': 'target', 'specialart': 'special', 'effectart': 'effect',
+    'missileart': 'missile', 'lightningeffect': 'lightning',
+    'effectsound': 'sound', 'effectsoundlooped': 'soundLoop',
+    'missilespeed': 'missileSpeed', 'missilearc': 'missileArc',
+    'missilehoming': 'missileHoming',
+    'spelldetail': 'detail',
+    'targetattach': 'attach0', 'targetattach1': 'attach1', 'targetattach2': 'attach2',
+    'targetattach3': 'attach3', 'targetattach4': 'attach4', 'targetattach5': 'attach5',
+    'targetattachcount': 'attachCount',
+    'effectattach': 'effectAttach', 'specialattach': 'specialAttach',
+}
+
 
 def is_model(v):
     v = str(v or '')
@@ -145,15 +163,30 @@ def buff_art_table():
     for bid, d in FUNC.items():
         if not bid.startswith('B'):
             continue
-        art = {}
-        for k, slot in ART_FUNC.items():
-            if d.get(k): art[slot] = d[k]
-        pts = {}
-        for k, i in BUFF_POINT_FIELDS.items():
-            if d.get(k): pts[i] = d[k]
-        if d.get('ftac'): art['count'] = int(num(d['ftac'], 1) or 1)
-        if pts: art['points'] = [pts[i] for i in sorted(pts)]
-        if art: out[bid] = art
+        art, pts = {}, {}
+        for k, v in d.items():
+            slot = BUFF_FUNC_FIELDS.get(str(k).lower())
+            if not slot or v is None:
+                continue
+            if slot in ('target', 'special', 'effect', 'area', 'missile', 'lightning'):
+                if is_model(v):
+                    art[slot] = v
+            elif slot == 'icon':
+                art['icon'] = v
+            elif slot in ('missileSpeed', 'missileArc', 'missileHoming'):
+                art[slot] = num(v, 0)
+            elif slot in ('sound', 'soundLoop', 'detail'):
+                art[slot] = v
+            elif slot == 'attachCount':
+                art['count'] = int(num(v, 1) or 1)
+            elif slot.startswith('attach'):
+                pts[int(slot[6:])] = v
+            elif slot in ('effectAttach', 'specialAttach'):
+                art[slot] = v
+        if pts:
+            art['points'] = [pts[i] for i in sorted(pts)]
+        if art:
+            out[bid] = art
 
     def apply(dst, mods):
         pts = {}
