@@ -39,6 +39,11 @@
 - **关键实测发现**：JS 寻路是**轻量直线段 + 碰撞回退**架构（movementPath 返回
   稀疏段，撞障碍 canAdvance 失败即停）；多单位同场实体碰撞会互相阻挡——
   C 移植需复现这两条语义。
+- **C 移植完成（ce58fca）**：`engine/src/sim.c`——pathing.js Grid 全量移植
+  （A* 二叉堆 + string-pull + clearFootprint 精确扫掠圆盘 + connected BFS +
+  nearestWalkable 螺旋 + clearLine），`_sim_grid_init/_sim_find_path/_sim_clear_foot/
+  _sim_connected_i` 导出。**`tools/sim_test.mjs` 门禁：5/5 场景 C/JS 寻路一致**
+  （段数 + 每段坐标容差 0.5），`npm run sim:test` 独立脚本。
 - 输入：单位意图（order 目标/路径点）→ WASM 内寻路（现有 walk.bin/fload.bin 二进制
   数据直接加载进 wasm heap）→ 输出：单位新坐标/朝向
 - 交付：`wasm_move(unitId, target, dt)` 导出 + Node 端对照 JS 寻路结果
