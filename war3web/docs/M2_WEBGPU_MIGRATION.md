@@ -47,11 +47,14 @@ render.js 具体使用点：
 
 ## 4. 分步试点计划（M2）
 
-1. **步骤 A（已完成 35fb526）**：`renderer` 构造切换 + `init()` 异步化 + 通道开关
-   （`localStorage.webgpu=1` 切 WebGPURenderer，默认仍 WebGL 保底）+
-   anisotropy 兼容 fallback（WebGPU 无 capabilities.getMaxAnisotropy → 固定 8）
-2. **步骤 B（待做）**：跑通主场景（地形+单位+粒子），记录 `fps_test`、`render_test`
-   基线（WebGL vs WebGPU 双跑存档）
+1. **步骤 A（已完成 35fb526 + 42e92eb）**：`renderer` 构造切换 + `init()` 异步化 +
+   通道开关（`localStorage.webgpu=1` 切 WebGPURenderer，默认 WebGL 保底）+
+   anisotropy 兼容 fallback。**实测发现**：r185 默认构建不含 WebGPURenderer
+   （在 three/webgpu 构建）→ importmap 补 `three/webgpu` + `three/tsl` 映射、
+   render.js 动态 import + resize 延时 setSize。**playwright 浏览器实测**：
+   WebGPURenderer 激活成功（地形加载、渲染循环 0 错误、WebGL 回退正常）
+2. **步骤 B（待做）**：进入对局验证单位/粒子渲染 + 记录 `fps_test` 基线
+   （WebGL vs WebGPU 双跑存档）
 3. **步骤 C**：性能敏感点（Lambert 材质批量/粒子 buffer）换 TSL 试点，
    对比后再推广
 4. **步骤 D**：移除 WebGL 渲染器开关（或长期保留 `forceWebGL` 回退，
