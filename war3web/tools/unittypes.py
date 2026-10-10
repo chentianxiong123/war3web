@@ -21,7 +21,25 @@ def weapon_fields(rec, i):
                 dmgSides=num(rec.get('sides%d' % i)), atkCd=num(rec.get('cool%d' % i), 1.5),
                 atkRange=num(rec.get('rangeN%d' % i), 90),
                 atkType=str(rec.get('atkType%d' % i) or 'normal'),
-                attackPoint=num(rec.get('dmgpt%d' % i)), attackBackswing=num(rec.get('backSw%d' % i)))
+                attackPoint=num(rec.get('dmgpt%d' % i)), attackBackswing=num(rec.get('backSw%d' % i)),
+                # Splash: the WeaponMetaData calls Farea1/Harea1/Qarea1 the full/
+                # half/quarter damage radii and Hfact1/Qfact1 their damage
+                # factors. None of it crossed before, so a frost wyrm's breath
+                # read as a single-target attack and a mortar team's shells
+                # splashed nobody.
+                splashFull=num(rec.get('Farea%d' % i)),
+                splashHalf=num(rec.get('Harea%d' % i)),
+                splashQuarter=num(rec.get('Qarea%d' % i)),
+                splashHalfFactor=num(rec.get('Hfact%d' % i), 1.0),
+                splashQuarterFactor=num(rec.get('Qfact%d' % i), 0.5),
+                damageLoss=num(rec.get('damageLoss%d' % i)),
+                spillDist=num(rec.get('spillDist%d' % i)),
+                spillRadius=num(rec.get('spillRadius%d' % i)),
+                targCount=num(rec.get('targCount%d' % i), 1),
+                splashTargets=str(rec.get('splashTargs%d' % i) or ''),
+                dmgUp=num(rec.get('dmgUp%d' % i)),
+                rngBuff=num(rec.get('RngBuff%d' % i)),
+                showUI=num(rec.get('showUI%d' % i), 1))
 
 def from_blz(rec):
     prim = str(rec.get('Primary', '_')).strip()
@@ -43,6 +61,16 @@ def from_blz(rec):
         dmgBase=num(rec.get('dmgplus1'), 0), dmgDice=num(rec.get('dice1'), 1),
         dmgSides=num(rec.get('sides1'), 1), atkCd=num(rec.get('cool1'), 1.5),
         atkRange=num(rec.get('rangeN1'), 90), atkType=str(rec.get('atkType1', 'normal')),
+        # weapon 1 splash (weapon 2 rides along via the +'2' expansion above)
+        splashFull=num(rec.get('Farea1')), splashHalf=num(rec.get('Harea1')),
+        splashQuarter=num(rec.get('Qarea1')),
+        splashHalfFactor=num(rec.get('Hfact1'), 1.0),
+        splashQuarterFactor=num(rec.get('Qfact1'), 0.5),
+        damageLoss=num(rec.get('damageLoss1')), spillDist=num(rec.get('spillDist1')),
+        spillRadius=num(rec.get('spillRadius1')), targCount=num(rec.get('targCount1'), 1),
+        splashTargets=str(rec.get('splashTargs1') or ''),
+        dmgUp=num(rec.get('dmgUp1')), rngBuff=num(rec.get('RngBuff1')),
+        showUI=num(rec.get('showUI1'), 1),
         moveSpeed=num(rec.get('spd'), 270), turnRate=num(rec.get('turnRate'), 0.6),
         collision=num(rec.get('collision'), 24), scale=num(rec.get('modelScale'), 1) or 1,
         # unitUI.slk keeps two scales and they are not the same thing: modelScale
@@ -100,6 +128,34 @@ def from_blz(rec):
         # to 0 so a unit type with no weapons row at all keeps the attack it has
         # always had here; only a table saying 0 ever takes one away.
         attacksEnabled=int(num(rec.get('weapsOn'), 1)),
+        # --- 视野 / 感知 / 防御升级（raw 有但从未带进运行时表）---
+        nightSight=num(rec.get('nsight'), 800),
+        fatLOS=num(rec.get('fatLOS'), 0),
+        minRange=num(rec.get('minRange'), 0),
+        defUp=num(rec.get('defUp'), 0),
+        # --- 修理（goldRep/lumberRep/reptm: UnitWeapons.slk）---
+        goldRepair=num(rec.get('goldRep')),
+        lumberRepair=num(rec.get('lumberRep')),
+        repairTime=num(rec.get('reptm')),
+        # --- 死亡类型（raise/decay 等，决定尸体动画/复生行为）---
+        deathType=str(rec.get('deathType') or ''),
+        # --- 默认自动施法 / 行为 ---
+        autoCast=str(rec.get('auto') or ''),
+        canFlee=int(num(rec.get('canFlee'), 0)),
+        prio=num(rec.get('prio')),
+        points=num(rec.get('points')),
+        nameCount=num(rec.get('nameCount')),
+        impactZ=num(rec.get('impactZ')),
+        propWin=num(rec.get('propWin')),
+        # --- 建筑放置约束 ---
+        isBuildOn=str(rec.get('isBuildOn') or ''),
+        canBuildOn=str(rec.get('canBuildOn') or ''),
+        requirePlace=str(rec.get('requirePlace') or ''),
+        preventPlace=str(rec.get('preventPlace') or ''),
+        # --- 击杀掉落表 / 商店库存 ---
+        dropItems=str(rec.get('dropItems') or ''),
+        stockMax=num(rec.get('stockMax')), stockRegen=num(rec.get('stockRegen')),
+        stockStart=num(rec.get('stockStart')),
     )
 
 W3U_MAP = {                       # w3u modification id -> normalized field
