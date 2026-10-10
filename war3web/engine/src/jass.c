@@ -1107,7 +1107,8 @@ typedef struct {
   long long ctxTrigger;   // 触发执行上下文（GetTriggeringTrigger 读取）
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
-                   int controller; int startLoc; int slotState;
+                   int controller; int startLoc; int slotState; int team;
+                   unsigned char ally[16];   // 联盟矩阵：本玩家对各位玩家的联盟标记（IsPlayerAlly 读）
                    struct { int tech; int lvl; int max; } * ts; int nTs, capTs; } players[16];
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
@@ -1832,6 +1833,39 @@ static Value n_get_player_slot_state(Vm* vm, Expr** a, int n, VScope* s) {
   return v_int(0);
 }
 
+// ---- 玩家联盟（SetPlayerAlliance 存矩阵，IsPlayerAlly/Enemy 读；对齐 engine.js）----
+static Value n_set_player_alliance(Vm* vm, Expr** a, int n, VScope* s) {
+  Value fv = narg(vm, a, n, 0, s), tv = narg(vm, a, n, 1, s);
+  (void)narg(vm, a, n, 2, s);  // flag 类型暂不区分
+  Value ov = narg(vm, a, n, 3, s);
+  if (fv.k == V_HANDLE && tv.k == V_HANDLE) {
+    int f = player_index_of(vm, fv.i), t = player_index_of(vm, tv.i);
+    vm->players[f].ally[t] = ov.k == V_BOOL ? (ov.i ? 1 : 0) : (ov.i != 0 ? 1 : 0);
+  }
+  return v_null();
+}
+static Value n_is_player_ally(Vm* vm, Expr** a, int n, VScope* s) {
+  Value av = narg(vm, a, n, 0, s), bv = narg(vm, a, n, 1, s);
+  if (av.k == V_HANDLE && bv.k == V_HANDLE)
+    return v_bool(vm->players[player_index_of(vm, av.i)].ally[player_index_of(vm, bv.i)] != 0);
+  return v_bool(0);
+}
+static Value n_is_player_enemy(Vm* vm, Expr** a, int n, VScope* s) {
+  Value av = narg(vm, a, n, 0, s), bv = narg(vm, a, n, 1, s);
+  if (av.k == V_HANDLE && bv.k == V_HANDLE) {
+    int ai = player_index_of(vm, av.i), bi = player_index_of(vm, bv.i);
+    return v_bool(!vm->players[ai].ally[bi] && ai != bi);   // 对齐 engine.js: !isAlly && a !== b
+  }
+  return v_bool(0);
+}
+static Value n_remove_location(Vm* vm, Expr** a, int n, VScope* s) {
+  Value lv = narg(vm, a, n, 0, s);
+  if (lv.k == V_HANDLE)
+    for (int i = 0; i < vm->nLocs; i++)
+      if (vm->locs[i].id == lv.i) { vm->locs[i] = vm->locs[--vm->nLocs]; break; }
+  return v_null();
+}
+
 // ---- 数学族（对齐 engine.js：Math.* + 正余数取模）----
 static Value n_math_sin(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(sin(x.k == V_REAL ? x.f : (double)x.i)); }
 static Value n_math_cos(Vm* vm, Expr** a, int n, VScope* s) { Value x = narg(vm, a, n, 0, s); return v_real(cos(x.k == V_REAL ? x.f : (double)x.i)); }
@@ -2400,6 +2434,11 @@ static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
 static Value n_i0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(0); }
 static Value n_null(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_null(); }
 static Value n_i1(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(1); }
+static Value n_set_player_team(Vm* vm, Expr** a, int n, VScope* s) {
+  Value pv = narg(vm, a, n, 0, s), t = narg(vm, a, n, 1, s);
+  if (pv.k == V_HANDLE) vm->players[player_index_of(vm, pv.i)].team = (int)t.i;
+  return v_null();
+}
 static Value n_i2(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(2); }
 static Value n_r0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_real(0); }
 static Value n_str_empty(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_str(vm, ""); }
@@ -2431,7 +2470,7 @@ static const NativeEntry NATIVES[] = {
   { "GetRectMinX", n_get_rect_minx }, { "GetRectMinY", n_get_rect_miny },
   { "GetRectWidth", n_get_rect_width }, { "GetRectHeight", n_get_rect_height },
   { "Location", n_location }, { "MoveLocation", n_move_location },
-  { "GetLocationX", n_get_loc_x }, { "GetLocationY", n_get_loc_y }, { "RemoveLocation", n_void },
+  { "GetLocationX", n_get_loc_x }, { "GetLocationY", n_get_loc_y }, { "RemoveLocation", n_remove_location },
   // handle 工厂（stub：返回非空 id；真实对象待 world/渲染层）
   { "AddWeatherEffect", n_handle }, { "CreateTimer", n_create_timer },
   { "CreateTrigger", n_create_trigger },
@@ -2461,7 +2500,9 @@ static const NativeEntry NATIVES[] = {
   { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_set_player_controller },
   { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
   { "SetPlayerColor", n_set_player_color }, { "GetPlayerColor", n_get_player_color }, { "DestroyTrigger", n_destroy_trigger }, { "DestroyGroup", n_destroy_group },
-  { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_void },
+  { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_set_player_alliance },
+  { "SetPlayerTeam", n_set_player_team },
+  { "IsPlayerAlly", n_is_player_ally }, { "IsPlayerEnemy", n_is_player_enemy },
   { "GetPlayerState", n_get_player_state },
   { "VolumeGroupSetVolume", n_void }, { "PlayCinematic", n_void }, { "StartSound", n_void },
   { "SetDestructableAnimation", n_void }, { "SetUnitState", n_set_unit_state }, { "SetUnitAcquireRange", n_set_unit_acquire_range }, { "GetUnitAcquireRange", n_get_unit_acquire_range },
@@ -2520,7 +2561,7 @@ static const NativeEntry NATIVES[] = {
   { "TriggerRegisterTimerEvent", n_trig_reg_timer_event }, { "TriggerRegisterPlayerEvent", n_trig_reg_player_event },
   { "TriggerRegisterUnitInRange", n_trig_reg_unit_in_range }, { "TriggerRegisterPlayerChatEvent", n_trig_reg_player_chat },
   // 第三轮（config 链）：GetPlayerId 暂返 0（player 对象表留待深化）
-  { "GetPlayerId", n_i0 }, { "GetGameTypeSelected", n_i0 },
+  { "GetPlayerId", n_i0 }, { "GetGameTypeSelected", n_i1 },
   { "SetPlayerStartLocation", n_set_player_startloc }, { "SetStartLocPrio", n_void }, { "SetStartLocPrioCount", n_void },
   { "GetPlayerStartLocation", n_get_player_startloc },
 };

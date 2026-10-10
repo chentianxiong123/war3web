@@ -718,6 +718,44 @@ ck('jass(上下文) TriggerExecute 内 GetTriggeringTrigger==tg', rCtx.globals.c
 ck('jass(金矿) SetResourceAmount(5000) 读回', rCtx.globals.gold, 5000);
 ck('jass(事件) TriggerRegisterGameStateEvent 返 handle', rCtx.globals.evok, 1);
 
+// --- 玩家联盟矩阵 + RemoveLocation 回收 + SetPlayerTeam ---
+const allyScript = `
+globals
+  integer ally1 = -1
+  integer ally2 = -1
+  integer enemy = -1
+  location lp = null
+  integer lr = -1
+  integer teamok = -1
+endglobals
+function Init takes nothing returns nothing
+  call SetPlayerAlliance(Player(0), Player(1), ALLIANCE_PASSIVE, true)
+  if IsPlayerAlly(Player(0), Player(1)) then
+    set ally1 = 1
+  endif
+  if not IsPlayerAlly(Player(2), Player(3)) then
+    set ally2 = 1
+  endif
+  if IsPlayerEnemy(Player(2), Player(3)) then
+    set enemy = 1
+  endif
+  set lp = Location(10.0, 20.0)
+  call RemoveLocation(lp)
+  set lr = 1
+  call SetPlayerTeam(Player(0), 2)
+  set teamok = 1
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rA2 = jassRunC(allyScript, 'main');
+ck('jass(联盟) SetPlayerAlliance 后 IsPlayerAlly=true', rA2.globals.ally1, 1);
+ck('jass(联盟) 未设联盟 IsPlayerAlly=false', rA2.globals.ally2, 1);
+ck('jass(联盟) 未设联盟 IsPlayerEnemy=true', rA2.globals.enemy, 1);
+ck('jass(loc) RemoveLocation 无错', rA2.globals.lr, 1);
+ck('jass(玩家) SetPlayerTeam 无错', rA2.globals.teamok, 1);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
