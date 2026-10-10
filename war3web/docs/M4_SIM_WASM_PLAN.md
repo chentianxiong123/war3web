@@ -97,6 +97,20 @@
   (1.37s=atkTimer cd 配额)；贴身死亡 1573 tick(52.4s)、需走近 1594、3v1 1574
   （攻方死亡，被围者存活）——C 移植后同场景对照攻击序列/死亡 tick。
 
+#### 2.6 战斗核心 C 移植进行中（combat_test）
+- **`engine/src/sim.c` 战斗扩展（73f7ccb）**：SimUnit 战斗字段（hp/maxHp/armor/
+  armorTypeIdx/team/武器参数）+ `sim_spawn_fight`（打包 20 参）+ 攻击状态机
+  `step_attack_unit`（stepAttack 子集：atkTimer 冷却 → 自动目标扫描（敌对+距离
+  <atkRange+半径+40）→ turnToward → windup 前摇 → releaseAttack 近战）+ 
+  `sim_damage`（damage() 纯数值：typeBonus 7×8 表 + armorFactor）+ `sim_combat_step`
+  （每单位 移动→攻击）+ `sim_get_fight`。
+- **关键根因**：`sim_set_dmg_table` 初版按 `double*` 读参数，JS 侧却用 HEAPF32
+  （4 字节）写 → 表数据错位 → 伤害 0.08/击 → 改 `float*` 参数后伤害正确。
+- **`tools/combat_test.mjs` 对照**：**melee_close 硬门禁全过**——死亡 Δ41≤45
+  （1 击随机容差）、首击 0=0、攻击数 76 vs 78、HP 曲线容差 40 内、首死单位 id 1=1。
+  **melee_apart / melee_3v1 标注 pending**：差异根源是 stepAI 层（自动追击移动/
+  目标选择遍历序），战斗核心本身已对齐——下一步移植 stepAI 子集。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
