@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #define SIM_PCELL 32.0                 // PATH_CELL（shared/const.js）
 #define SIM_SQRT2 1.4142135623730951   // Math.SQRT2
@@ -33,6 +34,8 @@ static int occ_clear(double px, double py) {
 
 // ---- 单位表（多单位）----
 #define SIM_MAX 1024
+#define SIM_ARMOR_KINDS 8   // small/medium/large/fort/normal/hero/divine/none
+#define SIM_ATK_KINDS 7     // normal/pierce/siege/magic/chaos/spells/hero
 typedef struct {
   double x, y, facing;
   double speed, radius;
@@ -40,8 +43,33 @@ typedef struct {
   long long bodyRepathAt;
   double goalX, goalY;                 // 当前命令目标（重寻路判据）
   double* path; int nPath, capPath;
+  // ---- 战斗（阶段 2）----
+  double hp, maxHp, armor;
+  int armorTypeIdx, team, atkTypeIdx, weaponKind;
+  double dmgBase, dmgDice, dmgSides;
+  double atkCd, atkRange, attackPoint, attackBackswing, missileSpeed;
+  double atkTimer, attackWindupRemaining;
+  int attackWindupTarget;
+  long long atkCount, dmgCount, deathCount;
 } SimUnit;
 static SimUnit U[SIM_MAX];
+static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
+static int DMG_TABLE_SET;
+
+/** 伤害倍率表装载（sim_test 从 gameplay.json 读入；JS 侧 HEAPF32 写 → float* 读）。 */
+void sim_set_dmg_table(const float* tbl) {
+  for (int a = 0; a < SIM_ATK_KINDS; a++)
+    for (int k = 0; k < SIM_ARMOR_KINDS; k++) DMG_TABLE[a][k] = (double)tbl[a * SIM_ARMOR_KINDS + k];
+  DMG_TABLE_SET = 1;
+}
+static double armor_factor(double armor) {   // world.js armorFactor（DEF_ARMOR=0.06）
+  return armor >= 0 ? 1 - (0.06 * armor) / (1 + 0.06 * armor)
+                    : 2 - pow(1 - 0.06, -armor);
+}
+static double type_bonus(int atk, int armor) {
+  if (!DMG_TABLE_SET) return 1;
+  return DMG_TABLE[atk][armor];
+}
 
 void sim_spawn(int id, double x, double y, double facing, double speed, double radius, int fly, int pathingOff) {
   if (id < 0 || id >= SIM_MAX) return;
@@ -561,4 +589,119 @@ int sim_move(int id, double tx, double ty, double dt, float* out) {
   step_move_unit(u, id, dt);
   if (out) { out[0] = (float)u->x; out[1] = (float)u->y; out[2] = (float)u->facing; out[3] = (float)u->nPath; }
   return 1;
+}
+
+// ------------------------------------------------------------------ 战斗（阶段 2）
+// 攻击状态机对齐 stepAttack（2991-3044）子集：无 buff/无特殊 order——
+// atkTimer 冷却 → 自动目标扫描（敌对+距离）→ 转向 → windup 前摇 → releaseAttack
+// （近战直接结算；远程导弹阶段 2b 再进）。伤害对齐 damage()（1084-1132）纯数值部分：
+// armorFactor + typeBonus 表 + hp 扣减 + 死亡。
+
+static unsigned long long RNG = 0x9E3779B97F4A7C15ULL;   // xorshift（伤害 roll；对照用分布等价）
+static double rng_next(void) {
+  RNG ^= RNG << 13; RNG ^= RNG >> 7; RNG ^= RNG << 17;
+  return (double)((RNG >> 32) & 0xFFFFFFFF) / 4294967296.0;
+}
+
+void sim_spawn_fight(int id, double x, double y, double facing, double speed, double radius,
+                     double hp, double maxHp, double armor, int armorTypeIdx, int team,
+                     double dmgBase, double dmgDice, double dmgSides,
+                     double atkCd, double atkRange, double attackPoint, double attackBackswing,
+                     int atkTypeIdx, int weaponKind) {
+  sim_spawn(id, x, y, facing, speed, radius, 0, 0);
+  SimUnit* u = &U[id];
+  u->hp = hp; u->maxHp = maxHp; u->armor = armor;
+  u->armorTypeIdx = armorTypeIdx; u->team = team;
+  u->dmgBase = dmgBase; u->dmgDice = dmgDice; u->dmgSides = dmgSides;
+  u->atkCd = atkCd; u->atkRange = atkRange;
+  u->attackPoint = attackPoint; u->attackBackswing = attackBackswing;
+  u->atkTypeIdx = atkTypeIdx; u->weaponKind = weaponKind;
+  u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
+  u->atkCount = 0; u->dmgCount = 0; u->deathCount = 0;
+}
+
+/** 伤害结算（damage() 纯数值子集）。返回实际伤害。 */
+static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
+  SimUnit* t = &U[tgtId];
+  if (!t->alive) return 0;
+  double dmg = amount;
+  dmg *= type_bonus(atkTypeIdx, t->armorTypeIdx);
+  dmg *= armor_factor(t->armor);
+  t->hp -= dmg;
+  t->dmgCount++;
+  if (t->hp <= 0) { t->alive = 0; t->deathCount = 1; }
+  return dmg;
+}
+
+/** 攻击释放（releaseAttack 近战子集：roll + 伤害）。 */
+static void release_attack(SimUnit* u, SimUnit* t) {
+  double amount = u->dmgBase;
+  const int dice = (int)u->dmgDice;
+  for (int i = 0; i < dice; i++) amount += floor(rng_next() * fmax(1, u->dmgSides)) + 1;
+  u->atkCount++;
+  sim_damage((int)(u - U), (int)(t - U), amount, u->atkTypeIdx);
+}
+
+/** 单单位攻击 tick（stepAttack 子集，对齐 2991-3044）。 */
+static void step_attack_unit(SimUnit* u, double dt) {
+  if (u->atkTimer > 0) u->atkTimer = fmax(0, u->atkTimer - dt);
+  if (!u->alive) return;
+  // windup 推进
+  if (u->attackWindupRemaining > 0) {
+    SimUnit* t = (u->attackWindupTarget >= 0) ? &U[u->attackWindupTarget] : NULL;
+    if (!t || !t->alive) { u->attackWindupRemaining = 0; return; }
+    const double d = hypot(t->x - u->x, t->y - u->y) - t->radius;
+    if (d > u->atkRange) { u->attackWindupRemaining = 0; return; }   // 目标脱出射程 → 取消
+    u->attackWindupRemaining -= dt;
+    if (u->attackWindupRemaining <= 1e-9) {
+      u->attackWindupRemaining = 0;
+      release_attack(u, t);
+    }
+    return;
+  }
+  // 自动目标扫描（stepAttack 3012-3024：敌对 + 距离 < atkRange+半径+40）
+  int tgt = -1; double bd = 1e18;
+  for (int i = 0; i < SIM_MAX; i++) {
+    SimUnit* o = &U[i];
+    if (!o->alive || o == u || o->team == u->team) continue;
+    const double d = hypot(o->x - u->x, o->y - u->y);
+    if (d < u->atkRange + o->radius + 40 && d < bd) { bd = d; tgt = i; }
+  }
+  if (tgt < 0) return;
+  SimUnit* t = &U[tgt];
+  const double d = hypot(t->x - u->x, t->y - u->y) - t->radius;
+  if (d > u->atkRange) return;
+  // turnToward（攻击前转向）
+  const double angle = atan2(t->y - u->y, t->x - u->x);
+  double delta = atan2(sin(angle - u->facing), cos(angle - u->facing));
+  if (fabs(delta) >= 1e-9) {
+    const double budget = 0.6 * dt / 0.03;
+    const double amount = fmin(fabs(delta), budget);
+    u->facing += (delta > 0 ? 1 : -1) * amount;
+    u->facing = atan2(sin(u->facing), cos(u->facing));
+    if (fabs(delta) - amount >= 1e-9) return;   // 转向未到位
+  }
+  if (u->atkTimer > 0) return;
+  u->atkTimer = fmax(u->atkCd, u->attackPoint + u->attackBackswing);   // speed mul 1
+  u->attackWindupRemaining = u->attackPoint;
+  u->attackWindupTarget = tgt;
+}
+
+/** 战斗 tick：每单位 移动 → 攻击 → 死亡回收（对齐 step 单位循环顺序）。 */
+void sim_combat_step(double dt) {
+  SIM_NOW++;
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive) continue;
+    step_move_unit(u, id, dt);       // stepMove
+    step_attack_unit(u, dt);         // stepAttack
+  }
+}
+
+/** 读战斗状态：out[6] = hp, atkTimer, attackWindupRemaining, atkCount, dmgCount, alive。 */
+void sim_get_fight(int id, float* out) {
+  if (id < 0 || id >= SIM_MAX) { for (int i = 0; i < 6; i++) out[i] = 0; return; }
+  SimUnit* u = &U[id];
+  out[0] = (float)u->hp; out[1] = (float)u->atkTimer; out[2] = (float)u->attackWindupRemaining;
+  out[3] = (float)u->atkCount; out[4] = (float)u->dmgCount; out[5] = (float)u->alive;
 }

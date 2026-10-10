@@ -36,6 +36,7 @@ for (const s of scenes) {
   const atkEvents = [];
   const hpSamples = [];
   let deathTick = null;
+  const deaths = [];
   for (let t = 0; t < TICKS; t++) {
     const evs = w.step();
     for (const e of evs) {
@@ -43,14 +44,17 @@ for (const s of scenes) {
       else if (e.t === 'missileEnd') atkEvents.push([t, 'missileEnd', e.fx]);
     }
     if (t % 10 === 0) hpSamples.push([t, units.map((u) => Math.round(u.hp))]);
-    if (deathTick == null && units.some((u) => !u.alive)) deathTick = t;
+    for (let i = 0; i < units.length; i++) if (!units[i].alive && !deaths.some((d) => d[1] === i)) deaths.push([t, i]);
+    if (deathTick == null && deaths.length) deathTick = t;
     if (deathTick != null && units.every((u) => !u.alive)) break;
   }
   runs.push({
+    p0: s.p0, p1: s.p1, extra: s.extra,
     name: s.name,
     nUnits: units.length,
     hp: units.map((u) => Math.round(u.maxHp)),
     deathTick,
+    deaths: deaths.slice(0, 8),
     atkEvents: atkEvents.slice(0, 120),
     nAtk: atkEvents.length,
     hpSamples: hpSamples.slice(0, 120),
@@ -61,3 +65,7 @@ for (const s of scenes) {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify({ world: 'terenas', dt: 1 / 30, scenes: runs }, null, 1));
 console.log('combat golden 已存档:', OUT);
+
+
+
+
