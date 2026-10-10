@@ -350,6 +350,54 @@ ck('jass(句柄) GetHandleId(unit)!=0', rO.globals.hid, 1);
 ck('jass(group) ForGroup 枚举求和=80235', rO.globals.gsum, 12345 + 67890);
 ck('jass(group) GroupRemoveUnit 后 GroupCountUnits=1', rO.globals.gcount, 1);
 
+// --- 哈希表语义（parentKey+childKey 4 类型存取/覆盖/查询/冲刷）---
+const htScript = `
+globals
+  hashtable ht = null
+  integer hi = -1
+  real hr = -1
+  string hs = ""
+  integer hh = -1
+  integer have = -1
+  integer flush = -1
+  unit u = null
+endglobals
+function Init takes nothing returns nothing
+  set ht = InitHashtable()
+  call SaveInteger(ht, 1, 2, 42)
+  set hi = LoadInteger(ht, 1, 2)
+  call SaveReal(ht, 1, 2, 3.5)
+  set hr = LoadReal(ht, 1, 2)
+  call SaveString(ht, 5, 6, "abc")
+  set hs = LoadString(ht, 5, 6)
+  call SaveInteger(ht, 3, 3, 7)
+  if HaveSavedInteger(ht, 3, 3) then
+    set have = 1
+  endif
+  set u = CreateUnit(Player(0), 111, 0.0, 0.0, 0.0)
+  call SaveHandle(ht, 9, 9, u)
+  if LoadHandle(ht, 9, 9) != null then
+    set hh = 1
+  endif
+  call FlushChildHashtable(ht, 1)
+  if HaveSavedInteger(ht, 1, 2) then
+    set flush = 1
+  else
+    set flush = 0
+  endif
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rH = jassRunC(htScript, 'main');
+ck('jass(哈希) SaveInteger/LoadInteger=42', rH.globals.hi, 42);
+ck('jass(哈希) SaveReal/LoadReal=3.5', rH.globals.hr, 3.5);
+ck('jass(哈希) SaveString/LoadString="abc"', rH.globals.hs === 'abc' ? 1 : 0, 1);
+ck('jass(哈希) SaveHandle/LoadHandle 非空', rH.globals.hh, 1);
+ck('jass(哈希) HaveSavedInteger=true', rH.globals.have, 1);
+ck('jass(哈希) FlushChildHashtable 后 HaveSaved=false', rH.globals.flush, 0);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

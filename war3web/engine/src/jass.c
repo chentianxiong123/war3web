@@ -1110,6 +1110,10 @@ typedef struct {
   struct VGroup { long long id; long long* items; int nItems, capItems; } * groups;
   int nGroups, capGroups;
   long long enumUnit;   // ForGroup 当前枚举单位（GetEnumUnit 读取）
+  // 哈希表（InitHashtable/SaveXxx/LoadXxx：parentKey+childKey 二维条目）
+  struct VEntry { long long p, c; int kind; long long i; double f; char* s; };  // kind: 0=int 1=real 2=str 3=handle
+  struct VHashtable { long long id; struct VEntry* es; int n, cap; } * htables;
+  int nHtables, capHtables;
   Buf log;                       // BJDebugMsg 输出
   Value retval;                  // return 传值
   int err;
@@ -1662,6 +1666,129 @@ static Value n_get_enum_unit(Vm* vm, Expr** a, int n, VScope* s) {
   return v_null();
 }
 
+// ---- 哈希表（parentKey+childKey 二维存储，4 类型）----
+static struct VHashtable* find_htable(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nHtables; i++) if (vm->htables[i].id == id) return &vm->htables[i];
+  return NULL;
+}
+static Value n_init_hashtable(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nHtables == vm->capHtables) {
+    vm->capHtables = vm->capHtables ? vm->capHtables * 2 : 4;
+    vm->htables = (struct VHashtable*)realloc(vm->htables, sizeof(struct VHashtable) * (size_t)vm->capHtables);
+  }
+  struct VHashtable* h = &vm->htables[vm->nHtables++];
+  memset(h, 0, sizeof *h);
+  h->id = id;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static struct VEntry* htable_find(Vm* vm, struct VHashtable* h, long long p, long long c) {
+  for (int i = 0; i < h->n; i++) if (h->es[i].p == p && h->es[i].c == c) return &h->es[i];
+  return NULL;
+}
+static struct VEntry* htable_add(Vm* vm, struct VHashtable* h, long long p, long long c) {
+  struct VEntry* e = htable_find(vm, h, p, c);
+  if (e) return e;
+  if (h->n == h->cap) {
+    h->cap = h->cap ? h->cap * 2 : 8;
+    h->es = (struct VEntry*)realloc(h->es, sizeof(struct VEntry) * (size_t)h->cap);
+  }
+  struct VEntry* ne = &h->es[h->n++];
+  memset(ne, 0, sizeof *ne);
+  ne->p = p; ne->c = c;
+  return ne;
+}
+static Value n_save_int(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s), v = narg(vm, a, n, 3, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_add(vm, h, p.i, c.i); e->kind = 0; e->i = v.i; }
+  return v_null();
+}
+static Value n_save_real(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s), v = narg(vm, a, n, 3, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_add(vm, h, p.i, c.i); e->kind = 1; e->f = v.k == V_REAL ? v.f : (double)v.i; }
+  return v_null();
+}
+static Value n_save_string(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s), v = narg(vm, a, n, 3, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_add(vm, h, p.i, c.i); e->kind = 2; e->s = v.k == V_STR ? a_str(&vm->ast->ar, v.s) : a_str(&vm->ast->ar, ""); }
+  return v_null();
+}
+static Value n_save_handle(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s), v = narg(vm, a, n, 3, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_add(vm, h, p.i, c.i); e->kind = 3; e->i = v.k == V_HANDLE ? v.i : 0; }
+  return v_null();
+}
+static Value n_load_int(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_find(vm, h, p.i, c.i); if (e && e->kind == 0) return v_int((int)e->i); }
+  return v_int(0);
+}
+static Value n_load_real(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_find(vm, h, p.i, c.i); if (e && e->kind == 1) return v_real(e->f); }
+  return v_real(0);
+}
+static Value n_load_string(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_find(vm, h, p.i, c.i); if (e && e->kind == 2 && e->s) return v_str(vm, e->s); }
+  return v_null();
+}
+static Value n_load_handle(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_find(vm, h, p.i, c.i);
+    if (e && e->kind == 3 && e->i) { Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = e->i; return v; } }
+  return v_null();
+}
+static Value n_have_saved(Vm* vm, Expr** a, int n, VScope* s, int kind) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s), c = narg(vm, a, n, 2, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) { struct VEntry* e = htable_find(vm, h, p.i, c.i); if (e && (kind < 0 || e->kind == kind)) return v_bool(1); }
+  return v_bool(0);
+}
+static Value n_have_any(Vm* vm, Expr** a, int n, VScope* s) { return n_have_saved(vm, a, n, s, -1); }
+static Value n_have_int(Vm* vm, Expr** a, int n, VScope* s) { return n_have_saved(vm, a, n, s, 0); }
+static Value n_have_real(Vm* vm, Expr** a, int n, VScope* s) { return n_have_saved(vm, a, n, s, 1); }
+static Value n_have_str(Vm* vm, Expr** a, int n, VScope* s) { return n_have_saved(vm, a, n, s, 2); }
+static Value n_have_handle(Vm* vm, Expr** a, int n, VScope* s) { return n_have_saved(vm, a, n, s, 3); }
+static Value n_flush_child(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s), p = narg(vm, a, n, 1, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) {
+    int w = 0;
+    for (int i = 0; i < h->n; i++)
+      if (h->es[i].p != p.i) h->es[w++] = h->es[i];
+    h->n = w;
+  }
+  return v_null();
+}
+static Value n_flush_parent(Vm* vm, Expr** a, int n, VScope* s) {
+  Value hv = narg(vm, a, n, 0, s);
+  struct VHashtable* h = hv.k == V_HANDLE ? find_htable(vm, hv.i) : NULL;
+  if (h) h->n = 0;
+  return v_null();
+}
+static Value n_get_player_name(Vm* vm, Expr** a, int n, VScope* s) {
+  Value p = narg(vm, a, n, 0, s);
+  if (p.k == V_HANDLE) {
+    int pi = 0;
+    for (int i = 0; i < 16; i++) if (vm->players[i].id == p.i) { pi = i; break; }
+    char buf[32];
+    snprintf(buf, sizeof buf, "Player %d", pi + 1);  // 对齐 engine.js p.name
+    return v_str(vm, buf);
+  }
+  return v_str(vm, "");  // null → ''
+}
+
 static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   Value v = narg(vm, a, n, 0, s);
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
@@ -1679,6 +1806,15 @@ static const NativeEntry NATIVES[] = {
   { "GetLocalizedString", n_locstr }, { "GetLocalizedHotkey", n_lochotkey },
   { "GetHandleId", n_get_handle_id }, { "StringLength", n_string_length },
   { "SubString", n_sub_string },
+  { "GetPlayerName", n_get_player_name },
+  { "DisplayTextToPlayer", n_void }, { "DisplayTimedTextToPlayer", n_void }, { "ClearTextMessages", n_void },
+  { "InitHashtable", n_init_hashtable }, { "SaveInteger", n_save_int },
+  { "SaveReal", n_save_real }, { "SaveString", n_save_string }, { "SaveHandle", n_save_handle },
+  { "LoadInteger", n_load_int }, { "LoadReal", n_load_real },
+  { "LoadString", n_load_string }, { "LoadHandle", n_load_handle },
+  { "HaveSavedInteger", n_have_int }, { "HaveSavedReal", n_have_real },
+  { "HaveSavedString", n_have_str }, { "HaveSavedHandle", n_have_handle },
+  { "FlushChildHashtable", n_flush_child }, { "FlushParentHashtable", n_flush_parent },
   { "SetRect", n_set_rect },
   { "GetRectCenterX", n_get_rect_cx }, { "GetRectCenterY", n_get_rect_cy },
   { "GetRectMaxX", n_get_rect_maxx }, { "GetRectMaxY", n_get_rect_maxy },
@@ -2071,6 +2207,8 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  for (int i = 0; i < vm.nHtables; i++) free(vm.htables[i].es);
+  free(vm.htables);
   for (int i = 0; i < vm.nGroups; i++) free(vm.groups[i].items);
   free(vm.groups);
   free(vm.rects);
