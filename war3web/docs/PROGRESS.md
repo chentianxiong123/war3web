@@ -190,6 +190,16 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - SetPlayerTechMaxAllowed/GetPlayerTechMaxAllowed（上限存储）
 - 断言 4 项；75/75 全绿 + 880 对账保持
 
+### 3.15 数组对账（提交 c8ad98e）
+- C 端 jass_run 输出 **"arrays" 段**（bj_ 数组非默认元素）
+- JS 提取规则对齐：真实 handle→null、Convert(v)→v（v=0 视为默认）、
+  0/false/空串/null 视为默认
+- **发现并定位语义差**：JS Convert 系返回带 v 的 Handle、C 返回 int——
+  bj_slotControl[i] = MAP_CONTROL_USER 的存储形态差异——提取规则归一后
+- **18 个数组非默认元素 0 差异**（bj_slotControlUsed/bj_FORCE_PLAYER/
+  bj_meleeDefeated 等）——数组语义首次被验证
+- 76/76 全绿 + 880 全局对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
