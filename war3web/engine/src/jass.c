@@ -781,17 +781,33 @@ static void free_stmts(Stmt** arr, int n);
 
 // 入口：解析脚本并序列化完整 AST 为 JSON（与 JS parse() 输出同构）。
 // 返回 malloc 的 C 字符串（调用方 free）。
-const char* jass_parse(const char* src, int len, int* out_err) {
-  Arena ar = {0};
-  int n;
-  Tok* toks = jass_lex(src, len, &n, &ar);
-  P p = {toks, n, 0, &ar, 0, 0};
-  Buf out = {0};
+typedef struct {
+  Arena ar;                         // tokens 字符串 + Expr/Stmt 节点存活于此
+  TypeDecl* types; int ntypes;      // 堆数组（元素内字符串在 arena）
+  GlobalDecl* globals; int nglobals;
+  FuncSig* natives; int nnatives;
+  FuncDef* funcs; int nfuncs;
+  int error;
+} Ast;
 
-  TypeDecl* types = NULL; int ntypes = 0, cap_t = 0;
-  GlobalDecl* globals = NULL; int nglobals = 0, cap_g = 0;
-  FuncSig* natives = NULL; int nnatives = 0, cap_n = 0;
-  FuncDef* funcs = NULL; int nfuncs = 0, cap_f = 0;
+// 解析脚本 → 内存 AST（arena 随 AST 存活；VM 执行器直接吃这份结构，
+// 不经 JSON 往返）。错误不中断：置 ast->error 并返回已解析部分。
+static Ast* parse_ast(const char* src, int len, int* out_err) {
+  Ast* ast = (Ast*)calloc(1, sizeof(Ast));
+  Arena* ar = &ast->ar;
+  int n;
+  Tok* toks = jass_lex(src, len, &n, ar);
+  P p = {toks, n, 0, ar, 0, 0};
+#define types ast->types
+#define ntypes ast->ntypes
+#define globals ast->globals
+#define nglobals ast->nglobals
+#define natives ast->natives
+#define nnatives ast->nnatives
+#define funcs ast->funcs
+#define nfuncs ast->nfuncs
+
+  int cap_t = 0, cap_g = 0, cap_n = 0, cap_f = 0;   // 各类元素数组容量
 #ifdef DBG
   fprintf(stderr, "[jass_parse] lex: %d tokens\n", n);
 #endif
@@ -898,6 +914,31 @@ const char* jass_parse(const char* src, int len, int* out_err) {
     break;
   }
 
+#undef types
+#undef ntypes
+#undef globals
+#undef nglobals
+#undef natives
+#undef nnatives
+#undef funcs
+#undef nfuncs
+  if (out_err) *out_err = p.error ? 1 : 0;
+  free(toks);
+  return ast;
+}
+
+// 序列化 AST → JSON（与 JS parse() 输出同构；jass_parse 的出口）。
+// 返回 malloc 字符串（调用方 free）。
+static char* ast_to_json(const Ast* ast) {
+  Buf out = {0};
+#define types ast->types
+#define ntypes ast->ntypes
+#define globals ast->globals
+#define nglobals ast->nglobals
+#define natives ast->natives
+#define nnatives ast->nnatives
+#define funcs ast->funcs
+#define nfuncs ast->nfuncs
   b_put(&out, "{\"types\":[");
   for (int i = 0; i < ntypes; i++) {
     if (i) b_put(&out, ",");
@@ -938,15 +979,26 @@ const char* jass_parse(const char* src, int len, int* out_err) {
     b_put(&out, "]}");
   }
   b_put(&out, "]}");
-
-  if (out_err) *out_err = p.error ? 1 : 0;
-  free(toks);
-  for (int i = 0; i < nnatives; i++) { free((void*)natives[i].ptypes); free((void*)natives[i].pnames); }
-  for (int i = 0; i < nfuncs; i++) { free((void*)funcs[i].sig.ptypes); free((void*)funcs[i].sig.pnames); }
-  for (int i = 0; i < nfuncs; i++) free_stmts(&funcs[i].body, funcs[i].nbody);
-  free(types); free(globals); free(natives); free(funcs);
-  a_free_all(&ar);
+#undef types
+#undef ntypes
+#undef globals
+#undef nglobals
+#undef natives
+#undef nnatives
+#undef funcs
+#undef nfuncs
   return out.b ? out.b : strdup("{\"parse_failed\":true}");
+}
+
+static void free_ast(Ast* ast);
+
+// 入口1：解析脚本并序列化完整 AST 为 JSON（与 JS parse() 输出同构）。
+// 返回 malloc 的 C 字符串（调用方 free）。
+const char* jass_parse(const char* src, int len, int* out_err) {
+  Ast* ast = parse_ast(src, len, out_err);
+  char* json = ast_to_json(ast);
+  free_ast(ast);
+  return json;
 }
 
 // 递归释放语句值数组（body/els/loop 子数组，clauses 数组）。
@@ -964,4 +1016,429 @@ static void free_stmts(Stmt** arr, int n) {
   }
   free(*arr);
   *arr = NULL;
+}
+
+// 释放整个 AST（arena + 堆数组 + 语句树）。
+static void free_ast(Ast* ast) {
+  if (!ast) return;
+  for (int i = 0; i < ast->nnatives; i++) {
+    free((void*)ast->natives[i].ptypes);
+    free((void*)ast->natives[i].pnames);
+  }
+  for (int i = 0; i < ast->nfuncs; i++) {
+    free((void*)ast->funcs[i].sig.ptypes);
+    free((void*)ast->funcs[i].sig.pnames);
+  }
+  for (int i = 0; i < ast->nfuncs; i++)
+    free_stmts(&ast->funcs[i].body, ast->funcs[i].nbody);
+  free(ast->types); free(ast->globals); free(ast->natives); free(ast->funcs);
+  a_free_all(&ast->ar);
+  free(ast);
+}
+
+// ============================================================ VM（M3 第三步）
+// 与 server/jass/vm.js 语义对齐的同步执行器（第一版无协程/sleep——先跑通
+// 纯计算脚本；sleep 型 native 后续用显式状态机）。树遍历：eval_expr /
+// exec_block，函数调用走 C 递归，natives 用内嵌小表，返回值沿调用链上抛。
+
+typedef struct VArr VArr;
+enum { V_INT, V_REAL, V_BOOL, V_NULL, V_STR, V_ARR };
+typedef struct {
+  int k;                 // V_INT V_REAL V_BOOL V_NULL V_STR V_ARR
+  long long i;
+  double f;
+  const char* s;         // arena 持有
+  VArr* arr;
+} Value;
+
+struct VArr {
+  Value* items; int n, cap;
+};
+
+typedef struct VVar { const char* name; Value v; struct VVar* next; } VVar;
+typedef struct VScope { VVar* vars; struct VScope* parent; } VScope;
+
+enum { X_OK = 0, X_RET = 1, X_EXIT = 2 };
+
+typedef struct {
+  Ast* ast;
+  Value* gvals;                  // 全局值（按 GlobalDecl 下标）
+  VScope* scope;                 // 当前作用域（用于 natives 的参数求值上下文）
+  long long opCount, opLimit;    // 每线程 runaway 护栏（同 JS 8000000）
+  Buf log;                       // BJDebugMsg 输出
+  Value retval;                  // return 传值
+  int err;
+} Vm;
+
+static Value v_int(long long i) { Value v; memset(&v, 0, sizeof v); v.k = V_INT; v.i = i; return v; }
+static Value v_real(double f) { Value v; memset(&v, 0, sizeof v); v.k = V_REAL; v.f = f; return v; }
+static Value v_bool(int b) { Value v; memset(&v, 0, sizeof v); v.k = V_BOOL; v.i = b; return v; }
+static Value v_null(void) { Value v; memset(&v, 0, sizeof v); v.k = V_NULL; return v; }
+static Value v_str(Vm* vm, const char* s) {
+  Value v; memset(&v, 0, sizeof v);
+  v.k = V_STR; v.s = a_str(&vm->ast->ar, s);
+  return v;
+}
+
+static int truthy(Value v) {
+  switch (v.k) {
+    case V_INT: return v.i != 0;
+    case V_REAL: return v.f != 0;
+    case V_BOOL: return v.i != 0;
+    case V_STR: return v.s != NULL;
+    default: return 0;
+  }
+}
+
+static void vm_err(Vm* vm, const char* msg) { if (!vm->err) vm->err = 1; (void)msg; }
+
+static Value eval_expr(Vm* vm, const Expr* e, VScope* scope);
+static Value eval_call(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope);
+static int exec_block(Vm* vm, const Stmt* body, int n, VScope* scope);
+
+// ---- 作用域
+static Value* scope_lookup(const VScope* s, const char* name) {
+  for (; s; s = s->parent)
+    for (VVar* v = s->vars; v; v = v->next)
+      if (strcmp(v->name, name) == 0) return &v->v;
+  return NULL;
+}
+static void scope_decl(Vm* vm, VScope* s, const char* name, Value val) {
+  VVar* v = (VVar*)a_alloc(&vm->ast->ar, sizeof(VVar));
+  v->name = name; v->v = val; v->next = s->vars;
+  s->vars = v;
+}
+static Value* lookup_var_global(Vm* vm, const VScope* scope, const char* name) {
+  Value* p = scope_lookup(scope, name);
+  if (p) return p;
+  for (int i = 0; i < vm->ast->nglobals; i++)
+    if (strcmp(vm->ast->globals[i].name, name) == 0) return &vm->gvals[i];
+  return NULL;
+}
+
+// ---- 数组
+static Value* arr_at(VArr* a, long long idx) {
+  if (idx < 0 || idx >= a->n) return NULL;   // 越界 → null（JS 数组 undefined）
+  return &a->items[idx];
+}
+static void arr_set(Vm* vm, VArr* a, long long idx, Value val) {
+  while (a->n <= idx) {
+    if (a->n == a->cap) {
+      int nc = a->cap ? a->cap * 2 : 4;
+      Value* ni = (Value*)a_alloc(&vm->ast->ar, sizeof(Value) * (size_t)nc);
+      if (a->n) memcpy(ni, a->items, sizeof(Value) * (size_t)a->n);
+      a->items = ni; a->cap = nc;
+    }
+    a->items[a->n++] = v_null();
+  }
+  a->items[idx] = val;
+}
+
+// ---- natives（第一版内嵌小表；全量 1506 行 engine.js 移植是后续 3b）
+static const char* i2s_buf(Vm* vm, long long i) {
+  char tmp[32];
+  snprintf(tmp, sizeof tmp, "%lld", i);
+  return a_str(&vm->ast->ar, tmp);
+}
+static const char* r2s_buf(Vm* vm, double f) {
+  char tmp[48];
+  snprintf(tmp, sizeof tmp, "%.6g", f);
+  return a_str(&vm->ast->ar, tmp);
+}
+static int vm_call_native(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope, Value* out) {
+  if (strcmp(name, "BJDebugMsg") == 0) {
+    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
+    if (v.k == V_STR) b_put(&vm->log, v.s);
+    else if (v.k == V_INT) b_put(&vm->log, i2s_buf(vm, v.i));
+    else if (v.k == V_REAL) b_put(&vm->log, r2s_buf(vm, v.f));
+    else b_put(&vm->log, "null");
+    b_put(&vm->log, "\n");
+    *out = v_null();
+    return 1;
+  }
+  if (strcmp(name, "I2S") == 0) {
+    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
+    *out = v_str(vm, i2s_buf(vm, v.k == V_INT ? v.i : (long long)v.f));
+    return 1;
+  }
+  if (strcmp(name, "R2I") == 0) {
+    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
+    double d = v.k == V_REAL ? v.f : (double)v.i;
+    *out = v_int(d < 0 ? (long long)(d - 0.5) : (long long)(d + 0.5));  // trunc 对齐 vm.js
+    return 1;
+  }
+  if (strcmp(name, "I2R") == 0) {
+    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
+    *out = v_real(v.k == V_INT ? (double)v.i : v.f);
+    return 1;
+  }
+  if (strcmp(name, "R2S") == 0) {
+    Value v = nargs > 0 ? eval_expr(vm, args[0], scope) : v_null();
+    *out = v_str(vm, r2s_buf(vm, v.k == V_REAL ? v.f : (double)v.i));
+    return 1;
+  }
+  return 0;   // 不是 native
+}
+
+// ---- 表达式求值
+static int jass_cmp(Value a, Value b, const char* op) {
+  // null 特例：JS jassEq 把 null 与 false 相等（地图脚本依赖 `!= null` 判真）
+  if ((a.k == V_NULL || b.k == V_NULL) && (a.k == V_BOOL || b.k == V_BOOL)) {
+    int ab = a.k == V_NULL ? 0 : truthy(a);
+    int bb = b.k == V_NULL ? 0 : truthy(b);
+    if (strcmp(op, "==") == 0) return ab == bb;
+    if (strcmp(op, "!=") == 0) return ab != bb;
+    return 0;
+  }
+  if (a.k == V_NULL || b.k == V_NULL) {
+    int eq = (a.k == V_NULL && b.k == V_NULL);
+    if (strcmp(op, "==") == 0) return eq;
+    if (strcmp(op, "!=") == 0) return !eq;
+    return 0;
+  }
+  if (a.k == V_STR && b.k == V_STR) {
+    int c = strcmp(a.s, b.s);
+    if (strcmp(op, "==") == 0) return c == 0;
+    if (strcmp(op, "!=") == 0) return c != 0;
+    if (strcmp(op, ">") == 0) return c > 0;
+    if (strcmp(op, "<") == 0) return c < 0;
+    if (strcmp(op, ">=") == 0) return c >= 0;
+    return c <= 0;
+  }
+  double x = a.k == V_REAL ? a.f : (double)a.i;
+  double y = b.k == V_REAL ? b.f : (double)b.i;
+  if (strcmp(op, "==") == 0) return x == y;
+  if (strcmp(op, "!=") == 0) return x != y;
+  if (strcmp(op, ">") == 0) return x > y;
+  if (strcmp(op, "<") == 0) return x < y;
+  if (strcmp(op, ">=") == 0) return x >= y;
+  return x <= y;
+}
+
+static Value eval_bin(Vm* vm, const Expr* e, VScope* scope) {
+  Value l = eval_expr(vm, e->l, scope);
+  Value r = eval_expr(vm, e->r, scope);
+  const char* op = e->op;
+  if (strcmp(op, "and") == 0) return v_bool(truthy(l) && truthy(r));
+  if (strcmp(op, "or") == 0) return v_bool(truthy(l) || truthy(r));
+  if (strcmp(op, "==") == 0 || strcmp(op, "!=") == 0 ||
+      strcmp(op, ">") == 0 || strcmp(op, "<") == 0 ||
+      strcmp(op, ">=") == 0 || strcmp(op, "<=") == 0)
+    return v_bool(jass_cmp(l, r, op));
+  if (l.k == V_STR && r.k == V_STR && strcmp(op, "+") == 0) {
+    size_t nl = strlen(l.s), nr = strlen(r.s);
+    char* p = (char*)a_alloc(&vm->ast->ar, nl + nr + 1);
+    memcpy(p, l.s, nl); memcpy(p + nl, r.s, nr); p[nl + nr] = 0;
+    Value v; memset(&v, 0, sizeof v); v.k = V_STR; v.s = p;
+    return v;
+  }
+  int li = (l.k == V_INT), ri = (r.k == V_INT);
+  if (strcmp(op, "+") == 0)
+    return li && ri ? v_int(l.i + r.i) : v_real((l.k == V_REAL ? l.f : (double)l.i) + (r.k == V_REAL ? r.f : (double)r.i));
+  if (strcmp(op, "-") == 0)
+    return li && ri ? v_int(l.i - r.i) : v_real((l.k == V_REAL ? l.f : (double)l.i) - (r.k == V_REAL ? r.f : (double)r.i));
+  if (strcmp(op, "*") == 0)
+    return li && ri ? v_int(l.i * r.i) : v_real((l.k == V_REAL ? l.f : (double)l.i) * (r.k == V_REAL ? r.f : (double)r.i));
+  if (strcmp(op, "/") == 0) {
+    double x = (l.k == V_REAL ? l.f : (double)l.i);
+    double y = (r.k == V_REAL ? r.f : (double)r.i);
+    double q = x / y;
+    if (li && ri) { long long t = q < 0 ? (long long)(q - 0.5) : (long long)(q + 0.5); return v_int(t); }
+    return v_real(q);
+  }
+  return v_null();
+}
+
+static Value eval_expr(Vm* vm, const Expr* e, VScope* scope) {
+  switch (e->k) {
+    case E_INT: return v_int(e->i);
+    case E_REAL: return v_real(e->f);
+    case E_STR: { Value v; memset(&v, 0, sizeof v); v.k = V_STR; v.s = e->s; return v; }
+    case E_BOOL: return v_bool(e->bv);
+    case E_NULL: return v_null();
+    case E_VAR: {
+      Value* p = lookup_var_global(vm, scope, e->name);
+      return p ? *p : v_null();
+    }
+    case E_INDEX: {
+      Value* p = lookup_var_global(vm, scope, e->name);
+      Value iv = eval_expr(vm, e->idx, scope);
+      if (p && p->k == V_ARR && iv.k == V_INT) {
+        Value* it = arr_at(p->arr, iv.i);
+        return it ? *it : v_null();
+      }
+      return v_null();
+    }
+    case E_NOT: return v_bool(!truthy(eval_expr(vm, e->e, scope)));
+    case E_NEG: {
+      Value v = eval_expr(vm, e->e, scope);
+      if (v.k == V_INT) return v_int(-v.i);
+      if (v.k == V_REAL) return v_real(-v.f);
+      return v_null();
+    }
+    case E_BIN: return eval_bin(vm, e, scope);
+    case E_CALL: return eval_call(vm, e->name, e->args, e->nargs, scope);
+    default: return v_null();
+  }
+}
+
+// ---- 语句执行
+static int exec_stmt(Vm* vm, const Stmt* s, VScope* scope);
+
+static int exec_block(Vm* vm, const Stmt* body, int n, VScope* scope) {
+  for (int i = 0; i < n; i++) {
+    int x = exec_stmt(vm, &body[i], scope);
+    if (x) return x;
+  }
+  return X_OK;
+}
+
+static Value vm_invoke(Vm* vm, FuncDef* f, Expr** args, int nargs, VScope* caller) {
+  if (++vm->opCount > vm->opLimit) { vm_err(vm, "op limit"); return v_null(); }
+  VScope s; memset(&s, 0, sizeof s); s.parent = caller;
+  for (int i = 0; i < f->sig.nparams && i < nargs; i++)
+    scope_decl(vm, &s, f->sig.pnames[i], eval_expr(vm, args[i], caller));
+  vm->retval = v_null();
+  exec_block(vm, f->body, f->nbody, &s);
+  return vm->retval;
+}
+
+static Value eval_call(Vm* vm, const char* name, Expr** args, int nargs, VScope* scope) {
+  Value r;
+  if (vm_call_native(vm, name, args, nargs, scope, &r)) return r;
+  for (int i = 0; i < vm->ast->nfuncs; i++) {
+    FuncDef* f = &vm->ast->funcs[i];
+    if (f->sig.name && strcmp(f->sig.name, name) == 0)
+      return vm_invoke(vm, f, args, nargs, scope);
+  }
+  vm_err(vm, "call to undefined function");
+  return v_null();
+}
+
+static int exec_stmt(Vm* vm, const Stmt* s, VScope* scope) {
+  if (++vm->opCount > vm->opLimit) { vm_err(vm, "op limit"); return X_RET; }
+  switch (s->k) {
+    case S_LOCAL: {
+      Value v = s->init ? eval_expr(vm, s->init, scope) : v_null();
+      if (s->isArr) {
+        VArr* a = (VArr*)a_alloc(&vm->ast->ar, sizeof(VArr));
+        v.k = V_ARR; v.arr = a;
+      }
+      scope_decl(vm, scope, s->name, v);
+      return X_OK;
+    }
+    case S_SET: {
+      Value* p = lookup_var_global(vm, scope, s->name);
+      if (s->idx) {
+        Value iv = eval_expr(vm, s->idx, scope);
+        Value nv = eval_expr(vm, s->e, scope);
+        if (p && p->k == V_ARR && iv.k == V_INT) arr_set(vm, p->arr, iv.i, nv);
+      } else if (p) {
+        *p = eval_expr(vm, s->e, scope);
+      }
+      return X_OK;
+    }
+    case S_CALLSTMT: eval_call(vm, s->cname, s->args, s->nargs, scope); return X_OK;
+    case S_IF: {
+      for (int c = 0; c < s->nclauses; c++) {
+        if (truthy(eval_expr(vm, s->clauses[c].cond, scope))) {
+          VScope cs; memset(&cs, 0, sizeof cs); cs.parent = scope;
+          return exec_block(vm, s->clauses[c].body, s->clauses[c].nbody, &cs);
+        }
+      }
+      if (s->els) {
+        VScope es; memset(&es, 0, sizeof es); es.parent = scope;
+        return exec_block(vm, s->els, s->nels, &es);
+      }
+      return X_OK;
+    }
+    case S_LOOP: {
+      for (;;) {
+        if (++vm->opCount > vm->opLimit) { vm_err(vm, "op limit"); return X_RET; }
+        VScope ls; memset(&ls, 0, sizeof ls); ls.parent = scope;
+        int x = exec_block(vm, s->body, s->nbody, &ls);
+        if (x == X_EXIT) return X_OK;
+        if (x == X_RET) return X_RET;
+      }
+    }
+    case S_EXITWHEN: return truthy(eval_expr(vm, s->e, scope)) ? X_EXIT : X_OK;
+    case S_RETURN:
+      if (s->e) vm->retval = eval_expr(vm, s->e, scope);
+      return X_RET;
+  }
+  return X_OK;
+}
+
+// ---- 全局初始化（同 vm.js initGlobals：按声明序求值 init）
+static void vm_init_globals(Vm* vm) {
+  Ast* ast = vm->ast;
+  vm->gvals = (Value*)a_alloc(&ast->ar, sizeof(Value) * (size_t)(ast->nglobals ? ast->nglobals : 1));
+  for (int i = 0; i < ast->nglobals; i++) {
+    GlobalDecl* g = &ast->globals[i];
+    Value v = v_null();
+    if (g->isArr) {
+      VArr* a = (VArr*)a_alloc(&ast->ar, sizeof(VArr));
+      v.k = V_ARR; v.arr = a;
+    } else if (g->init) {
+      v = eval_expr(vm, g->init, NULL);
+    } else if (g->type && strcmp(g->type, "integer") == 0) v = v_int(0);
+    else if (g->type && strcmp(g->type, "real") == 0) v = v_real(0);
+    else if (g->type && strcmp(g->type, "boolean") == 0) v = v_bool(0);
+    vm->gvals[i] = v;
+  }
+}
+
+// 值 → JSON 片段（globals 输出用）
+static void json_value(Buf* b, Value v) {
+  switch (v.k) {
+    case V_INT: b_num(b, v.i); break;
+    case V_REAL: b_real(b, v.f); break;
+    case V_BOOL: b_put(b, v.i ? "true" : "false"); break;
+    case V_STR: b_str(b, v.s); break;
+    default: b_put(b, "null"); break;
+  }
+}
+
+// 入口2：解析 + 执行 entry 函数 → 结果 JSON。
+// 返回 malloc 字符串：{"ok":true,"log":"...","globals":{"name":值,...}}
+// 或 {"ok":false,"error":"..."}。调用方 free。
+const char* jass_run(const char* src, int len, const char* entry, int* out_err) {
+  Ast* ast = parse_ast(src, len, NULL);
+  if (!ast || ast->error) {
+    if (out_err) *out_err = 1;
+    free_ast(ast);
+    return strdup("{\"ok\":false,\"error\":\"parse failed\"}");
+  }
+  Vm vm; memset(&vm, 0, sizeof vm);
+  vm.ast = ast;
+  vm.opLimit = 8000000;
+  vm_init_globals(&vm);
+  FuncDef* target = NULL;
+  for (int i = 0; i < ast->nfuncs; i++)
+    if (ast->funcs[i].sig.name && strcmp(ast->funcs[i].sig.name, entry) == 0) { target = &ast->funcs[i]; break; }
+  if (target) vm_invoke(&vm, target, NULL, 0, NULL);
+  else vm_err(&vm, "entry function not found");
+
+  Buf out = {0};
+  if (vm.err) {
+    b_put(&out, "{\"ok\":false,\"error\":\"vm error\"}");
+  } else {
+    b_put(&out, "{\"ok\":true,\"log\":");
+    b_str(&out, vm.log.b ? vm.log.b : "");
+    b_put(&out, ",\"globals\":{");
+    int first = 1;
+    for (int i = 0; i < ast->nglobals; i++) {
+      GlobalDecl* g = &ast->globals[i];
+      if (g->isArr) continue;
+      if (!first) b_put(&out, ",");
+      first = 0;
+      b_str(&out, g->name);
+      b_put(&out, ":");
+      json_value(&out, vm.gvals[i]);
+    }
+    b_put(&out, "}}");
+  }
+  if (out_err) *out_err = vm.err ? 1 : 0;
+  free_ast(ast);
+  return out.b ? out.b : strdup("{\"ok\":false,\"error\":\"no output\"}");
 }
