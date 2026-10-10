@@ -506,6 +506,52 @@ ck('jass(颜色) SetPlayerColor(7) 后可读回', rPC.globals.col2, 7);
 ck('jass(科技) SetPlayerTechResearched 后查询=true', rPC.globals.tech, 1);
 ck('jass(科技) SetPlayerTechMaxAllowed 后可读回', rPC.globals.techmax, 3);
 
+// --- 触发器条件 + 计时器表 + 单位状态存储 ---
+const tcondScript = `
+globals
+  trigger tg = null
+  integer ev = -1
+  integer ac = 0
+  timer tm = null
+  integer tstarted = -1
+  unit u = null
+  real lf = -1
+  real mn = -1
+endglobals
+function CondTrue takes nothing returns boolean
+  return true
+endfunction
+function Act1 takes nothing returns nothing
+  set ac = ac + 1
+endfunction
+function Init takes nothing returns nothing
+  set tg = CreateTrigger()
+  call TriggerAddCondition(tg, function CondTrue)
+  call TriggerAddAction(tg, function Act1)
+  if TriggerEvaluate(tg) then
+    set ev = 1
+  endif
+  call TriggerExecute(tg)
+  set tm = CreateTimer()
+  call TimerStart(tm, 5.0, false, function Act1)
+  set tstarted = 1
+  set u = CreateUnit(Player(0), 333, 0.0, 0.0, 0.0)
+  call SetUnitState(u, ConvertUnitState(0), 100.0)
+  set lf = GetUnitState(u, ConvertUnitState(0))
+  call SetUnitState(u, ConvertUnitState(2), 50.0)
+  set mn = GetUnitState(u, ConvertUnitState(2))
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rT = jassRunC(tcondScript, 'main');
+ck('jass(触发条件) 条件 true → TriggerEvaluate=true', rT.globals.ev, 1);
+ck('jass(触发条件) TriggerExecute 执行 action', rT.globals.ac, 1);
+ck('jass(计时器) CreateTimer+TimerStart 存回调', rT.globals.tstarted, 1);
+ck('jass(单位状态) SetUnitState LIFE=100 读回', rT.globals.lf, 100);
+ck('jass(单位状态) SetUnitState MANA=50 读回', rT.globals.mn, 50);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

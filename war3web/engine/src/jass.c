@@ -1094,14 +1094,19 @@ typedef struct {
   long long opCount, opLimit;    // 每线程 runaway 护栏（同 JS 8000000）
   int handles;                   // handle id 分配器（0x100000 起，对齐 JS nextHandleId）
   const char** callNames; int nCalls, capCalls;  // 已实现 native 调用名（去重，trace 证据）
-  // 触发器表（同步执行：动作函数按名注册/调用；事件注册暂不存储）
-  struct VTrigger { long long id; const char** actions; int nActions, capActions; } * triggers;
+  // 触发器表（同步执行：动作/条件函数按名注册/调用）
+  struct VTrigger { long long id; const char** actions; int nActions, capActions;
+                    const char** conds; int nConds, capConds; } * triggers;
   int nTriggers, capTriggers;
+  // 计时器表（TimerStart 存回调函数名，为事件驱动铺路）
+  struct VTimer { long long id; const char* handler; } * timers;
+  int nTimers, capTimers;
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
                    struct { int tech; int lvl; int max; } * ts; int nTs, capTs; } players[16];
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
+                 double life, maxLife, mana, maxMana;
                  int* abils; int nAbils, capAbils; } * units;
   int nUnits, capUnits;
   // region 对象表（区域：矩形/格集合）
@@ -1330,11 +1335,39 @@ static void exec_trigger_actions(Vm* vm, struct VTrigger* t) {
     else vm_err(vm, "trigger action not found");
   }
 }
-// TriggerEvaluate：执行动作并返回 true（引擎返回 action 是否触发）
+// TriggerEvaluate：跑全部条件（无则 true），不执行动作（对齐 engine.js）
 static Value n_trigger_evaluate(Vm* vm, Expr** a, int n, VScope* s) {
   Value tv = narg(vm, a, n, 0, s);
-  if (tv.k == V_HANDLE) { struct VTrigger* t = find_trigger(vm, tv.i); if (t) { exec_trigger_actions(vm, t); return v_bool(1); } }
+  if (tv.k == V_HANDLE) {
+    struct VTrigger* t = find_trigger(vm, tv.i);
+    if (t) {
+      for (int i = 0; i < t->nConds; i++) {
+        FuncDef* f = NULL;
+        for (int k = 0; k < vm->ast->nfuncs; k++)
+          if (vm->ast->funcs[k].sig.name && strcmp(vm->ast->funcs[k].sig.name, t->conds[i]) == 0) { f = &vm->ast->funcs[k]; break; }
+        if (!f) return v_bool(0);
+        Value r = vm_invoke(vm, f, NULL, 0, NULL);
+        int truthy = (r.k == V_BOOL && r.i) || (r.k == V_INT && r.i) || (r.k == V_REAL && r.f != 0);
+        if (!truthy) return v_bool(0);
+      }
+      return v_bool(1);
+    }
+  }
   return v_bool(0);
+}
+static Value n_trigger_add_condition(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  Value cv = narg(vm, a, n, 1, s);
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t && cv.k == V_CODE) {
+    if (t->nConds == t->capConds) {
+      t->capConds = t->capConds ? t->capConds * 2 : 4;
+      const char** nn = (const char**)realloc(t->conds, sizeof(char*) * (size_t)t->capConds);
+      t->conds = nn;
+    }
+    t->conds[t->nConds++] = cv.s;
+  }
+  return v_null();
 }
 static Value n_trigger_execute(Vm* vm, Expr** a, int n, VScope* s) {
   Value tv = narg(vm, a, n, 0, s);
@@ -1343,8 +1376,7 @@ static Value n_trigger_execute(Vm* vm, Expr** a, int n, VScope* s) {
 }
 static Value n_execute_func(Vm* vm, Expr** a, int n, VScope* s) {
   Value cv = narg(vm, a, n, 0, s);
-  if (cv.k == V_CODE) {
-    for (int k = 0; k < vm->ast->nfuncs; k++)
+  if (cv.k == V_CODE) {    for (int k = 0; k < vm->ast->nfuncs; k++)
       if (vm->ast->funcs[k].sig.name && strcmp(vm->ast->funcs[k].sig.name, cv.s) == 0) {
         vm_invoke(vm, &vm->ast->funcs[k], NULL, 0, NULL);
         return v_null();
@@ -1380,6 +1412,64 @@ static int player_index_of(Vm* vm, long long pid) {
   for (int i = 0; i < 16; i++)
     if (vm->players[i].id == pid) return i;
   return 0;   // 未登记玩家 handle → Player(0)
+}
+
+// ---- 计时器表（CreateTimer 真分配 + TimerStart 存回调为事件驱动铺路）----
+static struct VTimer* find_timer(Vm* vm, long long id) {
+  for (int i = 0; i < vm->nTimers; i++)
+    if (vm->timers[i].id == id) return &vm->timers[i];
+  return NULL;
+}
+static Value n_create_timer(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  long long id = 0x100000 + vm->handles++;
+  if (vm->nTimers == vm->capTimers) {
+    vm->capTimers = vm->capTimers ? vm->capTimers * 2 : 16;
+    vm->timers = (struct VTimer*)realloc(vm->timers, sizeof(struct VTimer) * (size_t)vm->capTimers);
+  }
+  struct VTimer* t = &vm->timers[vm->nTimers++];
+  memset(t, 0, sizeof *t);
+  t->id = id;
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = id;
+  return v;
+}
+static Value n_timer_start(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  Value cv = narg(vm, a, n, 3, s);  // handler：第 4 参（code）
+  (void)narg(vm, a, n, 1, s); (void)narg(vm, a, n, 2, s);  // timeout/periodic 存表（无时钟语义）
+  struct VTimer* t = tv.k == V_HANDLE ? find_timer(vm, tv.i) : NULL;
+  if (t && cv.k == V_CODE) t->handler = cv.s;
+  return v_null();
+}
+static Value n_timer_elapsed(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  return v_real(0);   // 无时钟推进（对齐缺省语义）
+}
+
+// ---- 单位状态（SetUnitState 存 life/mana/max；GetUnitState 读回；无数据表默认 0）----
+static Value n_set_unit_state(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), st = narg(vm, a, n, 1, s), v = narg(vm, a, n, 2, s);
+  double d = v.k == V_REAL ? v.f : (double)v.i;
+  if (uv.k == V_HANDLE) {
+    struct VUnit* u = find_unit(vm, uv.i);
+    if (u) {
+      if (st.i == 0) u->life = d; else if (st.i == 1) u->maxLife = d;
+      else if (st.i == 2) u->mana = d; else if (st.i == 3) u->maxMana = d;
+    }
+  }
+  return v_null();
+}
+static Value n_get_unit_state(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), st = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) {
+    struct VUnit* u = find_unit(vm, uv.i);
+    if (u) {
+      double d = st.i == 0 ? u->life : st.i == 1 ? u->maxLife
+                : st.i == 2 ? u->mana : st.i == 3 ? u->maxMana : 0;
+      return v_real(d);
+    }
+  }
+  return v_real(0);
 }
 static Value n_create_unit(Vm* vm, Expr** a, int n, VScope* s) {
   Value p = narg(vm, a, n, 0, s);      // player
@@ -2105,7 +2195,7 @@ static const NativeEntry NATIVES[] = {
   { "Location", n_location }, { "MoveLocation", n_move_location },
   { "GetLocationX", n_get_loc_x }, { "GetLocationY", n_get_loc_y }, { "RemoveLocation", n_void },
   // handle 工厂（stub：返回非空 id；真实对象待 world/渲染层）
-  { "AddWeatherEffect", n_handle }, { "CreateTimer", n_handle },
+  { "AddWeatherEffect", n_handle }, { "CreateTimer", n_create_timer },
   { "CreateTrigger", n_create_trigger },
   { "CreateGroup", n_create_group }, { "CreateForce", n_create_force },
   { "ForceAddPlayer", n_force_add_player }, { "ForceRemovePlayer", n_force_remove_player },
@@ -2136,7 +2226,7 @@ static const NativeEntry NATIVES[] = {
   { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_void },
   { "GetPlayerState", n_get_player_state },
   { "VolumeGroupSetVolume", n_void }, { "PlayCinematic", n_void }, { "StartSound", n_void },
-  { "SetDestructableAnimation", n_void }, { "SetUnitState", n_void }, { "SetUnitAcquireRange", n_void },
+  { "SetDestructableAnimation", n_void }, { "SetUnitState", n_set_unit_state }, { "SetUnitAcquireRange", n_void },
   { "SetPlayerTechMaxAllowed", n_set_tech_max }, { "SetPlayerTechResearched", n_set_tech_researched },
   // 第二轮：枚举恒等转换（ConvertXxx，JS C(name)(i) => i）
   { "ConvertAIDifficulty", n_convint }, { "ConvertAllianceType", n_convint },
@@ -2175,6 +2265,7 @@ static const NativeEntry NATIVES[] = {
   { "Filter", n_handle }, { "Rect", n_rect }, { "Player", n_player },
   { "GetPlayerId", n_get_player_id },
   { "TriggerAddAction", n_trigger_add_action }, { "TriggerExecute", n_trigger_execute },
+  { "TriggerAddCondition", n_trigger_add_condition }, { "GetUnitState", n_get_unit_state },
   { "ExecuteFunc", n_execute_func },
   { "TriggerRegisterGameEvent", n_handle }, { "GetPlayerTechMaxAllowed", n_get_tech_max },
   { "IsPlayerObserver", n_false }, { "SetFloatGameState", n_void },
@@ -2187,7 +2278,7 @@ static const NativeEntry NATIVES[] = {
   { "TriggerRegisterUnitEvent", n_false },
   { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
   { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_void },
-  { "TimerStart", n_void },
+  { "TimerStart", n_timer_start }, { "TimerGetElapsed", n_timer_elapsed },
   // 第三轮（config 链）：GetPlayerId 暂返 0（player 对象表留待深化）
   { "GetPlayerId", n_i0 }, { "GetGameTypeSelected", n_i0 },
   { "SetPlayerStartLocation", n_void }, { "SetStartLocPrio", n_void }, { "SetStartLocPrioCount", n_void },
@@ -2528,6 +2619,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
     b_put(&out, "}}");
   }
   if (out_err) *out_err = vm.err ? 1 : 0;
+  free(vm.timers);
   for (int i = 0; i < 16; i++) free(vm.players[i].ts);
   for (int i = 0; i < vm.nRegions; i++) free(vm.regions[i].rectIds);
   free(vm.regions);
@@ -2542,7 +2634,7 @@ const char* jass_run(const char* src, int len, const char* entry, int* out_err) 
   free(vm.rects);
   free(vm.locs);
   free(vm.units);
-  for (int i = 0; i < vm.nTriggers; i++) free(vm.triggers[i].actions);
+  for (int i = 0; i < vm.nTriggers; i++) { free(vm.triggers[i].actions); free(vm.triggers[i].conds); }
   free(vm.triggers);
   free(vm.callNames);
   free_ast(ast);
