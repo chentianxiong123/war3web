@@ -53,10 +53,14 @@ render.js 具体使用点：
    （在 three/webgpu 构建）→ importmap 补 `three/webgpu` + `three/tsl` 映射、
    render.js 动态 import + resize 延时 setSize。**playwright 浏览器实测**：
    WebGPURenderer 激活成功（地形加载、渲染循环 0 错误、WebGL 回退正常）
-2. **步骤 B（待做）**：进入对局验证单位/粒子渲染 + 记录 `fps_test` 基线
-   （WebGL vs WebGPU 双跑存档）
-3. **步骤 C**：性能敏感点（Lambert 材质批量/粒子 buffer）换 TSL 试点，
-   对比后再推广
+2. **步骤 B（已完成 对局实测）**：playwright 驱动进对局（加入红方→准备→playing）：
+   - ✅ WebGPU 后端进对局成功，**95 个单位模型视图**渲染（MeshLambert 兼容路径）
+   - ✅ 渲染循环持续绘制（累计 43754 draw calls / 47824 tris 存档）
+   - ⚠️ **粒子 ShaderMaterial 在 WebGPU 后端不兼容**（roadmap 预判风险出现）：
+     `NodeBuilder: Material "ShaderMaterial" is not compatible`，加载时单次报错，
+     不影响主场景渲染。对策：步骤 C 粒子 TSL 重写或 WebGPU 通道降级粒子
+3. **步骤 C**：粒子 ShaderMaterial → TSL 试点（WebGPU 兼容）+ 性能敏感点
+   （Lambert 材质批量）对比，`fps_test` WebGL vs WebGPU 双跑存档
 4. **步骤 D**：移除 WebGL 渲染器开关（或长期保留 `forceWebGL` 回退，
    随 `render_test` 全绿决定）
 
