@@ -230,6 +230,13 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   RegionClearRect 从区域移除矩形
 - 断言 5 项；97/97 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.20 触发上下文 + 金矿资源 + GameState 事件（提交 1a7a1ab）
+- **触发上下文**：TriggerExecute 设 ctxTrigger，动作内 GetTriggeringTrigger 还原
+  （对齐 engine.js eng.ctx）；GetExpiredTimer → null（无时钟回调）
+- 金矿资源量：SetResourceAmount/GetResourceAmount（矿山单位存储）
+- TriggerRegisterGameStateEvent 事件注册（kind=8）
+- 断言 3 项；**100/100 全绿**（测试破百里程碑）+ 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
