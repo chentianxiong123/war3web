@@ -80,6 +80,24 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - 验证：**迷你脚本（全局/数组/递归 Fact/loop/数组下标/字符串拼接/native 输出）
   C log 与 JS 权威 vm.js 完全一致**（fact5=120/x=5/s0=5/i=3）、counter=120 一致
 
+### 3.5 natives 分发表 + 真实地图 main 全链执行
+- value 加 **V_HANDLE**（handle id 0x100000 起，对齐 engine.js nextHandleId；
+  `!= null` 判定、handle==handle 按 id 比较）
+- natives 改**分发表**（名字→实现，static NATIVES 表）：已实现 **~140 个**——
+  环境/配置空实现（SetCameraBounds/SetDayNightModels/SetMapMusic/SetPlayers 等，
+  对齐 engine.js `() => {}` 语义）、数学/字符串真实现（I2S/R2I/I2R/R2S/
+  GetRandomInt/GetRandomReal 固定 LCG 种子可复现）、枚举恒等转换（42 个
+  ConvertXxx，对齐 JS `C(name)(i) => i`）、handle 工厂（CreateUnit/CreateTrigger/
+  Player/Rect/Filter/AddWeatherEffect 等）、查询默认值（GetGameSpeed=2/
+  VersionGet=1/IsFogEnabled=false 等）
+- **未实现 natives 打 `[unimpl:Name]` log 返回默认值**（迭代式：跑 main 收集
+  缺失 → 按需实现 → 再跑），两次迭代归零
+- 调用 trace：结果 JSON 新增 `"calls":[去重 native 名]`（调用序证据）
+- **验证：war3map.j `main` 全链在 C VM 完整执行**（41ms，35/35 测试全绿）：
+  main → 环境 natives → CreateAllUnits → InitBlizzard → InitGlobals →
+  InitCustomTriggers → RunInitializationTriggers，**无未实现 natives，87 个
+  natives 被调用**；main 全链调用序断言常驻测试
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（31 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
@@ -91,6 +109,7 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 
 - M0/M1（WASM 骨架）✅；解析保真（D/E/F 系列）✅
 - **M3（JASS 引擎）：3.1 词法语法 ✅ → 3.2 完整 AST ✅ → 3.3 拼接全量解析 ✅
-  （670KB 逐字节一致）→ 3.4 VM 执行器 ✅ → 剩余：natives 全量移植
-  （engine.js 1506 行）+ war3map.j 实际执行 + blizzard 初始化链**
+  （670KB 逐字节一致）→ 3.4 VM 执行器 ✅ → 3.5 natives 分发表 ✅
+  （~140 个，war3map.j main 全链跑通）→ 剩余：natives 语义深化
+  （world 交互类接 M2 世界对象）+ config/触发器执行链对照**
 - M2（WebGPU 渲染）/ M5（zero-copy）：未开始

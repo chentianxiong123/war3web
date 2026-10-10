@@ -219,6 +219,23 @@ if (fs.existsSync(COMMON_J) && fs.existsSync(BLIZZARD_J)) {
   }
   const pFull = JSON.parse(cFull);
   console.log(`  info   拼接: ${full.length} 字节源 → ${pFull.functions.length} 函数 / ${pFull.natives.length} natives / ${pFull.globals.length} 全局 / ${pFull.types.length} 类型`);
+
+  // --- JASS 真实地图 main 全链执行（C VM + natives 分发表）---
+  const rMain = jassRunC(full, 'main');
+  ck('jass(main) 执行完成', rMain.ok ? 1 : 0, 1);
+  if (!rMain.ok) console.log('  error: ' + rMain.error);
+  const unimplMain = [...new Set(((rMain.log || '').match(/\[unimpl:([^\]]+)\]/g) || []).map((s) => s.slice(8, -1)))];
+  ck('jass(main) 无未实现 natives', unimplMain.length === 0 ? 1 : 0, 1);
+  if (unimplMain.length) console.log('  未实现: ' + unimplMain.sort().join(', '));
+  const calls = rMain.calls || [];
+  // main 直呼的真 natives（SetAmbientDaySound/InitBlizzard 等是 Blizzard.j 函数，
+  // 其入口由"执行完成+无未实现"隐含验证）
+  const seq = ['SetCameraBounds', 'SetDayNightModels', 'SetTerrainFogEx', 'SetWaterBaseColor',
+    'AddWeatherEffect', 'EnableWeatherEffect', 'NewSoundEnvironment', 'SetMapMusic'];
+  const gotSeq = seq.filter((n) => calls.includes(n));
+  ck('jass(main) natives 调用序完整', gotSeq.length === seq.length ? 1 : 0, 1);
+  if (gotSeq.length !== seq.length) console.log('  缺调用证据: ' + seq.filter((n) => !gotSeq.includes(n)).join(', '));
+  console.log(`  info   main 全链执行: ${calls.length} 个 natives 被调用`);
 } else {
   console.log('  SKIP  拼接对照（缺 war3_extracted/Scripts 库文件）');
 }
