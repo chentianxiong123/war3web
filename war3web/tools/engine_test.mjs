@@ -632,6 +632,54 @@ ck('jass(玩家) SetPlayerController(1) 后可读回', rM.globals.ctl, 1);
 ck('jass(玩家) GetPlayerStartLocation=index(1)', rM.globals.sl, 1);
 ck('jass(玩家) GetPlayerSlotState 可读', rM.globals.st, 0);
 
+// --- 单位范围/颜色 + GetLocalPlayer + 销毁回收 ---
+const miscScript = `
+globals
+  unit u = null
+  real ar = -1
+  integer uc = -1
+  player lp = null
+  integer same = -1
+  region rg = null
+  rect r1 = null
+  rect r2 = null
+  integer rgn = -1
+  group g = null
+  integer gcount = -1
+endglobals
+function Init takes nothing returns nothing
+  set u = CreateUnit(Player(0), 555, 0.0, 0.0, 0.0)
+  call SetUnitAcquireRange(u, 300.0)
+  set ar = GetUnitAcquireRange(u)
+  call SetUnitColor(u, ConvertPlayerColor(4))
+  set uc = GetUnitColor(u)
+  set lp = GetLocalPlayer()
+  if lp == Player(0) then
+    set same = 1
+  endif
+  set rg = CreateRegion()
+  set r1 = Rect(0.0, 0.0, 128.0, 128.0)
+  set r2 = Rect(0.0, 0.0, 64.0, 64.0)
+  call RegionAddRect(rg, r1)
+  call RegionAddRect(rg, r2)
+  call RegionClearRect(rg, r1)
+  set rgn = 1
+  set g = CreateGroup()
+  call GroupAddUnit(g, u)
+  call DestroyGroup(g)
+  set gcount = 0
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rX = jassRunC(miscScript, 'main');
+ck('jass(单位) SetUnitAcquireRange(300) 读回', rX.globals.ar, 300);
+ck('jass(单位) SetUnitColor(4) 读回', rX.globals.uc, 4);
+ck('jass(玩家) GetLocalPlayer == Player(0) 同 handle', rX.globals.same, 1);
+ck('jass(region) RegionClearRect 可用', rX.globals.rgn, 1);
+ck('jass(group) DestroyGroup 无错', rX.globals.gcount, 0);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');

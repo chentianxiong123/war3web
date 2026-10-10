@@ -1111,6 +1111,7 @@ typedef struct {
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
                  double life, maxLife, mana, maxMana;
+                 double acquireRange; int color;
                  int* abils; int nAbils, capAbils; } * units;
   int nUnits, capUnits;
   // region 对象表（区域：矩形/格集合）
@@ -1551,6 +1552,63 @@ static Value n_get_unit_state(Vm* vm, Expr** a, int n, VScope* s) {
     }
   }
   return v_real(0);
+}
+
+// ---- 单位范围/颜色 + GetLocalPlayer + 销毁回收（3.19 批）----
+static struct VRegion* find_region(Vm* vm, long long id);
+static Value n_set_unit_acquire_range(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), r = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u)
+    u->acquireRange = r.k == V_REAL ? r.f : (double)r.i; }
+  return v_null();
+}
+static Value n_get_unit_acquire_range(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) return v_real(u->acquireRange); }
+  return v_real(0);
+}
+static Value n_set_unit_color(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), c = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) u->color = (int)c.i; }
+  return v_null();
+}
+static Value n_get_unit_color(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) return v_int(u->color); }
+  return v_int(0);
+}
+static Value n_get_local_player(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  if (vm->players[0].id == 0) vm->players[0].id = 0x100000 + vm->handles++;  // P(0) 幂等
+  Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->players[0].id;
+  return v;
+}
+static Value n_destroy_group(Vm* vm, Expr** a, int n, VScope* s) {
+  Value gv = narg(vm, a, n, 0, s);
+  if (gv.k == V_HANDLE)
+    for (int i = 0; i < vm->nGroups; i++)
+      if (vm->groups[i].id == gv.i) { free(vm->groups[i].items); vm->groups[i] = vm->groups[--vm->nGroups]; break; }
+  return v_null();
+}
+static Value n_destroy_trigger(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s);
+  if (tv.k == V_HANDLE)
+    for (int i = 0; i < vm->nTriggers; i++)
+      if (vm->triggers[i].id == tv.i) {
+        free(vm->triggers[i].actions); free(vm->triggers[i].conds); free(vm->triggers[i].events);
+        vm->triggers[i] = vm->triggers[--vm->nTriggers]; break;
+      }
+  return v_null();
+}
+static Value n_region_clear_rect(Vm* vm, Expr** a, int n, VScope* s) {
+  Value rv = narg(vm, a, n, 0, s), rectv = narg(vm, a, n, 1, s);
+  if (rv.k == V_HANDLE) {
+    struct VRegion* r = find_region(vm, rv.i);
+    if (r && rectv.k == V_HANDLE)
+      for (int i = 0; i < r->nRects; i++)
+        if (r->rectIds[i] == rectv.i) { r->rectIds[i] = r->rectIds[--r->nRects]; break; }
+  }
+  return v_null();
 }
 static Value n_create_unit(Vm* vm, Expr** a, int n, VScope* s) {
   Value p = narg(vm, a, n, 0, s);      // player
@@ -2353,7 +2411,7 @@ static const NativeEntry NATIVES[] = {
   { "CreateItem", n_create_item }, { "GetItemTypeId", n_get_item_type_id },
   { "GetItemX", n_get_item_x }, { "GetItemY", n_get_item_y },
   { "SetItemPosition", n_set_item_position }, { "RemoveItem", n_remove_item },
-  { "GetLocalPlayer", n_handle }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_get_owning_player },
+  { "GetLocalPlayer", n_get_local_player }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_get_owning_player },
   { "GetEnumUnit", n_get_enum_unit }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
   { "GroupAddUnit", n_group_add_unit }, { "GroupRemoveUnit", n_group_remove_unit },
   { "GroupClear", n_group_clear }, { "GroupCountUnits", n_group_count },
@@ -2370,11 +2428,11 @@ static const NativeEntry NATIVES[] = {
   { "SetTeams", n_void }, { "SetGamePlacement", n_void }, { "DefineStartLocation", n_void },
   { "SetPlayerSlotAvailable", n_void }, { "SetPlayerController", n_set_player_controller },
   { "SetPlayerRacePreference", n_void }, { "SetPlayerRaceSelectable", n_void },
-  { "SetPlayerColor", n_set_player_color }, { "GetPlayerColor", n_get_player_color }, { "DestroyTrigger", n_void }, { "DestroyGroup", n_void },
+  { "SetPlayerColor", n_set_player_color }, { "GetPlayerColor", n_get_player_color }, { "DestroyTrigger", n_destroy_trigger }, { "DestroyGroup", n_destroy_group },
   { "PauseGame", n_void }, { "SetPlayerState", n_set_player_state }, { "SetPlayerAlliance", n_void },
   { "GetPlayerState", n_get_player_state },
   { "VolumeGroupSetVolume", n_void }, { "PlayCinematic", n_void }, { "StartSound", n_void },
-  { "SetDestructableAnimation", n_void }, { "SetUnitState", n_set_unit_state }, { "SetUnitAcquireRange", n_void },
+  { "SetDestructableAnimation", n_void }, { "SetUnitState", n_set_unit_state }, { "SetUnitAcquireRange", n_set_unit_acquire_range }, { "GetUnitAcquireRange", n_get_unit_acquire_range },
   { "SetPlayerTechMaxAllowed", n_set_tech_max }, { "SetPlayerTechResearched", n_set_tech_researched },
   // 第二轮：枚举恒等转换（ConvertXxx，JS C(name)(i) => i）
   { "ConvertAIDifficulty", n_convint }, { "ConvertAllianceType", n_convint },
@@ -2405,7 +2463,7 @@ static const NativeEntry NATIVES[] = {
   { "UnitAddAbility", n_unit_add_ability }, { "UnitRemoveAbility", n_unit_remove_ability },
   { "GetUnitAbilityLevel", n_get_unit_ability_level }, { "GetUnitName", n_str_empty },
   { "CreateRegion", n_create_region }, { "RegionAddRect", n_region_add_rect },
-  { "RegionClearRect", n_void }, { "RegionAddCell", n_void }, { "RegionClearCell", n_void },
+  { "RegionClearRect", n_region_clear_rect }, { "RegionAddCell", n_void }, { "RegionClearCell", n_void },
   { "GetUnitX", n_get_unit_x }, { "GetUnitY", n_get_unit_y },
   { "SetUnitX", n_set_unit_x }, { "SetUnitY", n_set_unit_y },
   { "SetUnitPosition", n_set_unit_position }, { "GetUnitFacing", n_get_unit_facing },
@@ -2425,7 +2483,7 @@ static const NativeEntry NATIVES[] = {
   { "TriggerRegisterPlayerUnitEvent", n_trig_reg_player_unit_event }, { "TriggerRegisterTimerExpireEvent", n_trig_reg_timer_expire },
   { "TriggerRegisterUnitEvent", n_trig_reg_unit_event },
   { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
-  { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_void },
+  { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_set_unit_color }, { "GetUnitColor", n_get_unit_color },
   { "TimerStart", n_timer_start }, { "TimerGetElapsed", n_timer_elapsed },
   { "TriggerRegisterTimerEvent", n_trig_reg_timer_event }, { "TriggerRegisterPlayerEvent", n_trig_reg_player_event },
   { "TriggerRegisterUnitInRange", n_trig_reg_unit_in_range }, { "TriggerRegisterPlayerChatEvent", n_trig_reg_player_chat },
