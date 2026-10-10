@@ -223,6 +223,13 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   GetPlayerSlotState（slotState 还原）
 - 断言 9 项；92/92 全绿 + 880 全局 + 18 数组对账保持
 
+### 3.19 单位范围/颜色 + 本地玩家 + 销毁回收（提交 8343b60）
+- SetUnitAcquireRange/GetUnitAcquireRange、SetUnitColor/GetUnitColor（单位表存储）
+- GetLocalPlayer → P(0) 幂等（与 Player(0) 同 handle，对齐 engine.js）
+- **DestroyGroup/DestroyTrigger 真回收**（交换删除 + 释放内部数组）；
+  RegionClearRect 从区域移除矩形
+- 断言 5 项；97/97 全绿 + 880 全局 + 18 数组对账保持
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
