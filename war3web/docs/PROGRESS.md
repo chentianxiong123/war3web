@@ -127,6 +127,22 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   main+config 全链 **unimpl 归零**）→ 深化② = natives 真语义
   （玩家对象表/单位表，stub 假 handle → 可查询对象）
 
+### 3.7 玩家对象表（提交 5807c53）
+- `Player(i)` **幂等**：16 常驻玩家，同 index 同一 handle（对齐 engine.js `P(i)`；
+  玩家 handle 首次分配后固定）
+- `GetPlayerId(p)` 真实现：玩家表还原 index（此前恒返 0——config 链
+  bj_slotControlUsed[playerIndex] 等数组下标此前全写错位置）
+- 断言：GetPlayerId(Player(3)) == 3；42/42 全绿 + 880 对账零差异保持
+
+### 3.8 单位对象表（提交 d803b8c）
+- `CreateUnit` 真分配：单位表存 typeId / 所属玩家 index / 存活
+- 查询还原：`GetUnitTypeId` / `GetOwningPlayer`（返回所属玩家幂等 handle）/
+  `UnitAlive` / `KillUnit`（alive=0，RemoveUnit 同）
+- 断言：typeId round-trip / UnitAlive kill 前后 1→0 / owner 还原=2；
+  42/42 全绿 + 880 对账零差异保持
+- 深化方向：CreateUnits 批量（BJ 已基于 CreateUnit）、单位坐标/状态查询、
+  触发器事件注册（事件驱动执行）
+
 ## 四、测试资产与工具
 
 - 引擎测试：tools/engine_test.mjs（38 项：vec3 3 + w3x/MPQ 14 + JASS AST 6 +
