@@ -1104,6 +1104,7 @@ typedef struct {
   // 计时器表（TimerStart 存回调函数名，为事件驱动铺路）
   struct VTimer { long long id; const char* handler; long long trigger; } * timers;
   int nTimers, capTimers;
+  long long ctxTrigger;   // 触发执行上下文（GetTriggeringTrigger 读取）
   // 玩家表（Player(i) 幂等：同 index 同一 handle；GetPlayerId 由此还原 index）
   struct VPlayer { long long id; int gold, lumber; int color;  // color=-1 未设置（默认 index，对齐 engine.js）
                    int controller; int startLoc; int slotState;
@@ -1111,7 +1112,7 @@ typedef struct {
   // 单位表（CreateUnit 真分配：typeId/所属玩家/存活/坐标/朝向；查询类 natives 由此还原）
   struct VUnit { long long id; int typeId; int pi; int alive; double x, y, facing;
                  double life, maxLife, mana, maxMana;
-                 double acquireRange; int color;
+                 double acquireRange; int color; int goldAmount;
                  int* abils; int nAbils, capAbils; } * units;
   int nUnits, capUnits;
   // region 对象表（区域：矩形/格集合）
@@ -1376,8 +1377,21 @@ static Value n_trigger_add_condition(Vm* vm, Expr** a, int n, VScope* s) {
 }
 static Value n_trigger_execute(Vm* vm, Expr** a, int n, VScope* s) {
   Value tv = narg(vm, a, n, 0, s);
-  if (tv.k == V_HANDLE) { struct VTrigger* t = find_trigger(vm, tv.i); if (t) exec_trigger_actions(vm, t); }
+  if (tv.k == V_HANDLE) { struct VTrigger* t = find_trigger(vm, tv.i); if (t) {
+    long long prev = vm->ctxTrigger;
+    vm->ctxTrigger = t->id;   // 设置触发上下文（GetTriggeringTrigger）
+    exec_trigger_actions(vm, t);
+    vm->ctxTrigger = prev;
+  } }
   return v_null();
+}
+static Value n_get_triggering_trigger(Vm* vm, Expr** a, int n, VScope* s) {
+  (void)a; (void)n; (void)s;
+  if (vm->ctxTrigger != 0) {
+    Value v; memset(&v, 0, sizeof v); v.k = V_HANDLE; v.i = vm->ctxTrigger;
+    return v;
+  }
+  return v_null();   // 对齐 engine.js: eng.ctx.triggeringTrigger || null
 }
 static Value n_execute_func(Vm* vm, Expr** a, int n, VScope* s) {
   Value cv = narg(vm, a, n, 0, s);
@@ -1609,6 +1623,23 @@ static Value n_region_clear_rect(Vm* vm, Expr** a, int n, VScope* s) {
         if (r->rectIds[i] == rectv.i) { r->rectIds[i] = r->rectIds[--r->nRects]; break; }
   }
   return v_null();
+}
+static Value n_trig_reg_game_state(Vm* vm, Expr** a, int n, VScope* s) {
+  Value tv = narg(vm, a, n, 0, s), st = narg(vm, a, n, 1, s);
+  (void)narg(vm, a, n, 2, s); (void)narg(vm, a, n, 3, s);  // opcode/limit 暂不存
+  struct VTrigger* t = tv.k == V_HANDLE ? find_trigger(vm, tv.i) : NULL;
+  if (t) trig_add_event(vm, t, 8, 0, 0, st.i, NULL);
+  return event_handle(vm);
+}
+static Value n_set_resource_amount(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s), amt = narg(vm, a, n, 1, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) u->goldAmount = (int)amt.i; }
+  return v_null();
+}
+static Value n_get_resource_amount(Vm* vm, Expr** a, int n, VScope* s) {
+  Value uv = narg(vm, a, n, 0, s);
+  if (uv.k == V_HANDLE) { struct VUnit* u = find_unit(vm, uv.i); if (u) return v_int(u->goldAmount); }
+  return v_int(0);
 }
 static Value n_create_unit(Vm* vm, Expr** a, int n, VScope* s) {
   Value p = narg(vm, a, n, 0, s);      // player
@@ -2367,6 +2398,7 @@ static Value n_convint(Vm* vm, Expr** a, int n, VScope* s) {
   return v_int(v.k == V_INT ? v.i : (long long)v.f);   // ConvertXxx(n) 恒等（对齐 JS C(name)(i) => i）
 }
 static Value n_i0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(0); }
+static Value n_null(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_null(); }
 static Value n_i1(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(1); }
 static Value n_i2(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_int(2); }
 static Value n_r0(Vm* vm, Expr** a, int n, VScope* s) { (void)a; (void)n; (void)s; return v_real(0); }
@@ -2412,12 +2444,12 @@ static const NativeEntry NATIVES[] = {
   { "GetItemX", n_get_item_x }, { "GetItemY", n_get_item_y },
   { "SetItemPosition", n_set_item_position }, { "RemoveItem", n_remove_item },
   { "GetLocalPlayer", n_get_local_player }, { "GetTriggerUnit", n_handle }, { "GetOwningPlayer", n_get_owning_player },
-  { "GetEnumUnit", n_get_enum_unit }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_handle },
+  { "GetEnumUnit", n_get_enum_unit }, { "GetChangingUnit", n_handle }, { "GetTriggeringTrigger", n_get_triggering_trigger },
   { "GroupAddUnit", n_group_add_unit }, { "GroupRemoveUnit", n_group_remove_unit },
   { "GroupClear", n_group_clear }, { "GroupCountUnits", n_group_count },
   { "FirstOfGroup", n_first_of_group }, { "ForGroup", n_for_group },
   { "DestroyGroup", n_void },
-  { "GetExpiredTimer", n_handle },
+  { "GetExpiredTimer", n_null },
   // 环境/配置空实现（对齐 engine.js 空实现语义）
   { "SetCameraBounds", n_void }, { "GetCameraBoundMinX", n_r0 },
   { "GetCameraBoundMinY", n_r0 }, { "GetCameraBoundMaxX", n_r0 },
@@ -2479,11 +2511,11 @@ static const NativeEntry NATIVES[] = {
   { "GetGameSpeed", n_i2 }, { "VersionGet", n_i1 }, { "GetFloatGameState", n_r0 },
   { "GetPlayerController", n_get_player_controller }, { "GetPlayerSlotState", n_get_player_slot_state },
   { "GetPlayerTechResearched", n_get_tech_researched }, { "IsFogEnabled", n_false }, { "IsFogMaskEnabled", n_false },
-  { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_false },
+  { "TriggerEvaluate", n_trigger_evaluate }, { "TriggerRegisterGameStateEvent", n_trig_reg_game_state },
   { "TriggerRegisterPlayerUnitEvent", n_trig_reg_player_unit_event }, { "TriggerRegisterTimerExpireEvent", n_trig_reg_timer_expire },
   { "TriggerRegisterUnitEvent", n_trig_reg_unit_event },
   { "ForceAddPlayer", n_void }, { "ForceEnumPlayers", n_void }, { "SetAllItemTypeSlots", n_void },
-  { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_void }, { "SetUnitColor", n_set_unit_color }, { "GetUnitColor", n_get_unit_color },
+  { "SetAllUnitTypeSlots", n_void }, { "SetResourceAmount", n_set_resource_amount }, { "GetResourceAmount", n_get_resource_amount }, { "SetUnitColor", n_set_unit_color }, { "GetUnitColor", n_get_unit_color },
   { "TimerStart", n_timer_start }, { "TimerGetElapsed", n_timer_elapsed },
   { "TriggerRegisterTimerEvent", n_trig_reg_timer_event }, { "TriggerRegisterPlayerEvent", n_trig_reg_player_event },
   { "TriggerRegisterUnitInRange", n_trig_reg_unit_in_range }, { "TriggerRegisterPlayerChatEvent", n_trig_reg_player_chat },

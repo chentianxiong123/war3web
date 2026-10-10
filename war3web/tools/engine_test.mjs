@@ -680,6 +680,44 @@ ck('jass(玩家) GetLocalPlayer == Player(0) 同 handle', rX.globals.same, 1);
 ck('jass(region) RegionClearRect 可用', rX.globals.rgn, 1);
 ck('jass(group) DestroyGroup 无错', rX.globals.gcount, 0);
 
+// --- 触发上下文（GetTriggeringTrigger）+ 金矿资源量 + GameState 事件 ---
+const ctxScript = `
+globals
+  trigger tg = null
+  trigger tgot = null
+  integer ctxok = -1
+  integer evok = -1
+  unit mine = null
+  integer gold = -1
+  event ev = null
+endglobals
+function ActCtx takes nothing returns nothing
+  set tgot = GetTriggeringTrigger()
+  if tgot == tg then
+    set ctxok = 1
+  endif
+endfunction
+function Init takes nothing returns nothing
+  set tg = CreateTrigger()
+  call TriggerAddAction(tg, function ActCtx)
+  call TriggerExecute(tg)
+  set mine = CreateUnit(Player(0), 666, 0.0, 0.0, 0.0)
+  call SetResourceAmount(mine, 5000)
+  set gold = GetResourceAmount(mine)
+  set ev = TriggerRegisterGameStateEvent(tg, GAME_STATE_TIME_OF_DAY, EQUAL, 8.0)
+  if ev != null then
+    set evok = 1
+  endif
+endfunction
+function main takes nothing returns nothing
+  call Init()
+endfunction
+`;
+const rCtx = jassRunC(ctxScript, 'main');
+ck('jass(上下文) TriggerExecute 内 GetTriggeringTrigger==tg', rCtx.globals.ctxok, 1);
+ck('jass(金矿) SetResourceAmount(5000) 读回', rCtx.globals.gold, 5000);
+ck('jass(事件) TriggerRegisterGameStateEvent 返 handle', rCtx.globals.evok, 1);
+
 // --- 拼接全量解析（common.j + Blizzard.j + war3map.j 670KB，逐步字节对照）---
 const COMMON_J = path.join(ROOT, 'war3_extracted/Scripts/common.j');
 const BLIZZARD_J = path.join(ROOT, 'war3_extracted/Scripts/Blizzard.j');
