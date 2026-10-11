@@ -310,11 +310,47 @@
   snapshot_test 的 gold 偏移硬编码 `5 + 11*nU`，增列后读到 `id` 列——改为 15；
   ④ 两个 golden 的金矿 team 设置不一致（0 vs 1）造成朝向分歧 0.64 rad——统一为
   snapshot_golden 的 team 0 场景。**四者全是对账口径/场景一致性问题，非 C 模拟缺口。**
-- **渲染缺口（C 快照拿不到、由 JS 侧保留）**：`b`（buff 模型）、`bld`（建造
-  进度）、`q`（命令队列长度）、`ab`（可施法列表）、`items`/`clock`/`quests`/`res`
-  （世界级字段）。这些依赖 buff/建筑/能力系统，尚未移植进 C——见 M6。
+- **渲染缺口（C 快照拿不到、由 JS 侧保留）**：`b`（buff 模型，2.14 已补数据源）、
+  `bld`（建造进度）、`q`（命令队列长度）、`ab`（可施法列表）、`items`/`clock`/
+  `quests`/`res`（世界级字段）。建筑/能力系统仍待移植——见 M6。
 - **回归**：combat 4/4、econ 全过、sim_step 4/4、snapshot 2/2、order 3/3、
   sim_test 全绿、engine 114/114（零回归）。
+
+#### 2.14 Buff 系统（阶段 4 收尾第三步）——两套共存的效果桥 ✅
+- **动机**：M4 收尾方向定为「C 侧继续补、JS 保留、两套共存」。共存的核心桥是
+  JS 能力层施放效果 → C 单位生效。此前 C 侧无 buff 概念，能力效果只能改 JS
+  对象，C 单位看不到。本步把 buff 系统移植进 C，打通效果桥。
+- **设计**：`SimBuff` 结构 + **独立全局表 `BUFFS[SIM_MAX][4]`**（不嵌进 SimUnit，
+  避免结构体布局变更引发偏移副作用——见下「根因」）。4 个槽位、16 种 kind
+  枚举，语义对齐 `world.js` applyBuff 1776-1785 / recalc 823-835 /
+  damage 1090-1122 / step 2602。
+- **API（4 个导出）**：
+  - `sim_apply_buff(id, kindIdx, code, untilMs, pct, atkPct, flat)` — JS 侧施加，
+    按 code 替换（有 code 比 code，否则比 kind），满槽 -1
+  - `sim_clear_buffs(id)` — 驱散全部
+  - `sim_get_buffs(id, out, maxN)` — 读 `kindIdx, code` 对（快照 `b[]` 数据源）
+  - `sim_heal(id, amount)` — 治疗（`world.js` heal 1771）
+- **效果接入 4 处**：
+  - `sim_damage`：`defend` 减伤（`1 - pct`）+ `manashield` 吸蓝（含负 rate 反哺，
+    蓝尽自动失效）+ `armor`/`innerfire` 护甲加成进 `armor_factor`
+  - `release_attack`：`rage`/`morph`/`innerfire`（`1+pct`）/`weaken`（`1-pct`）
+    伤害倍率
+  - `step_attack_unit`：`slow`/`defend` 的 `atkPct` → 攻击冷却倍率
+    （攻速是冷却的倒数：`mcd *= 1/(1-atkPct)`，下限 20× 防除零）
+  - `step_move_unit`：`slow` 移速倍率（`1-pct`）
+- **过期清理**：`sim_step` 开头 `expire_buffs()`，对齐 JS `step 2602`。
+- **根因记录（buff 表设计教训）**：最初把 `SimBuff[4]` 嵌进 `SimUnit` 末尾，
+  结构体增 192 字节。回归时 combat 攻击数精确减半、死亡 tick 减半——排查发现
+  `sim_damage` 里 `t->hp -= dmg` 被误写了两次（双倍扣血），与 buff 代码无关。
+  但为避免结构体布局变更的偏移风险，仍改为独立全局表 `BUFFS[SIM_MAX][4]`，
+  `SimUnit` 体积不变。`step_attack_unit` 因此增 `int id` 参数（原缺 id，
+  buff 函数需要槽位索引）。
+- **缺口（本版未接入）**：`vampiric`（吸血）、`regen`（回复）、`damage`（伤害
+  加成 aura）、`stun`（定身）、`invis`（隐身）、`silence`（沉默）——枚举已占位，
+  效果未接入。`stun`/`silence` 需接入移动/施法拒绝逻辑，`vampiric` 需改
+  `sim_damage` 加回血分支，`regen` 需 `sim_step` 加回复。
+- **回归**：combat 4/4、econ 全过、sim_step 4/4、snapshot 2/2、order 3/3、
+  snaprender 2/2、sim_test 全绿、engine 114/114（零回归）。
 
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
@@ -381,7 +417,7 @@ server tick
 | 1 | 移动/寻路/碰撞进 WASM | 1-2 周 | ✅ |
 | 2 | 弹道/攻击/经济进 WASM | 1-2 周 | ✅（全量 tick + 事件桥） |
 | 3 | SOA 快照 + 对账门禁 | 1 周 | ✅（见 2.11） |
-| 收尾 | 删 JS 双实现/开关切换 | 1 周 | 进行中（命令输入通道 ✅ 2.12；快照驱动渲染 ✅ 2.13） |
+| 收尾 | 删 JS 双实现/开关切换 | 1 周 | 进行中（命令输入通道 ✅ 2.12；快照驱动渲染 ✅ 2.13；buff 效果桥 ✅ 2.14） |
 
 ## 6. 风险与对策
 
