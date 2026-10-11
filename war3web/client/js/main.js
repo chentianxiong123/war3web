@@ -3,7 +3,7 @@ import { AlertHistory } from './alerts.js';
 import { Selection } from './selection.js';
 import { minimapPoint } from './minimap.js';
 import { Net } from './net.js';
-import { Renderer, toX, toZ, snapshotFromBinary } from './render.js';
+import { Renderer, toX, toZ } from './render.js';
 import { UI, Lang } from './ui.js';
 import { HeroPreview } from './heroview.js';
 import { Overlay } from './overlay.js';
@@ -231,44 +231,18 @@ net.on(Msg.EVENT, (m) => {
   for (const ev of m.ev) handleEvent(ev);
 });
 
-// M5: 二进制 SOA 快照通道——位置/HP 高频更新通道。
-// server 每 tick 发送 binary 快照，client 用 snapshotFromBinary 解码后
-// 只更新已有视图的位置/朝向/HP（不创建新视图，视图创建交给 JSON handler）。
-// slots registry 由 server 在 SLOTS 消息中推送，client 存 S.slots。
+// M5/M6 二进制通道——暂缓启用。
+// 现状：server 的玩家命令（move/attack/build/train）只派发到 JS world
+//（房间 handleMessage -> W.order()），从未同步进 wasm 模拟。wasm 只有
+// spawn + step + buff，单位在 wasm 里永远停在出生点。于是 binary 快照
+// 的位置是"静态出生点"，与真正在动的 JSON 快照每次都会打架——每 10 tick
+// 相互覆盖一次，表现就是农民移动时来回闪、建筑像被拖动。
+// 对策：binary 通道先停用（解析但丢弃），JSON 快照保持全速作为唯一权威
+//（位置/HP/生命周期/create/delete），等命令真正接入 wasm 后再启用 binary。
 net.on('s', (bytes) => {
   const data = bytes.slice(1);   // 去掉 tag 字节
   if (data.byteLength < 20) return;
-  const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  const ents = snapshotFromBinary(buf, S.slots || {}, S.colors || []);
-  const seen = new Set();
-  for (const e of ents) {
-    seen.add(e.i);
-    const old = S.ents.get(e.i);
-    S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
-    // 更新 ents 数据（位置/HP/朝向），但不覆盖元数据（model/typeKey 等由 JSON handler 管理）
-    if (old) {
-      old.x = e.x; old.y = e.y; old.f = e.f;
-      old.h = e.h; old.a = e.a; old.mv = e.mv;
-    } else {
-      // 新单位——只记录数据，不创建视图（等 JSON handler 用完整元数据创建）
-      const meta = findMeta(e);
-      S.ents.set(e.i, Object.assign({}, meta, e));
-    }
-  }
-  // 删除 wasm 已确认死亡/移除的单位（只处理 S.slots 注册过的）
-  if (S.slots) {
-    for (const slot of Object.values(S.slots)) {
-      const id = slot.id;
-      if (!seen.has(id) && S.ents.has(id)) {
-        S.ents.delete(id); S.prev.delete(id); view.removeView(id);
-      }
-    }
-  }
-  // 首次收到 binary，通知 server 降频 JSON 快照
-  if (!S.binaryReadySent) {
-    S.binaryReadySent = true;
-    net.send({ t: Msg.BINARY_READY });
-  }
+  // 暂不写客户端状态；保留 socket 兼容即可
 });
 
 net.on(Msg.CHATMSG, (m) => ui.log(`<b>${escapeHtml(m.from)}:</b> ${escapeHtml(m.text)}`));
