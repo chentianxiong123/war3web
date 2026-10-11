@@ -15,6 +15,8 @@ export const Msg = {
   // server -> client
   WELCOME: 'welcome', STATE: 'state', SNAPSHOT: 'snap', EVENT: 'event',
   CHATMSG: 'chatMsg', PONG: 'pong', ERROR: 'error',
+  // M5: 二进制 SOA 快照帧（非 JSON，WebSocket binary frame）
+  SNAPSHOT_BIN: 'snapBin',
 };
 
 export const Ent = { HERO: 1, CREEP: 2, SHOP: 3, PROJECTILE: 4, SUMMON: 5, DOODAD: 6 };

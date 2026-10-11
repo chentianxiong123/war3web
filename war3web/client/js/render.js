@@ -98,6 +98,88 @@ function weightedByRarity(pool, meta) {
 export const toX = (x) => x;
 export const toZ = (y) => -y;
 
+// ------------------------------------------------------------------ M5 SOA 读路径
+// 与 engine/src/sim.c:1316 sim_snapshot 列布局严格对应：
+//   header(5): tick, nowMs, nUnits, nMissiles, nEvents
+//   units: nUnits × 15 列，列序（列优先，column-major）：
+//     x y facing hp maxHp alive team playerIndex kind moving gathering
+//     id level mana maxMana
+//   resources: gold[16]
+//   missiles: nMissiles × 2 列 x y
+//   events: nEvents × 4 列 tick type a b
+//
+// 列优先布局对 M5 的意义：一次 writeBuffer 把整个 SOA 送到 GPU，
+// 顶点着色器按列偏移直接索引，无需 JS 对象层。CPU 侧按列读也是
+// 缓存友好的（同一列连续 float，SIMD 对齐）。
+const SOA_HEADER = 5;
+const SOA_COLS = 15;
+const SOA_COL = {
+  X: 0, Y: 1, FACING: 2, HP: 3, MAX_HP: 4, ALIVE: 5, TEAM: 6, PI: 7,
+  KIND: 8, MOVING: 9, GATHERING: 10, ID: 11, LEVEL: 12, MANA: 13, MAX_MANA: 14,
+};
+
+/**
+ * 从 SOA ArrayBuffer 读回单位快照，形状对齐 world.snapshot() 的 ents 数组。
+ *
+ * `slots` 是按槽位索引（SOA 的 id 列）回查的 JS 侧注册表，
+ * 元素形如 { id, k, u, sel }——客户端 findMeta 等价物。
+ * `colors` 是按 playerIndex 回查的色索引表（playerColorOf 等价物）。
+ *
+ * 与 JSON 路径（m.s.ents）相比，此函数跳过：
+ *   - 服务端 JSON.stringify
+ *   - WebSocket 文本帧编解码
+ *   - 客户端 JSON.parse + Object.assign 构造
+ *   - S.ents Map.set 的逐对象访问
+ * 直接返回列优先解码后的 ents 数组，形状与 snapshotToRender（tools/snaprender_test.mjs）一致。
+ *
+ * 注意：返回的 ents 是新建对象（与 JSON 路径一样），并非零拷贝到渲染层；
+ * 真正的零拷贝在阶段 B，通过常驻 GPUBuffer + writeBuffer 直送顶点着色器实现。
+ */
+export function snapshotFromBinary(buf, slots, colors) {
+  const f = new Float32Array(buf);
+  const nUnits = Math.round(f[SOA_HEADER - 3]);
+  const ents = new Array(nUnits);
+  const colBase = SOA_HEADER;
+  for (let i = 0; i < nUnits; i++) {
+    const s = slots[Math.round(f[colBase + SOA_COL.ID * nUnits + i])] || {};
+    ents[i] = {
+      i: s.id ?? Math.round(f[colBase + SOA_COL.ID * nUnits + i]),
+      k: s.k ?? Math.round(f[colBase + SOA_COL.KIND * nUnits + i]),
+      u: s.u ?? '',
+      sel: s.sel ?? true,
+      x: Math.round(f[colBase + SOA_COL.X * nUnits + i]),
+      y: Math.round(f[colBase + SOA_COL.Y * nUnits + i]),
+      f: +f[colBase + SOA_COL.FACING * nUnits + i].toFixed(2),
+      t: Math.round(f[colBase + SOA_COL.TEAM * nUnits + i]),
+      p: Math.round(f[colBase + SOA_COL.PI * nUnits + i]),
+      c: Math.round(colors?.[Math.round(f[colBase + SOA_COL.PI * nUnits + i])] ?? 0),
+      a: Math.round(f[colBase + SOA_COL.ALIVE * nUnits + i]),
+      h: Math.round(f[colBase + SOA_COL.HP * nUnits + i]),
+      H: Math.round(f[colBase + SOA_COL.MAX_HP * nUnits + i]),
+      m: Math.round(f[colBase + SOA_COL.MANA * nUnits + i]),
+      M: Math.round(f[colBase + SOA_COL.MAX_MANA * nUnits + i]),
+      l: Math.round(f[colBase + SOA_COL.LEVEL * nUnits + i]),
+      mv: Math.round(f[colBase + SOA_COL.MOVING * nUnits + i]),
+    };
+  }
+  return ents;
+}
+
+/**
+ * 从 SOA ArrayBuffer 读 header + 玩家资源 + 导弹 + 事件，
+ * 供渲染层与 HUD 使用（不返回 ents，避免与 snapshotFromBinary 混淆）。
+ */
+export function snapshotHeader(buf) {
+  const f = new Float32Array(buf);
+  return {
+    tick: Math.round(f[0]),
+    nowMs: Math.round(f[1]),
+    nUnits: Math.round(f[2]),
+    nMissiles: Math.round(f[3]),
+    nEvents: Math.round(f[4]),
+  };
+}
+
 /**
  * What a view built for itself, as against what it borrows.
  *

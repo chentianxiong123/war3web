@@ -396,4 +396,25 @@ export class Room {
     const s = JSON.stringify(o);
     for (const p of this.players.values()) if (p.ws && p.ws.readyState === 1) p.ws.send(s);
   }
+
+  // ---- M5: 二进制 SOA 快照通道 ----
+  // WebSocket 二进制帧：客户端 ws.binaryType='arraybuffer' 后直接读 ArrayBuffer，
+  // 无 JSON 编解码。帧格式 = 1 字节 tag (Msg.SNAPSHOT_BIN 的 ASCII 首字节 's')
+  // + SOA Float32Array 的原始字节。tag 让客户端区分「二进制快照帧」与未来其他
+  // 二进制帧（事件流压缩、模型资源推送等），无需 JSON 头。
+  sendBinary(ws, tag, buf) {
+    if (!ws || ws.readyState !== 1) return;
+    const out = new Uint8Array(1 + buf.byteLength);
+    out[0] = tag.charCodeAt(0);
+    out.set(new Uint8Array(buf), 1);
+    ws.send(out);
+  }
+  broadcastBinary(tag, buf) {
+    const out = new Uint8Array(1 + buf.byteLength);
+    out[0] = tag.charCodeAt(0);
+    out.set(new Uint8Array(buf), 1);
+    for (const p of this.players.values()) {
+      if (p.ws && p.ws.readyState === 1) p.ws.send(out);
+    }
+  }
 }
