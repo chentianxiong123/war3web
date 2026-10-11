@@ -336,6 +336,20 @@ export class WasmBridge {
     };
   }
 
+  /** M7：world 权威 HP 覆盖 wasm。wasm 只跑运动学 + 自身普攻，HP 每 tick 被 world 值覆盖
+   *  以同步技能/物品/毒伤/治疗/触发的伤害（这些 world.damage() 会发但 wasm 没有对应实现）。
+   *  hp <= 0 走 sim_kill 路径。 */
+  setHp(id, hp) {
+    if (!this.eng || hp == null) return;
+    this.eng._sim_set_hp(id | 0, +hp);
+  }
+
+  /** M7：同步 world 侧的主动死亡（技能/触发/爆炸致死）到 wasm。binary 帧下一 tick 该单位消失。 */
+  kill(id) {
+    if (!this.eng) return;
+    this.eng._sim_kill(id | 0);
+  }
+
   /** 读事件队列（不消耗，不 reset）。 */
   getEvents(maxN = 8192) {
     const n = this.eng._sim_events_get(this._evBuf, maxN);

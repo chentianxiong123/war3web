@@ -1063,6 +1063,35 @@ double sim_heal(int id, double amount) {
   return u->hp - before;
 }
 
+/** M7：直接杀死单位（world killUnit 同步）。
+ *  清战斗/移动状态与死亡事件，binary 帧下一 tick 该单位即消失。
+ *  与 sim_damage 致死路径（1130-1148）等价，但无需击杀者，
+ *  供 room 层把 world 侧的主动死亡（技能/触发/爆炸）推过来用。 */
+void sim_kill(int id) {
+  if (id < 0 || id >= SIM_MAX) return;
+  SimUnit* u = &U[id];
+  if (!u->alive) return;
+  u->alive = 0;
+  u->deathCount = 1;
+  // 与 sim_damage 致死路径（1130-1148）等价：清前摇避免尸体还在"准备攻击"
+  u->attackWindupRemaining = 0;
+  u->attackWindupTarget = -1;
+  u->atkTimer = 0;
+  ev_push(SIM_EV_DEATH, id, 0);
+}
+
+/** M7：world 权威 HP 覆盖（唯一权威是 world.damage()，含技能/物品/毒伤/治疗/触发）。
+ *  wasm 只负责运动学（位置/朝向/移动）与自身普攻结算；HP 每 tick 被本函数覆盖，
+ *  避免「wasm 已算普攻伤害，再同步 world 的同一次 dmg 事件」造成双倍扣血。
+ *  hp <= 0 走 sim_kill 路径；否则 clamp 到 [0, maxHp]。 */
+void sim_set_hp(int id, double hp) {
+  if (id < 0 || id >= SIM_MAX) return;
+  SimUnit* u = &U[id];
+  if (!u->alive) return;
+  if (hp <= 0) { sim_kill(id); return; }
+  u->hp = fmin(hp, u->maxHp);
+}
+
 /** buff 过期清理（step 2602）。返回过期个数。 */
 static int expire_buffs(void) {
   int n = 0;

@@ -14,6 +14,48 @@ import path from 'node:path';
 // wasm 认识的 buff kind 名（用于判断 world.js 的 buff 能否桥接到 wasm）
 const SIM_BUFF_KINDS = new Set(Object.keys(SIM_BUF_KINDS));
 
+// M7：从 world.js 的 TYPES（data/unittypes.json 全表）派生 wasm 能识别的单位类型表。
+// 之前的 WasmBridge 只认识硬编码的 11 种（hfoo/hwat/hpea/htow/ngol/baam/bhut/twog/hbar/hars/harm），
+// 英雄、野怪、建筑全 spawn 失败 → binary 快照只有玩家几个单位，野怪/英雄走 JSON 通道（位置打架/抽搐）。
+// 生成规则：isBuilding → kind 4（金矿=2、大厅=3 特例）；isHero 或 attacksEnabled>0 且 dmgBase>0 → kind 0；
+// 其余（农民/浣熊/装饰）→ kind 1。武器：weaponType 含 Missile 类 → 远程（weaponKind=1），Metal/Slice 类 → 近战（0）。
+function buildSimUnitTypes() {
+  const KIND_REF = { ngol: 2, htow: 3 };
+  const MELEE_WT = /Metal|Chop|Slice|Blunt|Punch|Claw|Spear|Fang|Bite|Gore/i;
+  const out = {};
+  for (const [key, t] of Object.entries(TYPES)) {
+    const isB = t.isBuilding === 1 || t.isBuilding === true || t.isBuilding === '1';
+    const isHero = t.isHero === 'True' || t.isHero === true || t.isHero === 1;
+    const attacks = Number(t.attacksEnabled) > 0;
+    const hasDmg = Number(t.dmgBase) > 0 || Number(t.dmgDice) > 0;
+    const fights = !isB && (isHero || (attacks && hasDmg));
+    const wt = String(t.weaponType || '_');
+    const ranged = wt !== '_' && wt !== '' && !MELEE_WT.test(wt);
+    out[key] = {
+      kind: isB ? (KIND_REF[key] ?? 4) : (fights ? 0 : 1),
+      isFight: fights,
+      isBuilding: isB,
+      buildTime: Number(t.buildTime) || 0,
+      moveSpeed: Number(t.moveSpeed) || 0,
+      radius: Number(t.collision) || 16,
+      hp: Number(t.hp) || 100,
+      armor: Number(t.armor) || 0,
+      armorType: String(t.armorType) || 'medium',
+      dmgBase: Number(t.dmgBase) || 0,
+      dmgDice: Number(t.dmgDice) || 0,
+      dmgSides: Number(t.dmgSides) || 1,
+      atkCd: Number(t.atkCd) || 0,
+      atkRange: Number(t.atkRange) || 90,
+      attackPoint: Number(t.attackPoint) || 0,
+      attackBackswing: Number(t.attackBackswing) || 0,
+      atkType: String(t.atkType) || 'normal',
+      weaponKind: ranged ? 1 : 0,
+      missileSpeed: Number(t.missileSpeed) || 0,
+    };
+  }
+  return out;
+}
+
 const ROOT = path.resolve(import.meta.dirname, '..');
 export const GAME = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/game.json'), 'utf8'));
 
@@ -48,7 +90,7 @@ export class Room {
     // M4 阶段 4：wasm 桥 —— world.js 是权威源（能力/触发器/物品），
     // wasm 跑模拟核心（移动/攻击/经济/buff 效果）。两套通过 wasm_bridge
     // 的 spawn/applyBuff/step API 桥接，binary 通道推 SOA 快照给客户端。
-    this.bridge = new WasmBridge();
+    this.bridge = new WasmBridge({ unitTypes: buildSimUnitTypes() });
     this.wasmReady = false;
     // 单位 ↔ wasm 槽位映射：worldUnitId <-> wasmSlot
     this.wasmSlotOf = new Map();
@@ -378,6 +420,20 @@ export class Room {
     }
   }
 
+  /** M7：world 权威 HP 每 tick 覆盖 wasm。
+   *  world.damage() 是唯一权威（普攻/技能/物品/毒伤/治疗/触发都在这里结算）。
+   *  wasm 只跑运动学（位置/朝向/移动）与自身普攻结算；HP 每 tick 追平 world 值。
+   *  这样避免「wasm 已算普攻伤害、再同步 world 同一次 dmg 事件」造成双倍扣血，
+   *  也自动覆盖 world 侧的主动治疗/毒伤/技能伤害。 */
+  _syncWorldHp() {
+    const W = this.world;
+    for (const [id, slot] of this.wasmSlotOf) {
+      const w = W.units.get(id);
+      if (!w || !w.alive) continue;
+      if (Number.isFinite(w.hp)) this.bridge.setHp(slot, w.hp);
+    }
+  }
+
   start() {
     this.world = new World();
     this.eng = new JassEngine(this.world);
@@ -510,6 +566,7 @@ export class Room {
   /** M6: 向单个客户端发送 slots registry（新玩家加入时立即推送，不等下一个 tick）。 */
   sendSlots(p) {
     if (!p.ws || p.ws.readyState !== 1) return;
+    if (this.wasmSlots.size === 0) return;   // M7: 空 registry 不推送（客户端会等 _broadcastSlots）
     const slots = {};
     for (const [slot, info] of this.wasmSlots) slots[slot] = info;
     const colors = [];
@@ -562,6 +619,8 @@ export class Room {
         this.bridge.flushOrders();
         // M6: flush 会自己 A*，这里用 world 已算好的路径整段覆盖 → 逐 tick 同轨
         this._applyWorldPaths();
+        // M7: world HP 权威覆盖 wasm（普攻/技能/物品/毒伤/治疗/触发每 tick 追平）
+        this._syncWorldHp();
         this.bridge.step(1 / TICK_HZ);
       }
       const scriptEvents = this.eng.flushClientEvents();
@@ -585,6 +644,13 @@ export class Room {
       // 15 Hz 节流（否则每 67ms 才跳一次位置 = 用户看到的"一抽一抽/掉 tick"）。
       // JSON 快照才按 clientBinaryReady 降频（元数据刷新）。
       if (this.wasmReady) {
+        // M7: world 主动死亡（技能/触发/爆炸）同步 wasm，binary 帧下一 tick 该单位消失
+        for (const ev of all) {
+          if (ev.t === 'death') {
+            const slot = this.wasmSlotOf.get(ev.id);
+            if (slot != null) this.bridge.kill(slot);
+          }
+        }
         try { this._broadcastWasmSnapshot(); }
         catch (e) { console.error('wasm snapshot broadcast failed:', e.message); }
       }
