@@ -63,6 +63,7 @@ typedef struct {
   double gatherUntilMs;      // 挖矿完成毫秒
 } SimUnit;
 static SimUnit U[SIM_MAX];
+static long long SIM_NOW;   // tick 计数（模拟 world.now）
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
 
 // ---- 导弹表（阶段 2：stepMissiles）----
@@ -70,16 +71,34 @@ static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（
 // deadline 兜底、命中调 onHit=land(sim_damage)。
 #define SIM_MISSILE_MAX 256
 typedef struct {
-  int active, srcId, targetId;
+  int active, srcId, targetId, fx;
   double x, y, dx, dy, speed, deadlineMs;
   double amount;        // 发射时已 roll 的伤害（JS releaseAttack 先 roll）
   int atkTypeIdx;
 } SimMissile;
 static SimMissile M[SIM_MISSILE_MAX];
+static int FXSEQ;
 static int DMG_TABLE_SET;
 
 // ---- 经济（阶段 2）：玩家资源（JS player.gold）----
 static double GOLD[16];
+
+// ---- 事件桥（阶段 2 收尾）：JS emit 的 C 侧对等物 ----
+// attack（windup 开始）/ missileEnd / death 写入固定环缓冲；JS 侧
+// sim_events_reset + sim_events_get 读取（对齐 emit 时序）。
+#define SIM_EVENT_MAX 8192
+#define SIM_EV_ATTACK 0
+#define SIM_EV_MISSILE_END 1
+#define SIM_EV_DEATH 2
+typedef struct { int tick, type, a, b; } SimEvent;
+static SimEvent EV[SIM_EVENT_MAX];
+static int EVN;
+static void ev_push(int type, int a, int b) {
+  // tick 用 0-based 步序（对齐 JS 侧 `for (let t=0) { step(); ... }` 的基准）
+  if (EVN < SIM_EVENT_MAX) { EV[EVN].tick = (int)(SIM_NOW - 1); EV[EVN].type = type; EV[EVN].a = a; EV[EVN].b = b; EVN++; }
+}
+void sim_events_reset(void) { EVN = 0; }
+int sim_event_count(void) { return EVN; }
 
 /** 伤害倍率表装载（sim_test 从 gameplay.json 读入；JS 侧 HEAPF32 写 → float* 读）。 */
 void sim_set_dmg_table(const float* tbl) {
@@ -105,6 +124,7 @@ void sim_spawn(int id, double x, double y, double facing, double speed, double r
 }
 void sim_clear_all(void) {
   for (int i = 0; i < SIM_MAX; i++) { U[i].alive = 0; U[i].nPath = 0; }
+  EVN = 0; FXSEQ = 0; SIM_NOW = 0;
   OCN = 0;
 }
 
@@ -502,8 +522,6 @@ int sim_run_move(double sx, double sy, double tx, double ty,
 // （快路径 canAdvance 含实体 + 慢路径 occupancy）；sim_tick：全单位 stepMove
 // move 分支（turnToward 预算 + canAdvance 实体段 + 撞墙 250ms 冷却重寻路）。
 
-static long long SIM_NOW;   // tick 计数（模拟 world.now）
-
 /** movementPath（含实体阻挡）→ 设路径；返回 1 成功 / -1 无路径。 */
 int sim_order_move(int id, double tx, double ty) {
   SimUnit* u = &U[id];
@@ -688,7 +706,7 @@ static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   dmg *= armor_factor(t->armor);
   t->hp -= dmg;
   t->dmgCount++;
-  if (t->hp <= 0) { t->alive = 0; t->deathCount = 1; }
+  if (t->hp <= 0) { t->alive = 0; t->deathCount = 1; ev_push(SIM_EV_DEATH, (int)(t - U), 0); }
   return dmg;
 }
 
@@ -704,7 +722,7 @@ static void release_attack(SimUnit* u, SimUnit* t) {
     for (int i = 0; i < SIM_MISSILE_MAX; i++) {
       if (M[i].active) continue;
       const double dist = hypot(t->x - u->x, t->y - u->y);
-      M[i].active = 1; M[i].srcId = slot; M[i].targetId = tgt;
+      M[i].active = 1; M[i].srcId = slot; M[i].targetId = tgt; M[i].fx = ++FXSEQ;
       M[i].x = u->x; M[i].y = u->y; M[i].dx = t->x; M[i].dy = t->y;
       M[i].speed = u->missileSpeed;
       M[i].deadlineMs = SIM_NOW * (1000.0 / 30.0) + fmax(1500.0, (dist / u->missileSpeed) * 3000.0);
@@ -765,6 +783,7 @@ static void step_attack_unit(SimUnit* u, double dt) {
   u->atkTimer = fmax(u->atkCd, u->attackPoint + u->attackBackswing);   // speed mul 1
   u->attackWindupRemaining = u->attackPoint;
   u->attackWindupTarget = tgt;
+  ev_push(SIM_EV_ATTACK, (int)(u - U), tgt);   // JS emit({t:'attack', id:u, target:t})
 }
 
 /** 单单位 AI tick（stepAI 2656-2709 追击子集）：
@@ -814,6 +833,7 @@ static void step_missiles(double dt) {
     if (reach <= travel || nowMs > m->deadlineMs) {
       m->x = aimX; m->y = aimY;
       m->active = 0;
+      ev_push(SIM_EV_MISSILE_END, m->fx, 0);   // JS emit({t:'missileEnd', fx})
       // onHit：射手存活才结算（src 阵亡则导弹空耗）
       const SimUnit* s = &U[m->srcId];
       if (s->alive && t && t->alive) sim_damage(m->srcId, m->targetId, m->amount, m->atkTypeIdx);
@@ -872,10 +892,9 @@ static int walk_spot_near(double cx, double cy, SimUnit* u, double* ox, double* 
   return 0;
 }
 
-/** 农民采集 tick（stepGathers 1342-1388 子集：hpea 且玩家 0/1）。
- *  toMine →(近矿140) mining 1.8s → toBase →(近基 280 或 idle 无路径) +10 金 → 循环。 */
-void sim_econ_step(double dt) {
-  SIM_NOW++;
+/** 农民采集状态机（stepGathers 1342-1388 子集：hpea 且玩家 0/1；不含 SIM_NOW/移动推进，
+ *  供 sim_econ_step 与 sim_step 复用）。 */
+static void gather_pass(void) {
   const double nowMs = SIM_NOW * (1000.0 / 30.0);
   for (int id = 0; id < SIM_MAX; id++) {
     SimUnit* u = &U[id];
@@ -929,10 +948,40 @@ void sim_econ_step(double dt) {
       }
     }
   }
-  // 农民移动推进（stepMove 子集：仅经济单位走路径）
+}
+
+/** 农民采集 tick（独立入口，供 econ_test：采集状态机 + 农民移动推进）。 */
+void sim_econ_step(double dt) {
+  SIM_NOW++;
+  gather_pass();
   for (int id = 0; id < SIM_MAX; id++) {
     SimUnit* u = &U[id];
     if (!u->alive || u->kind != 1) continue;
     step_move_unit(u, id, dt);
+  }
+}
+
+/** 读事件到 out（float4 对：tick,type,a,b），返回条数。 */
+int sim_events_get(float* out, int maxN) {
+  const int n = EVN < maxN ? EVN : maxN;
+  for (int i = 0; i < n; i++) {
+    out[4 * i] = (float)EV[i].tick; out[4 * i + 1] = (float)EV[i].type;
+    out[4 * i + 2] = (float)EV[i].a; out[4 * i + 3] = (float)EV[i].b;
+  }
+  return n;
+}
+
+/** 全量 tick（M4 目标 wasm_step）：gather → missiles → 单位循环（AI/move/attack）。
+ *  对齐 JS step()：stepGathers(发单) → stepMissiles → 单位循环。 */
+void sim_step(double dt) {
+  SIM_NOW++;
+  gather_pass();
+  step_missiles(dt);
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive) continue;
+    step_ai_unit(u, id);         // stepAI
+    step_move_unit(u, id, dt);   // stepMove
+    step_attack_unit(u, dt);     // stepAttack
   }
 }
