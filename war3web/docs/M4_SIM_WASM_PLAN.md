@@ -240,6 +240,50 @@
   server 侧预存断言，与本 diff 无关——`git status` 确认未触碰 `server/`，
   唯一改动的共享产物 `goldens/econ_trace.json` 只被通过的 `econ_test` 读取。
 
+#### 2.12 命令输入通道（阶段 4 收尾第一步）——3/3 场景全过 ✅
+- **动机**：阶段 3 做完后 wasm 只有输出（`sim_step` 推进 + `sim_snapshot`/事件桥
+  出队），没有输入——玩家命令无法进 C 模拟，「删 JS 双实现」无从下手。
+  本阶段补上对偶的输入环，落在 master plan M5「输入（玩家命令/事件）→ 导入 wasm
+  heap 的 input buffer」的位置。
+- **`sim_order_push(unitId, op, x, y, targetId)` / `sim_order_count` /
+  `sim_order_clear` / `sim_flush_orders`**：固定命令环 `ORDS[SIM_ORD_MAX=256]`，
+  JS 侧把命令入队，`sim_flush_orders` 在 `sim_step` 之前一次性应用
+  （对齐 JS：命令到达即生效，不跨 tick 排队）。满环丢弃返回 0。
+- **op 枚举**：`SIM_ORD_STOP=0` `HOLD=1` `MOVE=2` `ATTACK_MOVE=3` `ATTACK=4`，
+  语义逐条对齐 `world.js order()`（1135-1232）：stop/hold（1181-1182）清路径回
+  idle 并取消攻击 windup；move/attackMove（1222-1230）走 `sim_order_move` 含实体
+  寻路、不可达则退回 idle；attack（1212-1220）固定目标，目标无效或同队拒绝
+  （`weaponFor` 的可打性子集）。
+- **`orderType` 扩展**：0=idle（自动获取）1=attack 3=move 4=attackMove。
+  `step_ai_unit` 对 3/4 不做 `acquisitionRange` 全距追猎——显式移动命令不离开
+  目标点，射程内敌人由 `step_attack_unit` 在 `atkRange+40` 内接战，路径走空
+  才回 idle(0)（对齐 JS stepMove 2799-2810：move 只在到达点停下）。
+  stop/hold 归并到 0：JS 里两者在 stepMove 分支下同为「无路径」，行为等价。
+- **`sim_set_gives_bounty(pi, on)` + `SIM_EV_BOUNTY`**：阶段 3 只结算金不发事件，
+  原因是 bounty 浮字受 `owner.givesBounty` 门控（地图 init 给 Player 0..7 开启）。
+  本阶段把该玩家槽状态显式建模为 `GIVES_BOUNTY[16]`，条件满足时 push
+  `{a=killer 玩家槽, b=gold}`，补齐 awardKill（world.js 901-903）最后一环。
+- **`sim_clear_all` 增 `ORN=0`**：命令环与事件环、经济资源、单位哨兵字段一起
+  归零，跨场景不残留。
+- **CMakeLists** 增导出 `_sim_set_gives_bounty,_sim_order_push,_sim_order_count,
+  _sim_order_clear,_sim_flush_orders`。
+- **新 golden tools/order_golden.mjs** → `goldens/order_trace.json`：三场景
+  ×多检查点（`move` 单 hfoo 走 400 单位；`attack` hwat/hfoo 显式 attack 指定
+  目标而非自动获取；`stop` 追击途中给 hfoo 下 stop），录 units[x,y,facing,hp,
+  alive,mv] + 累计 attack/death/bounty 事件 + `unitBounty`/`level`/`pl`。
+- **新测试 tools/order_test.mjs（阶段 4 门禁）**：C 侧按 golden 的命令时刻表
+  `sim_order_push` + `sim_flush_orders` 回放，`sim_snapshot` 逐检查点对账。
+  **结果 3/3 全过**：`move` Δx0 Δy0 Δf0.00 ΔHP0；`attack` ΔHP≤10、50/50 攻击、
+  首击 Δ1、死亡 Δ1、bounty [1055,0,20] 金额精确；`stop` ΔHP≤5、死亡 Δ45（=容差）、
+  bounty 金额精确。
+- **门禁抓出的问题**：① golden 里 `bounty` 字段名双用（每单位赏金与赏金事件
+  数组同名，后者覆盖前者）导致 C 侧拿到 0 走了 `10+level*4` 回退（18≠20）——
+  改名 `unitBounty`；② 事件环是**全量非消费式**（`sim_events_get` 每次从 0 读到
+  EVN），在检查点循环里读会重复累积出 3 万条——改为循环内只比单位、末次统一读。
+  两者都是对账工具的口径问题，非 C 模拟缺口。
+- **回归**：combat 4/4、econ 全过、sim_step 4/4、snapshot 2/2、sim_test 全绿、
+  engine 114/114（零回归）。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
@@ -301,7 +345,7 @@ server tick
 | 1 | 移动/寻路/碰撞进 WASM | 1-2 周 | ✅ |
 | 2 | 弹道/攻击/经济进 WASM | 1-2 周 | ✅（全量 tick + 事件桥） |
 | 3 | SOA 快照 + 对账门禁 | 1 周 | ✅（见 2.11） |
-| 收尾 | 删 JS 双实现/开关切换 | 1 周 | 待开始 |
+| 收尾 | 删 JS 双实现/开关切换 | 1 周 | 进行中（命令输入通道 ✅，见 2.12） |
 
 ## 6. 风险与对策
 

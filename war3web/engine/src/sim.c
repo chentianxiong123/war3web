@@ -93,6 +93,7 @@ static double GOLD[16];
 #define SIM_EV_ATTACK 0
 #define SIM_EV_MISSILE_END 1
 #define SIM_EV_DEATH 2
+#define SIM_EV_BOUNTY 3      // a=killer 玩家槽, b=gold（对齐 emit {t:'bounty'}）
 typedef struct { int tick, type, a, b; } SimEvent;
 static SimEvent EV[SIM_EVENT_MAX];
 static int EVN;
@@ -102,6 +103,26 @@ static void ev_push(int type, int a, int b) {
 }
 void sim_events_reset(void) { EVN = 0; }
 int sim_event_count(void) { return EVN; }
+
+// ---- 玩家赏金开关（JS player.givesBounty）----
+// 地图 init 给 Player 0..7 开启，决定击杀是否发 bounty 浮字事件（金照发）。
+static int GIVES_BOUNTY[16];
+
+// ---- 命令输入通道（阶段 4 收尾：JS → C，与事件输出环对偶）----
+// JS 侧把玩家/脚本命令 push 进 wasm heap 的命令环，flush 时按
+// world.js order()（1135-1232）的语义应用到单位。M5 的
+// 「输入（玩家命令/事件）→ 导入 wasm heap 的 input buffer」落到这里。
+#define SIM_ORD_MAX 256
+enum {
+  SIM_ORD_STOP = 0,        // stop/halt → idle，清路径
+  SIM_ORD_HOLD = 1,        // hold → 原地（仍会打射程内敌人）
+  SIM_ORD_MOVE = 2,        // move 到 (x,y)
+  SIM_ORD_ATTACK_MOVE = 3, // attackMove 到 (x,y)
+  SIM_ORD_ATTACK = 4,      // attack 目标单位 targetId
+};
+typedef struct { int unitId, op, targetId; double x, y; } SimOrder;
+static SimOrder ORDS[SIM_ORD_MAX];
+static int ORN;
 
 /** 伤害倍率表装载（sim_test 从 gameplay.json 读入；JS 侧 HEAPF32 写 → float* 读）。 */
 void sim_set_dmg_table(const float* tbl) {
@@ -135,6 +156,7 @@ void sim_clear_all(void) {
   }
   EVN = 0; FXSEQ = 0; SIM_NOW = 0;
   OCN = 0;
+  ORN = 0;
 }
 
 /** 实体阻挡列表（JS movementBlockers）：同类型 + blocksMovement + 扫掠矩形候选。
@@ -713,6 +735,66 @@ void sim_set_meta(int id, int playerIndex, double bounty, int level) {
   U[id].playerIndex = playerIndex; U[id].bounty = bounty; U[id].level = level;
 }
 
+// ------------------------------------------------------------------ 命令输入通道
+/** 装载玩家赏金开关（JS player.givesBounty；地图 init 给 Player 0..7 打开）。 */
+void sim_set_gives_bounty(int playerIndex, int on) {
+  if (playerIndex >= 0 && playerIndex < 16) GIVES_BOUNTY[playerIndex] = on ? 1 : 0;
+}
+
+/** 入队一条命令（op 见 SIM_ORD_*）；队列满则丢弃返回 0，成功返回 1。 */
+int sim_order_push(int unitId, int op, double x, double y, int targetId) {
+  if (ORN >= SIM_ORD_MAX) return 0;
+  SimOrder* o = &ORDS[ORN++];
+  o->unitId = unitId; o->op = op; o->x = x; o->y = y; o->targetId = targetId;
+  return 1;
+}
+int sim_order_count(void) { return ORN; }
+void sim_order_clear(void) { ORN = 0; }
+
+/** 应用队列中所有命令（world.js order 1135-1232 的移动/攻击子集）。
+ *  JS 侧命令到达即生效，故本函数在 sim_step 之前调用；
+ *  无效单位/非法目标静默丢弃（JS 同样 return false）。返回实际应用条数。 */
+int sim_flush_orders(void) {
+  const int n = ORN;
+  ORN = 0;
+  int applied = 0;
+  for (int i = 0; i < n; i++) {
+    const SimOrder* o = &ORDS[i];
+    if (o->unitId < 0 || o->unitId >= SIM_MAX) continue;
+    SimUnit* u = &U[o->unitId];
+    if (!u->alive) continue;
+    switch (o->op) {
+      case SIM_ORD_STOP:
+      case SIM_ORD_HOLD:
+        // stop/hold（1181-1182）：清路径回 idle、取消攻击 windup
+        u->orderType = 0; u->orderTargetId = -1; u->nPath = 0;
+        u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
+        break;
+      case SIM_ORD_MOVE:
+      case SIM_ORD_ATTACK_MOVE: {
+        // move/attackMove（1222-1230）：寻路到点；射程内仍会接战
+        u->orderType = (o->op == SIM_ORD_ATTACK_MOVE) ? 4 : 3;
+        u->orderTargetId = -1; u->atkTimer = 0;
+        u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
+        if (sim_order_move(o->unitId, o->x, o->y) < 0) { u->orderType = 0; break; }  // 不可达
+        u->goalX = o->x; u->goalY = o->y;
+        break;
+      }
+      case SIM_ORD_ATTACK:
+        // attack（1212-1220）：固定目标；目标无效或同队则拒绝（weaponFor 子集）
+        if (o->targetId < 0 || o->targetId >= SIM_MAX || !U[o->targetId].alive) continue;
+        if (U[o->targetId].team == u->team) continue;
+        u->orderType = 1; u->orderTargetId = o->targetId;
+        u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
+        break;
+      default:
+        continue;
+    }
+    applied++;
+  }
+  return applied;
+}
+
 /** 伤害结算（damage() 纯数值子集）。返回实际伤害。 */
 static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   SimUnit* t = &U[tgtId];
@@ -726,12 +808,17 @@ static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
     t->alive = 0; t->deathCount = 1;
     // awardKill（world.js 884-889）：击杀赏金归杀害者所属玩家。
     // 金额 = victim.bounty（bountyPlus）非零则用它，否则 10 + level*4。
-    // JS 的 bounty *事件*（浮字）另受 owner.givesBounty 门控——那是地图/玩家槽
-    // 状态（map init 给 Player 0..7 开启），尚未移植，故此处只结算金、不发事件。
+    // bounty 浮字事件（world.js 901-903）另需 victim 所属玩家开启 givesBounty
+    // （地图 init 给 Player 0..7 打开）——用 sim_set_gives_bounty 装载。
     if (srcId >= 0 && srcId < SIM_MAX && srcId != tgtId) {
       const SimUnit* src = &U[srcId];
-      if (src->playerIndex >= 0 && src->playerIndex < 16)
-        GOLD[src->playerIndex] += (t->bounty > 0 ? t->bounty : 10.0 + 4.0 * (double)t->level);
+      if (src->playerIndex >= 0 && src->playerIndex < 16) {
+        const double gold = (t->bounty > 0 ? t->bounty : 10.0 + 4.0 * (double)t->level);
+        GOLD[src->playerIndex] += gold;
+        if (t->playerIndex >= 0 && t->playerIndex < 16
+            && GIVES_BOUNTY[t->playerIndex] && gold > 0)
+          ev_push(SIM_EV_BOUNTY, src->playerIndex, (int)gold);
+      }
     }
     ev_push(SIM_EV_DEATH, (int)(t - U), 0);
   }
@@ -814,11 +901,18 @@ static void step_attack_unit(SimUnit* u, double dt) {
   ev_push(SIM_EV_ATTACK, (int)(u - U), tgt);   // JS emit({t:'attack', id:u, target:t})
 }
 
-/** 单单位 AI tick（stepAI 2656-2709 追击子集）：
- *  idle → 获取范围内扫描敌对最近 → attack；
- *  attack → 目标死亡回 idle；距离 > atkRange+radius 追击（目标记忆判据自动冷却），
- *  否则停（path 清空，原地打）。leash 跳过（战斗场景 home 附近）。 */
+/** 单单位 AI tick（stepAI 2656-2709 追击子集 + 显式命令）：
+ *  orderType 0=idle（获取范围内扫描敌对最近 → attack）
+ *             1=attack（目标死亡回 idle；距离 > atkRange+radius 追击）
+ *             3=move / 4=attackMove（显式移动命令，见下）
+ *  显式移动命令不离开目标点去追击：射程内敌人由 step_attack_unit 在
+ *  atkRange+40 内接战，路径走空才回 idle(0) 恢复 acquisitionRange 全距获取
+ *  （对齐 JS stepMove 2799-2810：move 只在到达点停下，不主动绕远追猎）。 */
 static void step_ai_unit(SimUnit* u, int id) {
+  if (u->orderType == 3 || u->orderType == 4) {
+    if (u->nPath == 0) u->orderType = 0;   // 到达 → idle（可获取）
+    return;
+  }
   if (u->orderType == 0) {
     int best = -1; double bd = 1e18;
     for (int i = 0; i < SIM_MAX; i++) {
