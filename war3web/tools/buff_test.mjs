@@ -138,7 +138,6 @@ const hpFinalC = Math.round(eng.HEAPF32[sg >> 2]);
 // 对比 HP 曲线（容差 ±3）
 let regenOk = true;
 const jsRegenSamples = golden.regen.hpSamples;
-console.log("    DEBUG regen hpSamples:", JSON.stringify(jsRegenSamples.slice(0,3)));
 for (let i = 0; i < jsRegenSamples.length; i++) {
   const cHp = hpSamplesC2[i]?.[1] ?? -1;
   const jsHp = jsRegenSamples[i][1];
