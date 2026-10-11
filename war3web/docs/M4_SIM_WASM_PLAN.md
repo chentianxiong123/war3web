@@ -111,6 +111,28 @@
   **melee_apart / melee_3v1 标注 pending**：差异根源是 stepAI 层（自动追击移动/
   目标选择遍历序），战斗核心本身已对齐——下一步移植 stepAI 子集。
 
+#### 2.7 stepAI 追击子集 C 移植（2b704a6）——3/3 场景硬门禁全过 ✅
+- **`engine/src/sim.c` 新增**：
+  - SimUnit AI 字段：`orderType`（0=idle 1=attack）、`orderTargetId`、`acquisitionRange`
+    （hfoo 实测 500）、`homeX/homeY`；sim_spawn_fight 初值 idl/nearest。
+  - `step_ai_unit`（stepAI 2656-2709 追击子集）：idle → 获取范围(500)内敌对最近 →
+    attack；attack → 目标死亡回 idle；距离 > atkRange+radius 则追击，否则停（path 清空原地打）。
+  - `sim_route`（= JS routeUnit = movementPath(u,x,y,[])）：**无实体阻挡**的追击寻路，
+    与玩家订单的 `sim_order_move`（含实体阻挡）区分开。
+  - `sim_combat_step` 顺序补齐为 **stepAI → stepMove → stepAttack**（对齐单位循环）。
+- **根因逐轮**：
+  1. goalX/goalY 快照判据——追击每 tick 重寻路会重置 path 卡起点（token 记忆）；
+  2. 目标选择——JS stepAttack 用 AI 固定目标(order.targetId)，C 每 tick 重扫导致换目标
+     （攻击中不换目标）；改为固定目标优先、失效才自动扫描后 3v1 对齐；
+  3. 追击路径——仿真期玩家订单走 order_move（含实体），AI 追击走 routeUnit（无实体）
+     直连，改用 sim_route 后 melee_apart 首击 19=19。
+- **golden 修正**（combat_golden.mjs）：createUnit 参数错序(y 传成 0)致追进死区洒掉一批
+  pos；原程序未设 `w.jass` → playerOf 全 undefined → hostile 全真 → 3v1 伪场景。
+  注入最小 players 表（同 team 不互攻）+ eventId/fire/triggers stub 后真实语义锁定。
+- **`tools/combat_test.mjs` 全场景硬门禁**：死亡 Δ≤45、首击 Δ≤3、攻击数 Δ≤6、HP 曲、
+  首死 id——**melee_close 死亡1532/JS1573、melee_apart 1551/1592、melee_3v1 544/511**
+  三场景全过。引擎回归 114/114、sim_test 全绿。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
