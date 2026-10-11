@@ -179,6 +179,8 @@ export class HeroPreview {
     this.spin += dt * this.spinRate;
     v.root.rotation.y = this.spin;
     v.mixer?.update(dt);
+    // WebGPU 后端可能还没初始化完，跳过早渲染帧
+    if (this.r.renderer?.isWebGPURenderer && !this.r.renderer.backend?.device) return;
     this.r.renderer.render(this.r.scene, this.r.camera);
   }
 
