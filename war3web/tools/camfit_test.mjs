@@ -52,7 +52,7 @@ await page.waitForFunction(() => !document.getElementById('hud').classList.conta
 await new Promise((r) => setTimeout(r, 9000));      // let the creeps spawn
 
 const out = await page.evaluate(() => {
-  const { view } = window.FOC;
+  const { view } = window.WAR3;
   const p = view.camTarget.clone().project(view.camera);
   const frac = (1 - p.y) / 2;                       // 0 at the top of the screen
 

@@ -13,7 +13,7 @@
 // client the unit has the buff at all, and the client has to hang the model off
 // the right bone and take it down again.
 //
-//   FOC_DEBUG=1 PORT=8077 node server/index.js &
+//   WAR3_DEBUG=1 PORT=8077 node server/index.js &
 //   node tools/buffart_test.mjs
 import puppeteer from 'puppeteer-core';
 import { CHROME } from './chrome.mjs';

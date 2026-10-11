@@ -19,7 +19,7 @@ OUT = 'war3_extracted'
 WEB = 'assets/sounds'
 # How many encode failures are tolerable before the run is called broken. The
 # archives do hold the occasional malformed clip; they do not hold hundreds.
-FLOOR = int(os.environ.get('FOC_AUDIO_FAIL_FLOOR', '20'))
+FLOOR = int(os.environ.get('WAR3_AUDIO_FAIL_FLOOR', '20'))
 _gd = None
 
 

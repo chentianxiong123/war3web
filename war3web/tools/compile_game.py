@@ -228,7 +228,7 @@ def ability(aid):
                 # Ability art comes from the table, which reads Warcraft III's
                 # own Units\*AbilityFunc.txt and lays the map's overrides on top.
                 # Reading only the map's `mods` here saw art for 13 of 130 hero
-                # abilities, because FOC almost always overrides just the icon.
+                # abilities, because WAR3 almost always overrides just the icon.
                 effectModel=(find_model(_art(gate, 'effect'))
                              or find_model(_art(gate, 'target'))
                              or find_model(_art(gate, 'caster'))
@@ -375,7 +375,7 @@ cam = re.search(r'SetCameraBounds\((-?[\d.]+)\+[^,]+,(-?[\d.]+)\+[^,]+,(-?[\d.]+
 bounds = dict(minX=float(cam.group(1)), minY=float(cam.group(2)),
               maxX=float(cam.group(3)), maxY=float(cam.group(4))) if cam else None
 
-# hero voice lines: FOCS names its imported mp3s after the character
+# hero voice lines: the map names its imported mp3s after the character
 VOICE_PREFIX = {
  'Goku': ['goku'], 'Naruto Uzumaki': ['naruto', 'n'], 'Sasuke Uchiha': ['saske'],
  'Ichigo Kurosaki': ['ich', 'ic'], 'Kikyo': ['kikyo'], 'Lina Inverse': ['lina'],

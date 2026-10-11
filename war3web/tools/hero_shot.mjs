@@ -41,11 +41,11 @@ await page.evaluate((want) => {
 }, process.env.HERO || '');
 await new Promise((r) => setTimeout(r, 600));
 await page.$eval('#btnReady', (x) => x.click());
-await page.waitForFunction(() => window.FOC && window.FOC.S.phase === 'playing', { timeout: 60000 });
+await page.waitForFunction(() => window.WAR3 && window.WAR3.S.phase === 'playing', { timeout: 60000 });
 await new Promise((r) => setTimeout(r, 11000));
 
 const info = await page.evaluate(({ zoom, pitch }) => {
-  const { view, S } = window.FOC;
+  const { view, S } = window.WAR3;
   const me = S.ents.get(S.hero?.id);
   if (!me) return { error: 'no hero' };
   // sit close to the hero's own feet, which is where the ground art lives
@@ -78,7 +78,7 @@ const png = await page.evaluate(async ({ w, h }) => {
   // the game page does not expose three, so pull it in by URL -- the importmap
   // only covers module scripts and this runs as a classic one
   const THREE = await import('/three/build/three.module.js');
-  const view = window.FOC.view;
+  const view = window.WAR3.view;
   const r = view.renderer;
   const rt = new THREE.WebGLRenderTarget(w, h);
   view.camera.aspect = w / h; view.camera.updateProjectionMatrix();

@@ -17,7 +17,7 @@ import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { CHROME } from './chrome.mjs';
 
-process.env.FOC_REJOIN_GRACE_MS = '400';
+process.env.WAR3_REJOIN_GRACE_MS = '400';
 const { Room } = await import('../server/room.js');
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -118,9 +118,9 @@ await page.waitForFunction(() => document.getElementById('loading').classList.co
 await page.evaluate(() => { document.getElementById('btnReady').click(); });
 await page.waitForFunction(() => !document.getElementById('hud').classList.contains('hidden'), { timeout: 60000 });
 await wait(5000);
-const before = await page.evaluate(() => ({ you: window.FOC.S.you, ents: window.FOC.S.ents.size, token: window.FOC.net.token }));
+const before = await page.evaluate(() => ({ you: window.WAR3.S.you, ents: window.WAR3.S.ents.size, token: window.WAR3.net.token }));
 check('a live client holds its token in a running match', !!before.token && before.ents > 0, JSON.stringify(before));
-await page.evaluate(() => window.FOC.net.ws.close());
+await page.evaluate(() => window.WAR3.net.ws.close());
 await wait(300);
 const shown = await page.evaluate(() => !document.getElementById('disconnected').classList.contains('hidden'));
 check('closing the socket puts the notice up', shown);
@@ -128,10 +128,10 @@ let back2 = null;
 for (let i = 0; i < 40 && !(back2 && back2.open && back2.hidden); i++) {
   await wait(250);
   back2 = await page.evaluate(() => ({
-    open: window.FOC.net.ws?.readyState === 1,
+    open: window.WAR3.net.ws?.readyState === 1,
     hidden: document.getElementById('disconnected').classList.contains('hidden'),
-    you: window.FOC.S.you, ents: window.FOC.S.ents.size,
-    phase: window.FOC.S.phase, hud: !document.getElementById('hud').classList.contains('hidden'),
+    you: window.WAR3.S.you, ents: window.WAR3.S.ents.size,
+    phase: window.WAR3.S.phase, hud: !document.getElementById('hud').classList.contains('hidden'),
     log: document.getElementById('log').textContent }));
 }
 check('the client reconnects on its own and takes the notice down', !!back2 && back2.open && back2.hidden, JSON.stringify({ open: back2?.open, hidden: back2?.hidden }));

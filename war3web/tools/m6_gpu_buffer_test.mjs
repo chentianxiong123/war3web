@@ -42,7 +42,7 @@ const M5_MAX_UNITS = 512;
 // ---- 启动 war3web server（提供 /three/ 和 /js/ 静态资源）----
 const server = spawn(process.execPath, ["server/index.js"], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), FOC_DEBUG: "1" },
+  env: { ...process.env, PORT: String(PORT), WAR3_DEBUG: "1" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 server.stderr.on("data", (d) => {

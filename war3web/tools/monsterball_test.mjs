@@ -160,7 +160,7 @@ const page = await browser.newPage();
 const errs = [];
 page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
-await page.evaluateOnNewDocument(() => localStorage.setItem('focs.name', 'Ball'));
+await page.evaluateOnNewDocument(() => localStorage.setItem('war3web.name', 'Ball'));
 await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
 await page.waitForFunction(() => !document.getElementById('lobby').classList.contains('hidden'),
                            { timeout: 60000 });
@@ -176,7 +176,7 @@ await page.waitForFunction(() => !document.getElementById('hud').classList.conta
 await wait(2000);
 
 const out = await page.evaluate(() => {
-  const { ui, S, net } = window.FOC;
+  const { ui, S, net } = window.WAR3;
   const sent = [];
   const real = net.send.bind(net);
   net.send = (m) => { sent.push(m); };            // catch it rather than play a match

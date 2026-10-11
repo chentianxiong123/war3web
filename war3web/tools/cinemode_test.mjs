@@ -54,7 +54,7 @@ const before = await shape();
 check('the interface is up and the bars are off screen',
       !before.cls && before.hudOpacity === 1 && before.topBottom <= 0 && before.botTop >= before.h,
       JSON.stringify(before));
-await page.evaluate(() => { window.FOC.S.cinematic = true; window.FOC.ui.setCinematic(true, 0.2); });
+await page.evaluate(() => { window.WAR3.S.cinematic = true; window.WAR3.ui.setCinematic(true, 0.2); });
 await wait(600);
 const during = await shape();
 check('cinematic mode fades the interface out', during.cls && during.hudOpacity === 0, `opacity ${during.hudOpacity}`);
@@ -65,8 +65,8 @@ check('and closes letterbox bars in from both edges',
 // control is off: a hotkey that would send an order sends nothing
 await page.evaluate(() => {
   window.__sent = [];
-  const orig = window.FOC.net.send.bind(window.FOC.net);
-  window.FOC.net.send = (m) => { window.__sent.push(m.t); orig(m); };
+  const orig = window.WAR3.net.send.bind(window.WAR3.net);
+  window.WAR3.net.send = (m) => { window.__sent.push(m.t); orig(m); };
 });
 const press = (key) => page.evaluate((k) => {
   addEventListener('keydown', () => {}, { once: true });
@@ -76,7 +76,7 @@ await press('h');
 await wait(200);
 const sentIn = await page.evaluate(() => window.__sent.filter((t) => t === 'hold').length);
 check('a hold order pressed during the cinematic never leaves the client', sentIn === 0, `${sentIn} sent`);
-await page.evaluate(() => { window.FOC.S.cinematic = false; window.FOC.ui.setCinematic(false, 0.2); });
+await page.evaluate(() => { window.WAR3.S.cinematic = false; window.WAR3.ui.setCinematic(false, 0.2); });
 await wait(600);
 await press('h');
 await wait(200);
@@ -87,7 +87,7 @@ check('the interface and the bars come back', !after.cls && after.hudOpacity ===
 
 // ----------------------------------------------------------- queued animation
 const clips = await page.evaluate(() => {
-  const V = window.FOC.view, id = window.FOC.S.hero?.id;
+  const V = window.WAR3.view, id = window.WAR3.S.hero?.id;
   const v = id != null && V.views.get(id);
   if (!v || !v.actions) return null;
   const once = [...v.actions.keys()].filter((k) => !/^(stand|walk|death|decay|birth)/.test(k));
@@ -99,24 +99,24 @@ if (clips && clips.once.length >= 2) {
   const [a, b] = clips.once;
   const msA = Math.ceil(clips.durs[a] * 1000) + 700;
   // queued: the second clip follows the first when it ends
-  await page.evaluate((id, a, b) => { const V = window.FOC.view; V.playUnitAnim(id, a); V.queueUnitAnim(id, b); }, clips.id, a, b);
+  await page.evaluate((id, a, b) => { const V = window.WAR3.view; V.playUnitAnim(id, a); V.queueUnitAnim(id, b); }, clips.id, a, b);
   await wait(250);
-  const mid = await page.evaluate((id) => window.FOC.view.views.get(id).current, clips.id);
+  const mid = await page.evaluate((id) => window.WAR3.view.views.get(id).current, clips.id);
   check('a scripted clip plays', mid === a, `${mid}`);
   // polled rather than waited out: the queued clip can be shorter than the
   // first, and by a fixed deadline it may already have ended and gone to stand
   let then = null;
   for (let t = 0; t < msA + 1500 && !(then && then.cur !== a); t += 50) {
     await wait(50);
-    then = await page.evaluate((id) => { const v = window.FOC.view.views.get(id); return { cur: v.current, q: v.queuedAnim }; }, clips.id);
+    then = await page.evaluate((id) => { const v = window.WAR3.view.views.get(id); return { cur: v.current, q: v.queuedAnim }; }, clips.id);
   }
   check('and the queued clip follows it when it ends', then && then.cur === b && then.q == null, JSON.stringify(then));
   // unqueued: the unit returns to its own stand rather than freezing
   const msB = Math.ceil(clips.durs[b] * 1000) + 700;
   await wait(msB);
-  await page.evaluate((id, a) => window.FOC.view.playUnitAnim(id, a), clips.id, a);
+  await page.evaluate((id, a) => window.WAR3.view.playUnitAnim(id, a), clips.id, a);
   await wait(msA);
-  const back = await page.evaluate((id) => { const v = window.FOC.view.views.get(id); return { cur: v.current, scripted: v.scripted, running: !!v.currentAction?.isRunning() }; }, clips.id);
+  const back = await page.evaluate((id) => { const v = window.WAR3.view.views.get(id); return { cur: v.current, scripted: v.scripted, running: !!v.currentAction?.isRunning() }; }, clips.id);
   check('a scripted one-shot with nothing queued returns to stand',
         /^stand/.test(back.cur) && back.scripted === false && back.running, JSON.stringify(back));
 }

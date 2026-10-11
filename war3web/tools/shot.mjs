@@ -63,7 +63,7 @@ console.log('gl:', diag.renderer, 'canvas', info.canvas);
 // blank unless preserveDrawingBuffer is set, so counting the scene is the
 // honest way to tell "it rendered" from "it did not".
 const scene = await page.evaluate(() => {
-  const R = window.FOC && window.FOC.view;
+  const R = window.WAR3 && window.WAR3.view;
   if (!R) return { error: 'no renderer on window' };
   let meshes = 0, points = 0, textured = 0;
   R.scene.traverse((o) => {
@@ -84,7 +84,7 @@ const scene = await page.evaluate(() => {
   // anything drawn as a stand-in rather than a real model -- the "ghosts"
   const ghosts = [];
   for (const [id, v] of R.views) {
-    const e = window.FOC.S.ents.get(id);
+    const e = window.WAR3.S.ents.get(id);
     if (!e || e.model) continue;                 // has a real model: fine
     let meshes = 0;
     v.root.traverse((o) => { if (o.isMesh) meshes++; });

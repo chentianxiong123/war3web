@@ -42,12 +42,12 @@ await wait(1000);
 await page.evaluate(() => document.querySelector('.hcard')?.click());
 await wait(500);
 await page.$eval('#btnReady', (x) => x.click());
-await page.waitForFunction(() => window.FOC && window.FOC.S.phase === 'playing', { timeout: 60000 });
+await page.waitForFunction(() => window.WAR3 && window.WAR3.S.phase === 'playing', { timeout: 60000 });
 await wait(9000);
 
 /** Emitter state across the whole live scene. */
 const survey = () => page.evaluate(() => {
-  const { view } = window.FOC;
+  const { view } = window.WAR3;
   const tally = (list) => {
     let total = 0, on = 0, live = 0, gated = 0;
     for (const e of list || []) {
@@ -98,17 +98,17 @@ check('idle units do not emit from every emitter at once',
 // ...but the gate must not simply be "off". Cast something and watch effects.
 const before = a;
 await page.evaluate(() => {
-  const S = window.FOC.S, hero = S.hero;
+  const S = window.WAR3.S, hero = S.hero;
   if (!hero) return;
-  for (let i = 0; i < 6; i++) window.FOC.net.send({ t: 'learn', slot: i });
+  for (let i = 0; i < 6; i++) window.WAR3.net.send({ t: 'learn', slot: i });
 });
 await wait(600);
 let peak = { total: 0, on: 0, live: 0, gated: 0 }, peakFx = 0;
 for (let i = 0; i < 6; i++) {
   await page.evaluate((slot) => {
-    const S = window.FOC.S, hero = S.hero;
+    const S = window.WAR3.S, hero = S.hero;
     const me = S.ents.get(hero.id);
-    if (me) window.FOC.net.send({ t: 'cast', slot, x: me.x + 300, y: me.y + 200 });
+    if (me) window.WAR3.net.send({ t: 'cast', slot, x: me.x + 300, y: me.y + 200 });
   }, i % 4);
   // Sample across the cast rather than once at the end of it. A short effect is
   // born and gone inside a second, and `n` is a high-water mark of slots ever

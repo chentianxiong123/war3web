@@ -1,6 +1,6 @@
 // Lobby + match lifecycle. The map's own JASS script owns the game rules;
 // this layer only relays player intent into it and streams state out.
-// The FOC hero-pick card is gone: Terenas is a straight-up melee map, so a
+// The WAR3 hero-pick card is gone: Terenas is a straight-up melee map, so a
 // player owns the units the map's script gives them and no hero slot.
 import { randomUUID } from 'node:crypto';
 import { World, TYPES, int2id, id2int } from './world.js';
@@ -29,7 +29,7 @@ function teamOfSlot(slot) {
 // rejoin at all -- a dropped player has left -- so this is the port's own
 // allowance rather than a figure from the game, sized for a page reload or a
 // wifi blip rather than a walk away. Tests set it short.
-const GRACE_MS = +(process.env.FOC_REJOIN_GRACE_MS || 60000);
+const GRACE_MS = +(process.env.WAR3_REJOIN_GRACE_MS || 60000);
 
 let nextPlayer = 1;
 
@@ -326,7 +326,7 @@ export class Room {
       `${this.eng.triggers.length} triggers, ${this.eng.timers.length} timers, ` +
       `${this.world.units.size} units, ${this.bootReport.errors.length} errors`);
     this.phase = Phase.PLAYING;
-    // 官方对战图: 玩家单位由 war3map.j 脚本创建, 无需 FOC 英雄
+    // 官方对战图: 玩家单位由 war3map.j 脚本创建, 无需 WAR3 英雄
     // M4 阶段 4：wasm 桥异步初始化，不阻塞开局；init 完成后 stepLoop 自动开始同步
     this._initWasm();
     this.broadcastState();

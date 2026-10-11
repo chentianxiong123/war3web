@@ -1,4 +1,4 @@
-# FOC Web — architecture
+# War3Web — architecture
 
 How the port actually works, subsystem by subsystem. This is the long half of the
 README, split out so the front page stays a front page.
@@ -36,7 +36,7 @@ that is the map's own*, *Changing form*, and *Where the numbers come from*.
 
 ### How a spell works, end to end
 
-FOC spells are re-skinned Blizzard abilities plus a trigger for the trimmings:
+This map's spells are re-skinned Blizzard abilities plus a trigger for the trimmings:
 
 1. the engine checks level, mana and cooldown from `data/abilities.json` (the map's `w3a`
    values layered on Blizzard's `AbilityData.slk`);
@@ -55,7 +55,7 @@ which is how a 30-wave ultimate ran as 1100 waves. `tools/slot_test.mjs` resolve
 holds every case to it, and refuses to pass a case that reads a slot without declaring what it
 believes the slot to be.
 
-Dummy units are how most FOC spells deliver their payload: a trigger spawns a unit carrying one
+Dummy units are how most of this map's spells deliver their payload: a trigger spawns a unit carrying one
 ability and orders it to cast. Ordering a dummy runs that ability through the same engine path.
 
 Of the 130 hero abilities, 117 can be cast and 13 are genuinely passive. `tools/spell_audit.mjs`
@@ -83,7 +83,7 @@ effect. Reading the metadata table resolves all 204 field ids this map touches.
 Whether an ability is passive comes from the same place: Warcraft III gives everything castable an
 order string in `Units\*AbilityFunc.txt`, and gives passives none. `targets` cannot stand in for
 it — it is empty for instant abilities exactly as it is for passives, the same trap Targeting
-below describes. Reading an empty `targets` as "passive" marks most of a FOC roster passive and
+below describes. Reading an empty `targets` as "passive" marks most of the roster passive and
 makes the engine skip the very ability a trigger spawned its dummy to deliver.
 
 ### The art a spell draws by itself
@@ -91,7 +91,7 @@ makes the engine skip the very ability a trigger spawned its dummy to deliver.
 The same file holds every ability's art, and Warcraft III draws it without the map asking:
 `Casterart` on whoever cast, `Targetart` on what was hit, `Areaeffectart` over the ground.
 `Targetart` alone covers 321 abilities — it is the summoning puff, the strike flash, the buff
-glow. FOC's triggers add their own effects on top, which is why some spells looked right already,
+glow. The map's triggers add their own effects on top, which is why some spells looked right already,
 but anything relying on the ability's own art was silent: the art is not in `AbilityData.slk`, and
 the map only names art it overrides, which for this map is almost always just the icon. Reading
 Blizzard's art with the map's overrides layered on takes hero abilities carrying a resolved effect
@@ -322,7 +322,7 @@ unusable rather than merely imperfect:
 
 `GroupEnumUnitsOfType` matches on the unit type's *name*, and Blizzard.j's `GetUnitsOfTypeIdAll`
 reaches it by round-tripping a type id through `UnitId2String`. Returning every unit instead turns
-that helper into a map-wide sweep — and FOC uses it to clear a spell's dummy units, so a single
+that helper into a map-wide sweep — and the map uses it to clear a spell's dummy units, so a single
 cast of InuYasha's 금강창파 `RemoveUnit`ed all 130 units on the map, shops and boss included. Both
 natives are implemented against the unit type's own name so the round trip closes.
 
@@ -437,7 +437,7 @@ its own failures, and three of them were instructive:
 Two more traps are worth naming because they cost real time. A WebGL canvas screenshots *blank*
 unless `preserveDrawingBuffer` is set — the buffer is cleared once the frame is composited — so
 `tools/shot.mjs` counts what is in the scene rather than trusting a picture of it, which is what
-`window.FOC` exists for. And a headless browser launched with a persistent `--user-data-dir` will
+`window.WAR3` exists for. And a headless browser launched with a persistent `--user-data-dir` will
 serve the copy of a tool page it cached before your last edit; `setCacheEnabled(false)` does not
 clear what is already in there, so `tools/model_shot.mjs` takes a fresh profile each run. Both of
 these look exactly like "the thing you just fixed does not work".

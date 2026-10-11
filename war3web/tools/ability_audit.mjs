@@ -16,7 +16,7 @@
 //
 // Static and advisory: no server, no browser, and exit 0 unless an input file
 // is missing -- the port is deliberately demand-driven, so a finding here is
-// work to schedule, not a broken build. Point FOC_MAP_J at another map's
+// work to schedule, not a broken build. Point WAR3_MAP_J at another map's
 // extracted war3map.j to size a port before starting it.
 //
 //   node tools/ability_audit.mjs
@@ -28,7 +28,7 @@ import { JassEngine } from '../server/jass/engine.js';
 const read = (p) => fs.readFileSync(p, 'utf8');
 const GAME    = JSON.parse(read('data/game.json'));
 const TYPES   = JSON.parse(read('data/unittypes.json'));
-const MAPJ    = read(process.env.FOC_MAP_J || 'extracted/war3map.j');
+const MAPJ    = read(process.env.WAR3_MAP_J || 'extracted/war3map.j');
 const BLIZ    = read('war3_extracted/Scripts/Blizzard.j');
 const COMMON  = read('war3_extracted/Scripts/common.j');
 const SUPP    = fs.existsSync('server/jass/tft_supplement.j')

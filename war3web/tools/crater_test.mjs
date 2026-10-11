@@ -101,7 +101,7 @@ await page.waitForFunction(() => !document.getElementById('hud').classList.conta
 await new Promise((r) => setTimeout(r, 3000));
 
 const out = await page.evaluate(async () => {
-  const { view } = window.FOC;
+  const { view } = window.WAR3;
   const t = view.terrInfo, W = t.width;
   // a point well inside the playable area, on the vertex grid
   const i = Math.floor(W / 2), j = Math.floor(t.height / 2);

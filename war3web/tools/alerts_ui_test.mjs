@@ -6,17 +6,17 @@ try {
   const page=await browser.newPage(),errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   await page.goto(`http://127.0.0.1:${process.env.PORT||8077}/?room=alerts-${Date.now()}`);
-  await page.waitForFunction(()=>window.FOC?.S.booted && !document.getElementById('lobby').classList.contains('hidden'),{timeout:90000});
+  await page.waitForFunction(()=>window.WAR3?.S.booted && !document.getElementById('lobby').classList.contains('hidden'),{timeout:90000});
   await page.click('.hcard[data-id="H00C"]');await page.click('#btnReady');
-  await page.waitForFunction(()=>FOC.S.hero && FOC.S.ents.has(FOC.S.hero.id),{timeout:60000});
+  await page.waitForFunction(()=>WAR3.S.hero && WAR3.S.ents.has(WAR3.S.hero.id),{timeout:60000});
   const frames=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   await frames();
-  await page.evaluate(()=>{FOC.net.ws.onmessage=()=>{};window.sent=[];FOC.net.send=m=>{if(m.t!=='ping')sent.push(m);};});
+  await page.evaluate(()=>{WAR3.net.ws.onmessage=()=>{};window.sent=[];WAR3.net.send=m=>{if(m.t!=='ping')sent.push(m);};});
   await page.mouse.move(500,250);
-  const target=()=>page.evaluate(()=>({x:FOC.view.camTarget.x,y:-FOC.view.camTarget.z}));
+  const target=()=>page.evaluate(()=>({x:WAR3.view.camTarget.x,y:-WAR3.view.camTarget.z}));
   const near=(a,b)=>assert.ok(Math.hypot(a.x-b.x,a.y-b.y)<1,JSON.stringify({a,b}));
   await page.evaluate(()=>{
-    const {S,net}=FOC;
+    const {S,net}=WAR3;
     window.emit=ev=>net.handlers.get('event')({ev:[ev]});
     window.unit=(id,x,y,p,t,k=2)=>S.ents.set(id,{i:id,x,y,p,t,k});
     window.team=S.ents.get(S.hero.id).t;
@@ -35,11 +35,11 @@ try {
   await page.evaluate(()=>emit({t:'dmg',id:990001,src:990002,amt:20}));
   await page.keyboard.press('Space');near(await target(),{x:100,y:200});
   await page.evaluate(()=>{
-    FOC.S.ents.get(990001).x=300;
+    WAR3.S.ents.get(990001).x=300;
     emit({t:'dmg',id:990001,src:990002,amt:20});
     unit(990004,-400,-500,98,team,1);
     emit({t:'death',id:990004});
-    FOC.S.ents.delete(990004);
+    WAR3.S.ents.delete(990004);
   });
   // Recall an empty group: Space must work without a hero selection.
   await page.keyboard.press('9');
@@ -50,14 +50,14 @@ try {
   await page.keyboard.press('Space');near(await target(),{x:-400,y:-500});
   await page.keyboard.press('F10');await page.keyboard.press('Space');near(await target(),{x:-400,y:-500});await page.keyboard.press('Escape');
   await page.keyboard.press('Enter');await page.keyboard.press('Space');near(await target(),{x:-400,y:-500});await page.keyboard.press('Escape');
-  await page.evaluate(()=>FOC.S.cinematic=true);
+  await page.evaluate(()=>WAR3.S.cinematic=true);
   await page.keyboard.press('Space');near(await target(),{x:-400,y:-500});
-  await page.evaluate(()=>{FOC.S.cinematic=false;FOC.view.panTo(0,0,10);});
+  await page.evaluate(()=>{WAR3.S.cinematic=false;WAR3.view.panTo(0,0,10);});
   await page.keyboard.press('Space');near(await target(),{x:100,y:200});
-  assert.equal(await page.evaluate(()=>FOC.view.scriptPan),null);
+  assert.equal(await page.evaluate(()=>WAR3.view.scriptPan),null);
   assert.equal(await page.evaluate(()=>sent.length),0,'alert navigation never issues unit orders');
   const voices = await page.evaluate(async()=>{
-    const {S,audio}=FOC, played=[];
+    const {S,audio}=WAR3, played=[];
     audio.playUI=(path,vol,flags)=>played.push({path,vol,flags});
     const fire=(x,building=false)=>{
       unit(990005,x,0,S.slot,team);

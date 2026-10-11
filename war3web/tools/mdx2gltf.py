@@ -22,7 +22,7 @@ OUTDIR = 'assets/models'
 # How many models may fail before the run is called broken. The archives hold
 # the odd malformed MDX; they do not hold hundreds, and a client cannot draw a
 # model that was never written.
-FAIL_FLOOR = int(os.environ.get('FOC_MODEL_FAIL_FLOOR', '5'))
+FAIL_FLOOR = int(os.environ.get('WAR3_MODEL_FAIL_FLOOR', '5'))
 
 # ---------------------------------------------------------------- track eval
 def track_keys(tr):

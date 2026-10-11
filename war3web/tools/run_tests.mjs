@@ -4,13 +4,13 @@
 // could not fail -- boot_test and audit printed their error counts and exited 0
 // regardless -- so a broken boot came out of a full rebuild green. The rest of
 // the suite was only ever run by hand, one file at a time, which is also how a
-// missing FOC_DEBUG=1 came to look like four unrelated failures in morph_test.
+// missing WAR3_DEBUG=1 came to look like four unrelated failures in morph_test.
 //
 //   npm test                    # everything
 //   npm test -- render polish   # only tests whose name contains these
 //
 // PORT (default 8077) and CHROME are passed through. The server is started with
-// FOC_DEBUG=1: morph_test needs the level-to-cap key to reach a level-10
+// WAR3_DEBUG=1: morph_test needs the level-to-cap key to reach a level-10
 // ability, and nothing else cares.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -81,11 +81,11 @@ const run = (cmd, args, env, timeout) => new Promise((res) => {
 let server = null;
 if (await portBusy()) {
   console.log(`using the server already on :${PORT}`);
-  console.log('  (start it with FOC_DEBUG=1 or morph_test cannot reach a level-10 ability)\n');
+  console.log('  (start it with WAR3_DEBUG=1 or morph_test cannot reach a level-10 ability)\n');
 } else {
-  console.log(`starting a server on :${PORT} with FOC_DEBUG=1`);
+  console.log(`starting a server on :${PORT} with WAR3_DEBUG=1`);
   server = spawn(process.execPath, ['server/index.js'],
-                 { cwd: ROOT, env: { ...process.env, PORT, FOC_DEBUG: '1' },
+                 { cwd: ROOT, env: { ...process.env, PORT, WAR3_DEBUG: '1' },
                    stdio: ['ignore', 'ignore', 'inherit'] });
   const until = Date.now() + 60000;
   while (!(await portBusy())) {

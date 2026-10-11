@@ -10,7 +10,7 @@
 ## 验证命令（所有成果的可复现入口）
 
 ```bash
-# 引擎（WASM）单元 + 对照测试：当前 38 项全绿
+# 引擎（WASM）单元 + 对照测试：常驻断言全绿（各节记录里程碑计数）
 npm run engine          # Emscripten + CMake + Ninja 构建 → engine/out/
 npm run engine:test     # vec3/w3x/MPQ(StormLib) + JASS AST 逐字节对照 + VM 执行对照 + C/JS 全局强对照
 
@@ -295,7 +295,9 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   - 步骤 B ✅：对局实测 95 单位模型 43754 draw calls
   - 步骤 C ✅：粒子降级过渡（ShaderMaterial 不兼容 → WebGPU 通道跳过）
   - 步骤 D ✅：决策——长期保留 WebGL 回退（forceWebGL 开关不删）
-- M5（zero-copy 数据流）/ M6（全量 + 规模验证）：未开始
+- **M5（zero-copy 数据流）：已完成 ✅**（binary SOA 快照全量集成，见 7.1）
+- **M6（多客户端命令同步）：命令流未接通 ⛔**（框架已建，命令从未进入 wasm，见 7.2）
+- **最终收尾（2026-10-11）：binary 通道停用，JS/JSON 唯一权威**（见 7.3-7.6）
 
 ## 六、验证命令（M4 模拟核心）
 
@@ -308,3 +310,46 @@ node tools/snapshot_test.mjs  # SOA 快照字段级对账
 node tools/order_test.mjs     # 显式命令输入通道
 node tools/snaprender_test.mjs # 快照驱动渲染适配层
 ```
+
+---
+
+## 七、M5/M6 与最终收尾（2026-10-11，HEAD = 027ea0f）
+
+### 7.1 M5：binary SOA 快照集成（已完成）
+- `f8d167f` binary 快照全量集成（slots registry + client 主路径切换）
+- `2f432e4` M5 WebGPU buffer 上传路径；`eb818d8` 零拷贝数据流调研 + SOA 读路径 PoC；
+  `4eae408` 性能基准测试工具
+- `6e98f20`/`39e8339`/`46aefd3` client 渲染路径切 binary（视图创建/空指针/材质兼容修复）
+
+### 7.2 M6：多客户端命令同步（框架已建，命令未接通）
+- `2a3c6bc` 多客户端命令同步：server 侧把命令桥向 wasm 的框架
+- **实测结论**：wasm 收不到命令——`room.js` handleMessage 的 MOVE/ATTACK/BUILD/TRAIN
+  只调 `world.order()`，`wasm_bridge` 只有 spawn/step/buff → sim 位置永远冻结在出生点
+
+### 7.3 双快照根因与修复（`4282efc`）
+- 现象：农民移动来回闪、大厅像被右键拖动
+- 根因：server 跑两套独立模拟（JS world 真动 + wasm 假静态），JSON（JS 位置）与
+  binary（wasm 冻结位置）都写 client 同一个 `S.ents`，每 10 tick 互盖
+- 修复：client 停用 binary handler + 不再发 `BINARY_READY`（`clientBinaryReady=false`
+  → `jsonInterval=1` 全速），JSON 唯一权威
+
+### 7.4 基地位置修复（`027ea0f`）
+- 现象：城镇大厅/农民建在地图中心 (16,16)
+- 根因：玩家 engine index=5 不在 `DefineStartLocation(0/1)` 之列 → `startLoc(5)` 默认
+  `[0,0]` → Blizzard.j `MeleeStartingUnitsHuman` 的 `CreateUnitAtLoc` 建中心；
+  `freeSpotNear(0,0)` 落到 (16,16)
+- 修复：`room.js` 开局前按队伍 `setStartLoc`（`[-4032,2112]`/`[3968,-2560]`）→ 实测
+  大厅 (3984,-2544)，最近金矿 id=2 (4752,-2544) 距离 768 ✓
+
+### 7.5 其他收尾
+- `1fdcfa3` sim.c facing 归一化 `[-π,π]`（防单位绕圈颤抖）
+- `027ea0f` client 新增 `S.team`，归属/相机居中改用 `e.t === S.team`（修复 nOwn=0）
+- WebGPU 接线：`render.js`（`localStorage.webgpu='1'` → `three/webgpu` WebGPURenderer，
+  异步 init + `rendererReady` + `backend.device` 守卫；实测 WebGPUBackend + device 就绪）
+
+### 7.6 最终结论（诚实版）
+- 当前对局 **100% 吃 JS world（JSON 通道）**；wasm 是未接命令的空转镜像（功能 JS ⊇ wasm）
+- wasm 引擎的价值在将来 **lockstep 对等联机**：同一份 `sim.c` 每端本地跑 + 命令小包
+  带 tick + N tick hash 对账，服务器降级为撮合/中转——这是 wasm 唯一真正发光的地方
+- 待办：命令接线（`sim_order_push`/`sim_order_build` + 客户端恢复 binary handler 与
+  `BINARY_READY`），约 1 天工作量；其后才是锁步与中转

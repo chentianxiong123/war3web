@@ -59,7 +59,7 @@ function decodeSoa(bytes) {
 // ---- 启动 server ----
 const server = spawn(process.execPath, ['server/index.js'], {
   cwd: ROOT,
-  env: { ...process.env, PORT: String(PORT), FOC_DEBUG: '1' },
+  env: { ...process.env, PORT: String(PORT), WAR3_DEBUG: '1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 server.stderr.on('data', (d) => {

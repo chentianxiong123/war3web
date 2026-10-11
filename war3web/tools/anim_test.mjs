@@ -44,14 +44,14 @@ await wait(1000);
 await page.evaluate(() => document.querySelector('.hcard')?.click());
 await wait(500);
 await page.$eval('#btnReady', (x) => x.click());
-await page.waitForFunction(() => window.FOC && window.FOC.S.phase === 'playing', { timeout: 60000 });
+await page.waitForFunction(() => window.WAR3 && window.WAR3.S.phase === 'playing', { timeout: 60000 });
 await wait(8000);
 
 // record every clip each view plays over the window
 await page.evaluate(() => {
   window.__seen = new Map();          // model -> {building, clips:Set}
   window.__tick = () => {
-    for (const v of window.FOC.view.views.values()) {
+    for (const v of window.WAR3.view.views.values()) {
       if (!v.current || !v.meta) continue;
       const key = v.meta.name || '?';
       let e = window.__seen.get(key);

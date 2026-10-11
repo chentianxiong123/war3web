@@ -63,7 +63,7 @@ warsmash `viewer5/handlers/w3x/simulation/` 是完整 RTS 模拟蓝本，逐类�
 
 ## 4. 分阶段里程碑
 
-- **M0 基线（本次提交）**：从 foc-web 上游补回 18 个测试；无头浏览器复用支持；
+- **M0 基线（本次提交）**：从上游引擎补回 18 个测试；无头浏览器复用支持；
   本规划文档。现有测试全绿为基线。
 - **M1 WASM 骨架**：CMake + Emscripten 构建链；最小 wasm 模块（C++ 写 add/hello 级
   内核）在浏览器与 Node 双端加载成功；pthreads worker 跑通；CI 命令封装

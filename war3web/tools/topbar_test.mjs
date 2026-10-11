@@ -47,7 +47,7 @@ await new Promise((r) => setTimeout(r, 600));
 await page.$eval('#btnReady', (b) => b.click());
 await page.waitForFunction(() => !document.getElementById('hud').classList.contains('hidden'),
                            { timeout: 60000 });
-await page.waitForFunction(() => window.FOC?.S?.hero != null, { timeout: 60000 });
+await page.waitForFunction(() => window.WAR3?.S?.hero != null, { timeout: 60000 });
 await new Promise((r) => setTimeout(r, 1500));
 
 const out = await page.evaluate(() => {
@@ -61,7 +61,7 @@ const out = await page.evaluate(() => {
     label: n.textContent, off: n.classList.contains('off'), disabled: n.disabled,
     img: getComputedStyle(n).backgroundImage.replace(/^url\("?|"?\)$/g, ''), ...px(n),
   }));
-  return { icons, texts, btns, hero: { gold: window.FOC.S.hero.gold, lumber: window.FOC.S.hero.lumber } };
+  return { icons, texts, btns, hero: { gold: window.WAR3.S.hero.gold, lumber: window.WAR3.S.hero.lumber } };
 });
 console.log(JSON.stringify(out, null, 1));
 
@@ -100,7 +100,7 @@ const opened = await page.evaluate(async () => {
     click(label);
     const dlg = document.querySelector('#wcDialog [role="dialog"]');
     out[label] = { got: dlg?.getAttribute('aria-label') || null, want };
-    window.FOC.ui.closeDialog();
+    window.WAR3.ui.closeDialog();
   }
   click('Chat');
   const chat = document.getElementById('wcChat');

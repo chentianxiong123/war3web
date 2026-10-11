@@ -1,4 +1,4 @@
-"""Extract everything the FOCS map needs from the layered Warcraft III archives."""
+"""Extract everything the map needs from the layered Warcraft III archives."""
 import os, re, sys, json, glob, collections
 sys.path.insert(0, os.path.dirname(__file__))
 from gamedata import GameData

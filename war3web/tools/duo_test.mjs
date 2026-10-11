@@ -36,12 +36,12 @@ async function seat(label, cardIndex, team) {
   await page.setCacheEnabled(false);
   page.on('pageerror', (e) => page.errs.push(String(e.message)));
   page.on('console', (m) => { if (m.type() === 'error') page.errs.push(m.text()); });
-  await page.evaluateOnNewDocument((n) => localStorage.setItem('focs.name', n), label);
+  await page.evaluateOnNewDocument((n) => localStorage.setItem('war3web.name', n), label);
   await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
   await page.waitForFunction(() => !document.getElementById('lobby').classList.contains('hidden'),
                              { timeout: 30000 });
   await wait(1000);
-  await page.evaluate((t) => window.FOC.net.send({ t: 'joinTeam', team: t }), team);
+  await page.evaluate((t) => window.WAR3.net.send({ t: 'joinTeam', team: t }), team);
   await wait(300);
   const hero = await page.evaluate((i) => {
     const cards = [...document.querySelectorAll('.hcard:not(.nomodel)')];
@@ -67,7 +67,7 @@ await B.page.$eval('#btnReady', (b) => b.click());
 // Wait on the client's own phase rather than a CSS class -- the HUD un-hides on
 // its own schedule and is not what "the game started" means -- and report what
 // each side actually thinks if it never happens, rather than a bare timeout.
-const phaseOf = (c) => c.page.evaluate(() => (window.FOC ? window.FOC.S.phase : 'no FOC'));
+const phaseOf = (c) => c.page.evaluate(() => (window.WAR3 ? window.WAR3.S.phase : 'no WAR3'));
 let started = false;
 for (let i = 0; i < 60 && !started; i++) {
   started = (await phaseOf(A)) === 'playing' && (await phaseOf(B)) === 'playing';
@@ -82,7 +82,7 @@ await wait(9000);                        // let both settle and snapshots flow
 
 console.log('\nwhat each client can see');
 const view = (c) => c.page.evaluate(() => {
-  const { S, FOC } = { S: window.FOC.S, FOC: window.FOC };
+  const { S, WAR3 } = { S: window.WAR3.S, WAR3: window.WAR3 };
   const me = S.ents.get(S.hero?.id);
   const heroes = [...S.ents.values()].filter((e) => e.k === 1);
   return {
@@ -94,7 +94,7 @@ const view = (c) => c.page.evaluate(() => {
     colours: heroes.map((h) => h.c),
     teams: heroes.map((h) => h.t),
     unitsSeen: S.ents.size,
-    views: FOC.view.views.size,
+    views: WAR3.view.views.size,
   };
 });
 const a = await view(A), b = await view(B);
@@ -113,15 +113,15 @@ check('both clients built a view for both heroes', a.views > 1 && b.views > 1,
 // --- movement propagates
 console.log('\nmovement');
 const before = await B.page.evaluate((id) => {
-  const e = window.FOC.S.ents.get(id); return e ? { x: e.x, y: e.y } : null;
+  const e = window.WAR3.S.ents.get(id); return e ? { x: e.x, y: e.y } : null;
 }, a.myId);
 await A.page.evaluate(() => {
-  const S = window.FOC.S, me = S.ents.get(S.hero.id);
-  window.FOC.net.send({ t: 'move', x: me.x + 600, y: me.y + 600 });
+  const S = window.WAR3.S, me = S.ents.get(S.hero.id);
+  window.WAR3.net.send({ t: 'move', x: me.x + 600, y: me.y + 600 });
 });
 await wait(4000);
 const after = await B.page.evaluate((id) => {
-  const e = window.FOC.S.ents.get(id); return e ? { x: e.x, y: e.y } : null;
+  const e = window.WAR3.S.ents.get(id); return e ? { x: e.x, y: e.y } : null;
 }, a.myId);
 const moved = before && after ? Math.round(Math.hypot(after.x - before.x, after.y - before.y)) : 0;
 check("Bravo sees Alpha move", moved > 50, `${moved} units`);
@@ -130,10 +130,10 @@ check("Bravo sees Alpha move", moved > 50, `${moved} units`);
 console.log('\nchat');
 await B.page.evaluate(() => { window.__heard = []; });
 await B.page.evaluate(() => {
-  const orig = window.FOC.ui.log.bind(window.FOC.ui);
-  window.FOC.ui.log = (html, cls) => { window.__heard.push(String(html)); return orig(html, cls); };
+  const orig = window.WAR3.ui.log.bind(window.WAR3.ui);
+  window.WAR3.ui.log = (html, cls) => { window.__heard.push(String(html)); return orig(html, cls); };
 });
-await A.page.evaluate(() => window.FOC.net.send({ t: 'chat', text: 'ping from alpha' }));
+await A.page.evaluate(() => window.WAR3.net.send({ t: 'chat', text: 'ping from alpha' }));
 await wait(2000);
 const heard = await B.page.evaluate(() => window.__heard || []);
 check('Bravo receives Alpha’s chat', heard.some((h) => h.includes('ping from alpha')),
@@ -145,13 +145,13 @@ console.log('\nground items across clients');
 // has to earn the price of the cheapest thing that is not a powerup. The hero
 // stops once its target dies, so keep pointing it at something.
 const NEED = await A.page.evaluate(() => {
-  const defs = window.FOC.S.game.items;
-  const prices = window.FOC.S.game.shops.flatMap((s) => s.items)
+  const defs = window.WAR3.S.game.items;
+  const prices = window.WAR3.S.game.shops.flatMap((s) => s.items)
     .filter((i) => !(defs[i.id] || {}).p).map((i) => i.gold);
   return prices.length ? Math.min(...prices) : 300;
 });
 const swing = () => A.page.evaluate(() => {
-  const S = window.FOC.S, me = S.ents.get(S.hero.id);
+  const S = window.WAR3.S, me = S.ents.get(S.hero.id);
   if (!me) return;
   let best = null, bd = Infinity;
   for (const e of S.ents.values()) {
@@ -159,13 +159,13 @@ const swing = () => A.page.evaluate(() => {
     const d = Math.hypot(e.x - me.x, e.y - me.y);
     if (d < bd) { bd = d; best = e; }
   }
-  if (best) window.FOC.net.send({ t: 'attack', targetId: best.i });
+  if (best) window.WAR3.net.send({ t: 'attack', targetId: best.i });
 });
 let gold = 0;
 for (let i = 0; i < 60 && gold < NEED; i++) {
   if (i % 4 === 0) await swing();                  // re-target as things die
   await wait(1000);
-  gold = await A.page.evaluate(() => window.FOC.S.hero?.gold ?? 0);
+  gold = await A.page.evaluate(() => window.WAR3.S.hero?.gold ?? 0);
 }
 console.log(`  (Alpha needs ${NEED}g for the cheapest droppable item)`);
 let itemDetail = `Alpha earned ${gold} gold`;
@@ -174,20 +174,20 @@ if (gold >= NEED) {
   // a powerup is spent the moment it is bought and never occupies a slot, so
   // buying the cheapest thing on the shelf leaves nothing to drop
   const buy = await A.page.evaluate((budget) => {
-    const defs = window.FOC.S.game.items;
-    const all = window.FOC.S.game.shops.flatMap((s) => s.items)
+    const defs = window.WAR3.S.game.items;
+    const all = window.WAR3.S.game.shops.flatMap((s) => s.items)
       .filter((i) => !(defs[i.id] || {}).p && i.gold <= budget)
       .sort((x, y) => x.gold - y.gold);
     if (!all.length) return null;
-    window.FOC.net.send({ t: 'buy', itemId: all[0].id });
+    window.WAR3.net.send({ t: 'buy', itemId: all[0].id });
     return { id: all[0].id, name: all[0].name, gold: all[0].gold };
   }, gold);
   await wait(1500);
-  const carried = await A.page.evaluate(() => (window.FOC.S.hero?.items || []).filter(Boolean).length);
-  await A.page.evaluate(() => window.FOC.net.send({ t: 'dropItem', slot: 0 }));
+  const carried = await A.page.evaluate(() => (window.WAR3.S.hero?.items || []).filter(Boolean).length);
+  await A.page.evaluate(() => window.WAR3.net.send({ t: 'dropItem', slot: 0 }));
   await wait(2500);
-  const seenByB = await B.page.evaluate(() => window.FOC.view.groundItems.size);
-  const seenByA = await A.page.evaluate(() => window.FOC.view.groundItems.size);
+  const seenByB = await B.page.evaluate(() => window.WAR3.view.groundItems.size);
+  const seenByA = await A.page.evaluate(() => window.WAR3.view.groundItems.size);
   itemPass = seenByB > 0 && seenByA > 0;
   itemDetail = buy ? `bought ${buy.name} (${buy.gold}g), carried ${carried}, `
                      + `Alpha sees ${seenByA} / Bravo sees ${seenByB} on the ground`

@@ -61,7 +61,7 @@ try {
     return results;
   });
   for (const c of checks) console.log(`${c.pass ? 'ok' : 'FAIL'} ${c.name}`);
-  await page.screenshot({ path: '/tmp/foc-cinematic-whirlwind.png' });
+  await page.screenshot({ path: '/tmp/war3-cinematic-whirlwind.png' });
   assert.deepEqual(errors, []);
   assert.ok(checks.every(c => c.pass), 'cinematic pixel regression');
   console.log(`${checks.length}/${checks.length} checks passed`);

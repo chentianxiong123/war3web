@@ -210,7 +210,7 @@ const page = await browser.newPage();
 const errs = [];
 page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
-await page.evaluateOnNewDocument(() => localStorage.setItem('focs.name', 'Gate'));
+await page.evaluateOnNewDocument(() => localStorage.setItem('war3web.name', 'Gate'));
 await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
 await page.waitForFunction(() => !document.getElementById('lobby').classList.contains('hidden'),
                            { timeout: 60000 });
@@ -228,14 +228,14 @@ await page.waitForFunction(() => !document.getElementById('hud').classList.conta
 // to know which placements to give a mixer. Waiting on the table let this run
 // while the models were still loading.
 await page.waitForFunction(() => {
-  const { view, S } = window.FOC || {};
+  const { view, S } = window.WAR3 || {};
   if (!view?.doodadAt || !S?.destPick?.size || !view.doodads?.parent) return false;
   return [...S.destPick].every((i) => view.doodadAt.has(i));
 }, { timeout: 90000 });
 await wait(500);
 
 const out = await page.evaluate((ids) => {
-  const { view, S } = window.FOC;
+  const { view, S } = window.WAR3;
   const picks = [...(S.destPick || [])];
   const visible = (i) => {
     const names = [];

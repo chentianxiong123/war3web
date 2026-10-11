@@ -8,7 +8,7 @@ NCOMP = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4, 'MAT4': 16}
 
 class GLTF:
     def __init__(self):
-        self.j = dict(asset=dict(version='2.0', generator='foc-mdx2gltf'),
+        self.j = dict(asset=dict(version='2.0', generator='war3-mdx2gltf'),
                       scene=0, scenes=[dict(nodes=[])], nodes=[], meshes=[],
                       materials=[], textures=[], images=[], samplers=[],
                       accessors=[], bufferViews=[], buffers=[], skins=[], animations=[])

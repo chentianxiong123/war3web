@@ -39,10 +39,10 @@ export const esc = (s) => String(s)
 // English overlay and compile_game.py ships both, so this only chooses which of
 // the two already-present strings to show. Nothing is translated at runtime.
 export const Lang = {
-  en: (() => { try { return localStorage.getItem('foc.lang') !== 'ko'; } catch { return true; } })(),
+  en: (() => { try { return localStorage.getItem('WAR3.lang') !== 'ko'; } catch { return true; } })(),
   set(en) {
     this.en = !!en;
-    try { localStorage.setItem('foc.lang', this.en ? 'en' : 'ko'); } catch {}
+    try { localStorage.setItem('WAR3.lang', this.en ? 'en' : 'ko'); } catch {}
   },
 };
 /** A field in the chosen language, falling back to the map's own text. */
@@ -69,7 +69,7 @@ export class UI {
 
   showLobby(game) {
     // Terenas: no hero pick. The lobby is the objective, the teams and the
-    // ready button; the FOC tavern grid and the spin preview are gone.
+    // ready button; the WAR3 tavern grid and the spin preview are gone.
     $('objective').textContent = game.meta.objective || '';
     $('lobby').classList.remove('hidden');
     $('hud').classList.add('hidden');
@@ -406,7 +406,7 @@ export class UI {
     const when = b.t ? new Date(b.t) : null;
     box.title = `${b.hash}${when ? ` \u00b7 ${when.toLocaleString()}` : ''}`
       + (map ? `\n${map}` : '')
-      + (debug ? '\nFOC_DEBUG is on: L levels the hero to the cap' : '');
+      + (debug ? '\nWAR3_DEBUG is on: L levels the hero to the cap' : '');
   }
 
   /**

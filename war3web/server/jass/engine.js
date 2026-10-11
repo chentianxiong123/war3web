@@ -796,7 +796,7 @@ function installNatives(vm, eng) {
     GroupEnumUnitsOfPlayer: (g, p, filter) => fillGroup(g, W().unitsOfPlayer(p), filter),
     // Warcraft III matches on the unit type's *name*, and Blizzard.j's
     // GetUnitsOfTypeIdAll round-trips a type id through UnitId2String to get it.
-    // Returning every unit instead makes that helper a map-wide sweep: FOC uses
+    // Returning every unit instead makes that helper a map-wide sweep: WAR3 uses
     // it to clear a spell's dummy units, so one cast removed the entire map.
     GroupEnumUnitsOfType: (g, name, filter) => {
       const want = String(name ?? '').trim().toLowerCase();

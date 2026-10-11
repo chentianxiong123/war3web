@@ -12,10 +12,10 @@
 // morphs the unit type, the type carries Required Animation Names, the renderer
 // prefers the sequences those name, and the geosets on screen actually change.
 //
-//   PORT=8077 FOC_DEBUG=1 node server/index.js &
+//   PORT=8077 WAR3_DEBUG=1 node server/index.js &
 //   PORT=8077 node tools/morph_test.mjs
 //
-// FOC_DEBUG is required: Bankai is a level-10 skill and the level-to-cap key is
+// WAR3_DEBUG is required: Bankai is a level-10 skill and the level-to-cap key is
 // the only way to get there without playing the match.
 import puppeteer from 'puppeteer-core';
 import { CHROME } from './chrome.mjs';
@@ -75,7 +75,7 @@ await page.evaluate((id) => {
   const card = [...document.querySelectorAll('.hcard')]
     .find((c) => c.dataset.id === id || c.getAttribute('data-id') === id);
   if (card) card.click();
-  else window.FOC.net.send({ t: 'pickHero', heroId: id });
+  else window.WAR3.net.send({ t: 'pickHero', heroId: id });
 }, HERO);
 await wait(600);
 await page.$eval('#btnReady', (b) => b.click());
@@ -85,7 +85,7 @@ await wait(5000);
 
 /** What the hero is: unit type, the clip it is playing, and which geosets show. */
 const shot = () => page.evaluate(() => {
-  const S = window.FOC.S, v = window.FOC.view.views.get(S.hero?.id);
+  const S = window.WAR3.S, v = window.WAR3.view.views.get(S.hero?.id);
   const e = S.ents.get(S.hero?.id);
   return { u: e?.u, an: e?.an, clip: v?.current || null,
            req: v?.animProps || [],
@@ -95,14 +95,14 @@ const shot = () => page.evaluate(() => {
 const before = await shot();
 check(before.u === HERO, 'starts in his normal form', `u=${before.u} clip=${before.clip}`);
 
-await page.evaluate(() => window.FOC.net.send({ t: 'debugLevel' }));
+await page.evaluate(() => window.WAR3.net.send({ t: 'debugLevel' }));
 await wait(1500);
 const slot = await page.evaluate((a) =>
-  (window.FOC.S.hero?.abilities || []).findIndex((x) => x.id === a), ABIL);
+  (window.WAR3.S.hero?.abilities || []).findIndex((x) => x.id === a), ABIL);
 check(slot >= 0, `${ABIL} is in a slot`, `slot=${slot}`);
-await page.evaluate((s) => window.FOC.net.send({ t: 'learn', slot: s }), slot);
+await page.evaluate((s) => window.WAR3.net.send({ t: 'learn', slot: s }), slot);
 await wait(800);
-await page.evaluate((s) => window.FOC.net.send({ t: 'cast', slot: s }), slot);
+await page.evaluate((s) => window.WAR3.net.send({ t: 'cast', slot: s }), slot);
 await wait(2500);
 
 const after = await shot();

@@ -49,22 +49,22 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // Same entry the other browser tests use: click the lobby card by its own
 // dataset id, give the server a moment to seat the pick, then ready up.
 await page.evaluate(() => {
-  const id = window.FOC.S.heroes?.[0]?.id;
+  const id = window.WAR3.S.heroes?.[0]?.id;
   const card = [...document.querySelectorAll('.hcard')].find((c) => c.dataset.id === id);
-  if (card) card.click(); else window.FOC.net.send({ t: 'pickHero', heroId: id });
+  if (card) card.click(); else window.WAR3.net.send({ t: 'pickHero', heroId: id });
 });
 await wait(600);
 await page.$eval('#btnReady', (b) => b.click());
 await page.waitForFunction(() => !document.getElementById('hud').classList.contains('hidden'),
                            { timeout: 120000 });
-await page.waitForFunction(() => (window.FOC.S.hero?.abilities || []).length > 0, { timeout: 60000 });
+await page.waitForFunction(() => (window.WAR3.S.hero?.abilities || []).length > 0, { timeout: 60000 });
 await wait(3000);                              // let the first snapshots land
 
 // ---- the shops are real buildings on the field
 const found = await page.evaluate(() => {
-  const S = window.FOC.S;
+  const S = window.WAR3.S;
   const ents = [...S.ents.values()];
-  const shops = ents.map((e) => ({ e, sh: window.FOC.shopFor(e) })).filter((x) => x.sh);
+  const shops = ents.map((e) => ({ e, sh: window.WAR3.shopFor(e) })).filter((x) => x.sh);
   return {
     declared: (S.game?.shops || []).length,
     onField: shops.length,
@@ -91,10 +91,10 @@ check('the card starts on the hero\'s abilities', before.cells > 0, `${before.ce
 
 // ---- select a shop through the same predicate the click uses
 const after = await page.evaluate(() => {
-  const S = window.FOC.S;
-  const hit = [...S.ents.values()].map((e) => ({ e, sh: window.FOC.shopFor(e) })).find((x) => x.sh);
-  window.FOC.ui.selectShop(hit.e, hit.sh);
-  window.FOC.showUnitPortrait();
+  const S = window.WAR3.S;
+  const hit = [...S.ents.values()].map((e) => ({ e, sh: window.WAR3.shopFor(e) })).find((x) => x.sh);
+  window.WAR3.ui.selectShop(hit.e, hit.sh);
+  window.WAR3.showUnitPortrait();
   const cells = [...document.querySelectorAll('#abilities .slot')];
   return {
     want: hit.sh.items.length,
@@ -137,13 +137,13 @@ check('and no two items share a cell', laid.distinct === laid.n, `${laid.distinc
 // ---- clicking a cell buys that item
 const bought = await page.evaluate(() => {
   const sent = [];
-  const net = window.FOC.net, real = net.send.bind(net);
+  const net = window.WAR3.net, real = net.send.bind(net);
   net.send = (m) => { sent.push(m); return real(m); };
   const cell = document.querySelector('#abilities .slot');
   cell.click();
   net.send = real;
-  const S = window.FOC.S;
-  const hit = [...S.ents.values()].map((e) => ({ e, sh: window.FOC.shopFor(e) })).find((x) => x.sh);
+  const S = window.WAR3.S;
+  const hit = [...S.ents.values()].map((e) => ({ e, sh: window.WAR3.shopFor(e) })).find((x) => x.sh);
   return { sent, firstItem: hit.sh.items[0].id };
 });
 const buy = bought.sent.find((m) => m.t === 'buy');
@@ -153,8 +153,8 @@ check('clicking a cell sends a buy for that item',
 
 // ---- and the console goes back to the hero
 const back = await page.evaluate(() => {
-  window.FOC.ui.clearShop();
-  window.FOC.showUnitPortrait();
+  window.WAR3.ui.clearShop();
+  window.WAR3.showUnitPortrait();
   const cells = [...document.querySelectorAll('#abilities .slot')];
   return { cells: cells.length,
            commands: cells.filter((c) => c.dataset.command).length,
@@ -194,7 +194,7 @@ const bDoes = await page.evaluate(() => {
   return { overlay: !!document.getElementById('shop'),
            cellsBefore: before,
            cellsAfter: document.querySelectorAll('#abilities .slot').length,
-           shopSel: !!window.FOC.ui.shopSel };
+           shopSel: !!window.WAR3.ui.shopSel };
 });
 check('the b-key overlay is gone entirely', bDoes.overlay === false);
 check('and pressing b no longer changes the card',
@@ -209,10 +209,10 @@ check('and pressing b no longer changes the card',
 // at the building. The cause was comparing TEAMS: a shop sits on player 15's
 // team 2 while the heroes are on teams 0 and 1.
 const rel = await page.evaluate(() => {
-  const S = window.FOC.S;
-  const hit = [...S.ents.values()].map((e) => ({ e, sh: window.FOC.shopFor(e) })).find((x) => x.sh);
+  const S = window.WAR3.S;
+  const hit = [...S.ents.values()].map((e) => ({ e, sh: window.WAR3.shopFor(e) })).find((x) => x.sh);
   const me = S.ents.get(S.hero?.id);
-  return { shop: window.FOC.relationTo(hit.e), shopTeam: hit.e.t, myTeam: me?.t,
+  return { shop: window.WAR3.relationTo(hit.e), shopTeam: hit.e.t, myTeam: me?.t,
            shopPlayer: hit.e.p };
 });
 console.log(`\n   shop on player ${rel.shopPlayer}, team ${rel.shopTeam}; hero team ${rel.myTeam}`);

@@ -2524,7 +2524,7 @@ export class World {
    *
    * These are engine visuals, not script ones: the game draws Casterart on who
    * cast, Targetart on what was hit and Areaeffectart over the ground without
-   * the map asking. FOC's triggers add their own effects on top, which is why
+   * the map asking. WAR3's triggers add their own effects on top, which is why
    * some spells look right already -- but anything relying on the ability's own
    * art was silent, because it lives in Units\*AbilityFunc.txt rather than in
    * AbilityData.slk and so never reached the runtime at all.

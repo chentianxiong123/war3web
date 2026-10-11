@@ -10,7 +10,7 @@
 // That makes it a per-client decision, and this checks all four branches by
 // handing the client death events for heroes it owns, allies, and enemies.
 //
-//   FOC_DEBUG=1 PORT=8077 node server/index.js &
+//   WAR3_DEBUG=1 PORT=8077 node server/index.js &
 //   node tools/warnsound_test.mjs
 import puppeteer from 'puppeteer-core';
 import { CHROME } from './chrome.mjs';
@@ -56,7 +56,7 @@ const page = await browser.newPage();
 const errs = [];
 page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
-await page.evaluateOnNewDocument(() => localStorage.setItem('focs.name', 'Warn'));
+await page.evaluateOnNewDocument(() => localStorage.setItem('war3web.name', 'Warn'));
 await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
 await page.waitForFunction(() => !document.getElementById('lobby').classList.contains('hidden'),
                            { timeout: 30000 });
@@ -72,7 +72,7 @@ await page.waitForFunction(() => !document.getElementById('hud').classList.conta
 await wait(3500);
 
 const out = await page.evaluate(() => {
-  const { S, net, audio } = window.FOC;
+  const { S, net, audio } = window.WAR3;
   const me = S.hero?.id;
   const mine = S.ents.get(me);
   if (!mine) return { error: 'no hero on the client' };
@@ -137,7 +137,7 @@ check('two deaths in a row announce once, as NODUPLICATES says',
 // of test that passes while the real path is broken, so this kills the hero for
 // real and listens: server-side death, real broadcast, real handler.
 const real = await page.evaluate(async () => {
-  const { S, net, audio } = window.FOC;
+  const { S, net, audio } = window.WAR3;
   // Wrap playUI and call through. Stubbing audio.play underneath it measures
   // the wrong layer: playUI can decline for its own reasons and never reach
   // play, which reads as "the warning did not fire" when the harness moved.

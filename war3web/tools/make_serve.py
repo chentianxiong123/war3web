@@ -7,7 +7,7 @@ need is the map's *script*, because the JASS VM executes it verbatim at boot,
 and Blizzard's common.j and Blizzard.j alongside it.
 
     python3 tools/make_serve.py
-    scp -r serve/ user@vps:/opt/foc
+    scp -r serve/ user@vps:/opt/WAR3
 
 Then on the VPS see serve/README.md.
 """
@@ -62,18 +62,18 @@ DATA = ['abilities.json', 'game.json', 'unittypes.json', 'itemtypes.json',
 VERSION = json.load(open('package.json'))['version']
 
 PACKAGE = {
-    'name': 'foc-web-serve',
+    'name': 'war3web-serve',
     'version': VERSION,
     'private': True,
     'type': 'module',
-    'description': 'Fight of Characters 7.7b - browser port, runtime only',
+    'description': 'War3Web - Warcraft III browser port, runtime only',
     'scripts': {'start': 'node server/index.js'},
     # puppeteer-core and the rest of the toolchain are build-time only
     'dependencies': {'three': '^0.185.1', 'ws': '^8.18.0'},
     'engines': {'node': '>=20'},
 }
 
-README = """# FOC Web — running it
+README = """# War3Web — running it
 
 Everything here is runtime. The Warcraft III archives (`*.mpq`, ~820 MB) and the
 `tools/` pipeline are **not** needed to run the game; they were only used to
@@ -91,7 +91,7 @@ If Ubuntu's Node is older than 20:
 
 Then:
 
-    cd /opt/foc
+    cd /opt/WAR3
     npm install --omit=dev
     PORT=8077 node server/index.js
 
@@ -99,14 +99,14 @@ Open `http://<vps-ip>:8077`.
 
 ## As a service
 
-    sudo tee /etc/systemd/system/foc.service >/dev/null <<'UNIT'
+    sudo tee /etc/systemd/system/WAR3.service >/dev/null <<'UNIT'
     [Unit]
-    Description=FOC Web
+    Description=War3Web
     After=network.target
 
     [Service]
     Type=simple
-    WorkingDirectory=/opt/foc
+    WorkingDirectory=/opt/WAR3
     Environment=PORT=8077
     ExecStart=/usr/bin/node server/index.js
     Restart=on-failure
@@ -115,8 +115,8 @@ Open `http://<vps-ip>:8077`.
     [Install]
     WantedBy=multi-user.target
     UNIT
-    sudo systemctl enable --now foc
-    sudo systemctl status foc
+    sudo systemctl enable --now WAR3
+    sudo systemctl status WAR3
 
 ## Notes
 

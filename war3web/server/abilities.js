@@ -149,7 +149,7 @@ export function levelInfo(ab, lvl) {
  * has one, a passive has none.  `targets` cannot stand in for it -- the table
  * leaves it empty for instant abilities exactly as it does for passives, which
  * is the same trap `tools/spell_targets.mjs` exists to work around for
- * targeting.  Reading it as "no targets means passive" marks most of a FOC
+ * targeting.  Reading it as "no targets means passive" marks most of a WAR3
  * roster passive, and castDummy then skips the very ability the map's trigger
  * spawned the dummy to deliver: the effects play and nothing happens.
  */
@@ -750,7 +750,7 @@ export function execute(w, caster, ab, lvl, o = {}) {
       if (B === 'ANdr') w.heal(caster, slot(d1, 120));
       return { ok: true };
     }
-    // ---- Silence: the area cannot cast until it wears off.  FOC zeroes this
+    // ---- Silence: the area cannot cast until it wears off.  WAR3 zeroes this
     // base on most of the spells built from it (duration 0.01, all data 0) and
     // does the work in its own trigger, so a near-zero duration is the map
     // saying "do nothing" rather than a value to floor upward.

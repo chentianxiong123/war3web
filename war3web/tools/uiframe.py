@@ -35,7 +35,7 @@ TEXIDX = 'assets/textures.json'
 OUT = 'public/data/console.json'
 # Warcraft III picks the console by the player's race; every unit this map
 # gives a player is race human, and Human is also what [Default] names.
-RACE = os.environ.get('FOC_UI_RACE', 'Human')
+RACE = os.environ.get('WAR3_UI_RACE', 'Human')
 
 
 def skins():

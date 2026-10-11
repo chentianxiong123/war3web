@@ -88,7 +88,7 @@ class TextTags {
     // rounds of "still a little big" from play landed it -- default combat text
     // at 1.8% of screen height, the map's size-14 lane signs at 2.6%, its
     // size-20 base markers at 3.7%.
-    // Still the knob: FOC.overlay.tags.scale = N in the console, look, keep the
+    // Still the knob: WAR3.overlay.tags.scale = N in the console, look, keep the
     // number. 1 is Blizzard.j's TextTagSize2Height untouched.
     this.scale = 0.8;
   }

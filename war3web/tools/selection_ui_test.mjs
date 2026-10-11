@@ -9,14 +9,14 @@ try {
   const page = await browser.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(`http://127.0.0.1:${process.env.PORT || 8077}/?room=selection-test`, {waitUntil:'domcontentloaded'});
-  await page.waitForFunction(() => window.FOC && document.getElementById('loading').classList.contains('hidden'), {timeout:90000});
+  await page.waitForFunction(() => window.WAR3 && document.getElementById('loading').classList.contains('hidden'), {timeout:90000});
   await page.click('.hcard[data-id="H00C"]');
-  await page.waitForFunction(() => FOC.ui.selected === 'H00C');
+  await page.waitForFunction(() => WAR3.ui.selected === 'H00C');
   await page.click('#btnReady');
-  await page.waitForFunction(() => FOC.S.hero && FOC.S.ents.has(FOC.S.hero.id), {timeout:60000});
+  await page.waitForFunction(() => WAR3.S.hero && WAR3.S.ents.has(WAR3.S.hero.id), {timeout:60000});
   await page.evaluate(async () => {
     await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    const {S,net,view} = FOC;
+    const {S,net,view} = WAR3;
     net.ws.onmessage = () => {};
     window.sent = []; net.send = m => { if (m.t !== 'ping') sent.push(m); };
     const hero = S.ents.get(S.hero.id);
@@ -50,16 +50,16 @@ try {
   assert.equal(await page.$$eval('.active-subgroup',nodes=>nodes.map(n=>Number(n.dataset.unitId))).then(ids=>ids[0]),ids[1]);
   m = await order(); assert.deepEqual(m.unitIds,[ids[0],ids[1]],'subgroup retains group-wide basic commands');
   await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift');
-  assert.equal(await page.evaluate(() => FOC.ui.unitSel),null,'Shift+Tab restores hero card');
+  assert.equal(await page.evaluate(() => WAR3.ui.unitSel),null,'Shift+Tab restores hero card');
   // All six physical numpad keys use inventory slots even with navigation key values.
   await page.evaluate(() => {
-    FOC.S.hero.items = Array.from({length:6},(_,slot)=>({slot,id:'test-item-'+slot,name:'Item '+slot,charges:1,targeted:slot===0}));
-    FOC.ui.updateHero(FOC.S.hero);
+    WAR3.S.hero.items = Array.from({length:6},(_,slot)=>({slot,id:'test-item-'+slot,name:'Item '+slot,charges:1,targeted:slot===0}));
+    WAR3.ui.updateHero(WAR3.S.hero);
     window.itemKey = (code,key='Home',repeat=false) => dispatchEvent(new KeyboardEvent('keydown',{code,key,repeat,bubbles:true,cancelable:true}));
   });
   const beforeItem=await page.evaluate(()=>sent.length);
   await page.evaluate(()=>itemKey('Numpad7'));
-  assert.equal(await page.evaluate(()=>FOC.S.itemPending),0,'Numpad7 arms a targeted item with Num Lock off');
+  assert.equal(await page.evaluate(()=>WAR3.S.itemPending),0,'Numpad7 arms a targeted item with Num Lock off');
   assert.equal(await page.evaluate(()=>sent.length),beforeItem,'aimed item is not used before targeting');
   await page.keyboard.press('Escape');
   for (const [code,slot] of [['Numpad8',1],['Numpad4',2],['Numpad5',3],['Numpad1',4],['Numpad2',5]]) {
@@ -86,7 +86,7 @@ try {
   const stopBox = await (await page.$('[data-command="stop"]')).boundingBox();
   await page.mouse.move(stopBox.x + stopBox.width/2, stopBox.y + stopBox.height/2);
   await page.mouse.down();
-  await page.evaluate(() => FOC.ui.renderSelected(FOC.S.ents.get(ids[1])));
+  await page.evaluate(() => WAR3.ui.renderSelected(WAR3.S.ents.get(ids[1])));
   await page.mouse.up();
   assert.deepEqual(await page.evaluate(() => sent.at(-1)),{t:'stop',unitIds:[ids[1]]},'snapshot refresh preserves command-button clicks');
   await page.keyboard.press('s');
@@ -106,8 +106,8 @@ try {
   const point = await page.evaluate(async () => {
     const THREE = await import('three');
     const {toX,toZ} = await import('/js/render.js');
-    const e = FOC.S.ents.get(ids[0]);
-    const p = new THREE.Vector3(toX(e.x),FOC.view.heightAt(e.x,e.y),toZ(e.y)).project(FOC.view.camera);
+    const e = WAR3.S.ents.get(ids[0]);
+    const p = new THREE.Vector3(toX(e.x),WAR3.view.heightAt(e.x,e.y),toZ(e.y)).project(WAR3.view.camera);
     return {x:(p.x+1)*innerWidth/2,y:(1-p.y)*innerHeight/2};
   });
   await page.mouse.move(point.x-30,point.y-30); await page.mouse.down();
@@ -119,15 +119,15 @@ try {
   await page.screenshot({path:'/tmp/wc3-selection.png'});
   // Shop selection must still replace the card after emptying the unit group.
   await page.evaluate(() => {
-    const shop = [...FOC.S.ents.values()].find(e => FOC.shopFor({id:e.i})?.items.length);
+    const shop = [...WAR3.S.ents.values()].find(e => WAR3.shopFor({id:e.i})?.items.length);
     if (!shop) throw new Error('Fixture needs a shop');
-    FOC.view.pickEntity = () => ({id:shop.i});
+    WAR3.view.pickEntity = () => ({id:shop.i});
   });
   await page.mouse.click(600,300);
   assert.ok(await page.$$eval('.shopitem', nodes => nodes.length), 'shop card remains available');
   await page.keyboard.press('Escape');
   assert.ok(await page.$('[data-command="stop"]'), 'Escape restores hero card');
-  await page.evaluate(() => { FOC.view.pickEntity = () => null; });
+  await page.evaluate(() => { WAR3.view.pickEntity = () => null; });
   await page.mouse.click(600,300);
   assert.equal(await page.$eval('#unitPortrait',e=>e.style.visibility),'hidden','empty selection clears portrait');
   assert.equal(await page.$$eval('#abilities > *',nodes=>nodes.length),0,'empty selection clears command card');

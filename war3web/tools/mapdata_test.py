@@ -1,6 +1,6 @@
 """mapdata_test.py -- the map's own files (war3map.w3i, war3mapUnits.doo)
 parse end to end. Runs against the checked-out map in the working directory,
-the same way pipeline.sh does; set FOC_MAP to point elsewhere.
+the same way pipeline.sh does; set WAR3_MAP to point elsewhere.
 
 Asserts structure, not exact counts: any real Warcraft III map must satisfy
 these invariants (players exist, pre-placed units parse, header byte-counts

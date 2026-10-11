@@ -33,17 +33,17 @@ await page.waitForFunction(() => !document.getElementById('hud').classList.conta
 await new Promise((r) => setTimeout(r, 9000));       // let creeps spawn and models load
 // The crowded case on demand: MOBS=300 fills a grid around the hero with the
 // map's own creep types, some in frame and most not, which is what a real
-// field looks like. Needs the server started with FOC_DEBUG=1, as npm test does.
+// field looks like. Needs the server started with WAR3_DEBUG=1, as npm test does.
 const MOBS = +(process.env.MOBS || 0);
 if (MOBS) {
-  await page.evaluate((n) => window.FOC.net.send({ t: 'debugSpawn', n }), MOBS);
+  await page.evaluate((n) => window.WAR3.net.send({ t: 'debugSpawn', n }), MOBS);
   await new Promise((r) => setTimeout(r, 6000));     // their models load too
 }
 
 // Time the pieces separately. requestAnimationFrame deltas alone say a frame was
 // slow; they do not say which half was.
 const out = await page.evaluate(async (secs) => {
-  const V = window.FOC.view;
+  const V = window.WAR3.view;
   const frames = [];
   const parts = { render: 0, three: 0, n: 0 };
   const origRender = V.renderer.render.bind(V.renderer);
@@ -60,8 +60,8 @@ const out = await page.evaluate(async (secs) => {
                             parts[key] += performance.now() - t; return r; };
   };
   wrap(V, 'pickEntity', 'pick');
-  wrap(window.FOC.ui, 'drawMinimap', 'minimap');
-  wrap(window.FOC.overlay, 'draw', 'bars');
+  wrap(window.WAR3.ui, 'drawMinimap', 'minimap');
+  wrap(window.WAR3.overlay, 'draw', 'bars');
   wrap(V, 'markSelected', 'circles');
   // The skeleton work itself, which is what the PERFORMANCE note suspects:
   // three.js re-skins and re-uploads a bone texture for every skinned mesh it
@@ -110,7 +110,7 @@ const out = await page.evaluate(async (secs) => {
     calls: V.renderer.info.render.calls, tris: V.renderer.info.render.triangles,
     programs: V.renderer.info.programs?.length ?? 0,
     textures: V.renderer.info.memory.textures, geometries: V.renderer.info.memory.geometries,
-    meshes, visible, points, views: V.views.size, ents: window.FOC.S.ents.size,
+    meshes, visible, points, views: V.views.size, ents: window.WAR3.S.ents.size,
   };
 }, SECONDS);
 await browser.close();

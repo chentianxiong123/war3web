@@ -112,7 +112,7 @@ check('the room started and seated both players',
 const W = room.world, R = room.eng;
 const own = R.players[pa.slot];
 // The map's own script created both sides' armies; the room never hands a
-// unit to a player (the FOC hero protocol is gone).
+// unit to a player (the WAR3 hero protocol is gone).
 const mine = [...W.units.values()].find((u) => u.playerIndex === pa.slot && u.alive);
 const theirs = [...W.units.values()].find((u) => u.playerIndex === pb.slot && u.alive);
 check('the script gave each side units and the room left them alone',

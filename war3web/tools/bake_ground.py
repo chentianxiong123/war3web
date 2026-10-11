@@ -15,7 +15,7 @@ SUB = 64          # source variation size inside the atlas
 # single 128-unit cell and so stayed eight times sharper than the ground they
 # meet. 64 is the source art's own resolution: no loss, and nothing invented.
 # Going higher would only upscale, which adds file size and no detail.
-PX = int(os.environ.get('FOC_GROUND_PX', '64'))
+PX = int(os.environ.get('WAR3_GROUND_PX', '64'))
 
 # tileID -> (directory, file) for every tileset, straight from TerrainArt\Terrain.slk
 def _terrain_table():

@@ -59,10 +59,10 @@ await new Promise((r) => setTimeout(r, 600));
 await page.$eval('#btnReady', (b) => b.click());
 await page.waitForFunction(() => !document.getElementById('hud').classList.contains('hidden'),
                            { timeout: 60000 });
-await page.waitForFunction(() => window.FOC?.S?.hero?.abilities?.length > 0, { timeout: 60000 });
+await page.waitForFunction(() => window.WAR3?.S?.hero?.abilities?.length > 0, { timeout: 60000 });
 
 const info = await page.evaluate(() => {
-  const h = window.FOC.S.hero;
+  const h = window.WAR3.S.hero;
   return {
     hero: h.name,
     abilities: h.abilities.map((a) => ({ slot: a.slot, id: a.id, hotkey: a.hotkey, key: a.key })),
@@ -91,16 +91,16 @@ check('a declared hotkey is the key that binds', honoured,
 //
 // Level the hero first so something is castable, then press each ability's own
 // key and see which slot the client tried to cast.
-await page.evaluate(() => window.FOC.net.send({ t: 'debugLevel' }));
+await page.evaluate(() => window.WAR3.net.send({ t: 'debugLevel' }));
 await new Promise((r) => setTimeout(r, 1200));
 await page.evaluate(() => {
-  const h = window.FOC.S.hero;
-  for (const a of h.abilities) if (a.lvl < 1) window.FOC.net.send({ t: 'learn', slot: a.slot });
+  const h = window.WAR3.S.hero;
+  for (const a of h.abilities) if (a.lvl < 1) window.WAR3.net.send({ t: 'learn', slot: a.slot });
 });
 await new Promise((r) => setTimeout(r, 1200));
 
 const fired = await page.evaluate(async () => {
-  const S = window.FOC.S, net = window.FOC.net;
+  const S = window.WAR3.S, net = window.WAR3.net;
   const sent = [];
   const realSend = net.send.bind(net);
   net.send = (m) => { if (m.t === 'cast') sent.push(m.slot); return realSend(m); };
@@ -137,7 +137,7 @@ check('each key casts its OWN ability', tried.length > 0 && tried.every((f) => f
 // levelled, because an unlearned ability is not on the card to carry a tooltip.
 const tips = await page.evaluate(() => {
   const out = [];
-  window.FOC.S.hero.abilities.forEach((a, i) => {
+  window.WAR3.S.hero.abilities.forEach((a, i) => {
     if (a.lvl < 1 || !a.key) return;
     const n = document.querySelector(`#abilities .slot[data-command="ability-${i}"]`);
     out.push({ key: a.key, tip: n ? n.dataset.tooltip : null });

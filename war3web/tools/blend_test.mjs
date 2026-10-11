@@ -38,11 +38,11 @@ await wait(1000);
 await page.evaluate(() => document.querySelector('.hcard')?.click());
 await wait(500);
 await page.$eval('#btnReady', (x) => x.click());
-await page.waitForFunction(() => window.FOC && window.FOC.S.phase === 'playing', { timeout: 60000 });
+await page.waitForFunction(() => window.WAR3 && window.WAR3.S.phase === 'playing', { timeout: 60000 });
 await wait(9000);
 
 await page.evaluate(() => {
-  for (let i = 0; i < 6; i++) window.FOC.net.send({ t: 'learn', slot: i });
+  for (let i = 0; i < 6; i++) window.WAR3.net.send({ t: 'learn', slot: i });
 });
 await wait(600);
 
@@ -68,7 +68,7 @@ const survey = () => page.evaluate(() => {
     }
     return t;
   };
-  const { view } = window.FOC;
+  const { view } = window.WAR3;
   return { fx: acc([...view.effects.values()]), missiles: acc([...view.missiles.values()]) };
 });
 
@@ -76,9 +76,9 @@ let peak = { meshes: 0, additive: 0, prims: 0, count: 0 };
 let peakM = { meshes: 0, additive: 0, prims: 0, count: 0 };
 for (let i = 0; i < 8; i++) {
   await page.evaluate((slot) => {
-    const S = window.FOC.S, hero = S.hero;
+    const S = window.WAR3.S, hero = S.hero;
     const me = S.ents.get(hero.id);
-    if (me) window.FOC.net.send({ t: 'cast', slot, x: me.x + 320, y: me.y + 220 });
+    if (me) window.WAR3.net.send({ t: 'cast', slot, x: me.x + 320, y: me.y + 220 });
   }, i % 5);
   await wait(1200);
   const s = await survey();

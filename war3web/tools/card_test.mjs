@@ -35,10 +35,10 @@ page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
 
 await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
-await page.waitForFunction(() => window.FOC?.consoleSlots != null, { timeout: 90000 });
+await page.waitForFunction(() => window.WAR3?.consoleSlots != null, { timeout: 90000 });
 
 const out = await page.evaluate(() => {
-  const slots = window.FOC.consoleSlots;
+  const slots = window.WAR3.consoleSlots;
   // the styles are CSS percentages; render them to read real pixels back
   const host = document.createElement('div');
   host.style.cssText = 'position:absolute;inset:0;pointer-events:none;visibility:hidden';

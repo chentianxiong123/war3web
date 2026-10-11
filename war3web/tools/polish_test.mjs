@@ -106,7 +106,7 @@ const errs = [];
 await page.setCacheEnabled(false);
 page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 200)); });
-await page.evaluateOnNewDocument(() => localStorage.setItem('focs.name', 'Polish'));
+await page.evaluateOnNewDocument(() => localStorage.setItem('war3web.name', 'Polish'));
 await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded', timeout: 90000 });
 await page.waitForFunction(() => !document.getElementById('lobby').classList.contains('hidden'),
                            { timeout: 30000 });
@@ -132,8 +132,8 @@ const measure = () => page.evaluate(() => {
              wantW: Math.round(r.width * dpr), wantH: Math.round(r.height * dpr) };
   };
   return { mm: of('mmcanvas'), portrait: of('unitPortrait'),
-           hasPortrait: !!window.FOC.unitPortrait,
-           phase: window.FOC.S.phase,
+           hasPortrait: !!window.WAR3.unitPortrait,
+           phase: window.WAR3.S.phase,
            hud: !document.getElementById('hud').classList.contains('hidden'),
            lobby: !document.getElementById('lobby').classList.contains('hidden') };
 });
@@ -173,7 +173,7 @@ check('the portrait buffer follows its new box',
 // last, because it ends the session
 const hiddenBefore = await page.evaluate(() =>
   document.getElementById('disconnected').classList.contains('hidden'));
-await page.evaluate(() => window.FOC.net.ws.close());
+await page.evaluate(() => window.WAR3.net.ws.close());
 await wait(1200);
 const shown = await page.evaluate(() => {
   const d = document.getElementById('disconnected');

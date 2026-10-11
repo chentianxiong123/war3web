@@ -1309,7 +1309,7 @@ ui.onAimItem = (slot, it) => {
   ui.log(`${escapeHtml(it.name || 'item')}: pick a target`, 'lvl');
 };
 
-window.FOC = { view, S, ui, net, overlay, audio, refitConsole, shopFor,
+window.WAR3 = { view, S, ui, net, overlay, audio, refitConsole, shopFor,
                showUnitPortrait, relationTo,
                get consoleSlots() { return consoleSlots; },
                get unitPortrait() { return unitPortrait; } };

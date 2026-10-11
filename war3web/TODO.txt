@@ -1,4 +1,4 @@
-FOC Web -- outstanding work
+War3Web -- outstanding work
 ===========================
 
 Everything here is verified against the map, not speculative. Counts are
@@ -2426,7 +2426,7 @@ SOUND
     pile-up. Honoured. CHANNELFULLPREEMPT is deliberately not -- it decides what
     to evict when a mixer channel is full, and there is no channel model here.
     The premise was checked rather than assumed: mapmakers ask how to *remove*
-    this sound, so it fires in custom maps by default, and FOC never suppresses
+    this sound, so it fires in custom maps by default, and WAR3 never suppresses
     it -- zero VolumeGroupSetVolume, zero SetSoundVolumeBJ, no VOLUME_GROUP_*
     anywhere in war3map.j. What is still unverified is the exact firing rule in
     a 10-player free-for-all; worth a listen in the real client.
@@ -2484,7 +2484,7 @@ FIXED -- metamorphosis (kept for the reasoning; delete once it has bedded in)
       - "alternateex" names no sequence in any of the 1101 converted models
         while "alternate" names 214, and every unit type declaring it is the
         morphed form of another, so it asks for "alternate".
-    Covered by tools/morph_test.mjs (needs FOC_DEBUG=1: Bankai is a level-10
+    Covered by tools/morph_test.mjs (needs WAR3_DEBUG=1: Bankai is a level-10
     skill and the level-to-cap key is the only way there without playing).
 
 [x] A metamorphosis left the form's own abilities behind
@@ -2512,7 +2512,7 @@ NETWORK
 -------
 [x] No rejoin, only a reload  (FIXED 2026-09-13)
     Both halves the old note named. WELCOME carries a seat token; a socket
-    closing mid-match leaves the seat held for FOC_REJOIN_GRACE_MS (60 s -- a
+    closing mid-match leaves the seat held for WAR3_REJOIN_GRACE_MS (60 s -- a
     figure of ours, Warcraft III has no rejoin at all) with the hero standing
     where it was and the script told nothing. HELLO with the token inside that
     window reclaims the seat: same player id, same hero, the permanent tags and

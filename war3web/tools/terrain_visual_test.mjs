@@ -40,12 +40,12 @@ try {
       }
       return colors.size > 3;
     }, { timeout: 30000 });
-    await page.screenshot({ path: `/tmp/foc-terrain-${side}-${label}.png` });
+    await page.screenshot({ path: `/tmp/war3-terrain-${side}-${label}.png` });
     await page.evaluate(() => { window.capture = false; });
   };
   // Optional local before/after capture. Baseline assets are not fixtures and
   // are never added to the source repository; normal CI only loads current art.
-  const baseline = process.env.TERRAIN_BASELINE || '/tmp/foc-terrain-before';
+  const baseline = process.env.TERRAIN_BASELINE || '/tmp/war3-terrain-before';
   const files = { '/data/cliffs.json': 'cliffs.json', '/data/cliffs.bin': 'cliffs.bin',
     '/data/heights.bin': 'heights.bin', '/assets/textures/_ground.png': '_ground.png' };
   if (Object.values(files).every(f => fs.existsSync(`${baseline}/${f}`))) {

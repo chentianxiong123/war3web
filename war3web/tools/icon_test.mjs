@@ -7,7 +7,7 @@
 //
 //     icon=find_icon(lvl_get(m, 'aart', 0))
 //
-// FOC sets `aart` on 173 abilities, so that covers most of them -- but an
+// WAR3 sets `aart` on 173 abilities, so that covers most of them -- but an
 // ability the map does not rename keeps Warcraft III's icon, which lives in
 // Units\*AbilityFunc.txt as `Art=` and never appears in the map's mods at all.
 // Eneru's 전광 is Blink, Buu's 분신술 is Mirror Image, Orochimaru's revive is

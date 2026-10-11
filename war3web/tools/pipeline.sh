@@ -2,7 +2,7 @@
 # Full asset + data pipeline: map file and Warcraft III archives -> public/
 #
 # Map-agnostic: the .w3x in the working directory is found by tools/mapfile.py
-# (override with FOC_MAP). Nothing below names a hero, ability or unit id.
+# (override with WAR3_MAP). Nothing below names a hero, ability or unit id.
 set -euo pipefail
 PY=${PY:-.venv/bin/python}
 
@@ -81,18 +81,18 @@ echo "== 8. bake the lobby portraits"
 # model instead. Rendering one means a browser, and a browser means the staged
 # assets have to be served: hero_portraits.mjs drives tools/modelview.html over
 # HTTP. Hence a server for the length of this step and no longer.
-PORT=${FOC_PORT:-8077} node server/index.js >/dev/null 2>&1 &
+PORT=${WAR3_PORT:-8077} node server/index.js >/dev/null 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null || true' EXIT
 up=0
 for _ in $(seq 60); do
-  if node -e "require('net').connect(${FOC_PORT:-8077},'127.0.0.1')
+  if node -e "require('net').connect(${WAR3_PORT:-8077},'127.0.0.1')
               .on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null
   then up=1; break; fi
   sleep 1
 done
-[ "$up" = 1 ] || { echo "the server never came up on ${FOC_PORT:-8077}"; exit 1; }
-PORT=${FOC_PORT:-8077} node tools/hero_portraits.mjs
+[ "$up" = 1 ] || { echo "the server never came up on ${WAR3_PORT:-8077}"; exit 1; }
+PORT=${WAR3_PORT:-8077} node tools/hero_portraits.mjs
 kill $SRV 2>/dev/null || true
 trap - EXIT
 
