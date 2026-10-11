@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>M5 GPU Buffer Test</title>
+<script type="importmap">
+{ "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+</script>
+<canvas id="view"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { Renderer } from '/js/render.js';
+const view = new Renderer(document.getElementById('view'));
+window.view = view;
+window.THREE = THREE;
+window.ready = true;
+</script>

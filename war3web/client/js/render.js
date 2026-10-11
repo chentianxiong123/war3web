@@ -118,6 +118,9 @@ const SOA_COL = {
   KIND: 8, MOVING: 9, GATHERING: 10, ID: 11, LEVEL: 12, MANA: 13, MAX_MANA: 14,
 };
 
+// M5: GPU buffer 上传路径容量上限——512 单位覆盖本地图最大同时存活数
+const M5_MAX_UNITS = 512;
+
 /**
  * 从 SOA ArrayBuffer 读回单位快照，形状对齐 world.snapshot() 的 ents 数组。
  *
@@ -395,6 +398,15 @@ export class Renderer {
     this.modelCache = new Map();      // name -> {gltf, meta}
     this.pending = new Map();
     this.views = new Map();           // entId -> view
+    // M5: 常驻 GPU buffer 池——SOA 快照数据直接写入，每帧通过
+    // needsUpdate 触发 writeBuffer 上传，跳过 JS 对象中间层。
+    this.unitPosData = new Float32Array(M5_MAX_UNITS * 4);   // x, y, facing, alive
+    this.unitPosAttr = new THREE.InstancedBufferAttribute(this.unitPosData, 4);
+    this.unitPosAttr.setUsage(THREE.DynamicDrawUsage);
+    this.unitColorData = new Float32Array(M5_MAX_UNITS * 3);  // r, g, b
+    this.unitColorAttr = new THREE.InstancedBufferAttribute(this.unitColorData, 3);
+    this.unitColorAttr.setUsage(THREE.DynamicDrawUsage);
+    this.unitPosCount = 0;
     this.clock = new THREE.Clock();
     this.selectionRing = null;
     this.terrain = null;
@@ -402,6 +414,8 @@ export class Renderer {
     this._frustum = new THREE.Frustum();
     this._fmat = new THREE.Matrix4();
     this._sph = new THREE.Sphere(new THREE.Vector3(), 220);
+
+    this._buildUnitMarker();          // M5: GPU buffer 单位标记
 
     addEventListener('resize', () => this.resize());
     this.resize();
@@ -1171,6 +1185,115 @@ export class Renderer {
     view.loading = false;
     this.play(view, 'stand');
     return view;
+  }
+
+  // ============================================================ M5: GPU buffer 上传路径
+
+  /**
+   * 从 SOA 二进制缓冲区更新 GPU buffer（零 JS 对象路径）。
+   *
+   * 数据流：SOA ArrayBuffer → Float32Array view → 常驻 Float32Array →
+   * InstancedBufferAttribute → needsUpdate → three.js writeBuffer → GPU buffer
+   *
+   * 与 JSON 路径（snapshotFromBinary → S.ents Map → view.root.position.set）
+   * 相比，此方法跳过 JS 对象构造层：位置数据直接从 SOA buffer 写入常驻
+   * BufferAttribute，无需创建 ents 数组、Map.set、Object.assign 等中间对象。
+   *
+   * 同时同步更新已有 view 的 root.position（保持现有渲染路径工作），
+   * 等 instanced 化完成后可以完全切换到 GPU buffer 路径。
+   *
+   * @param {ArrayBuffer} buf  SOA Float32Array 的原始字节
+   * @param {Object} [slots]  按 SOA id 回查的注册表 {id, k, u, sel}
+   * @param {Array} [colors]  按 playerIndex 回查的色索引表
+   * @return {{nUnits: number, n: number}} 解码后的单位数
+   */
+  updateFromBinary(buf, slots, colors) {
+    const f = new Float32Array(buf);
+    const nUnits = Math.round(f[SOA_HEADER - 3]);
+    const n = Math.min(nUnits, M5_MAX_UNITS);
+    const colBase = SOA_HEADER;
+
+    for (let i = 0; i < n; i++) {
+      // 位置/朝向/存活直接写入常驻 GPU buffer 数据
+      this.unitPosData[i * 4 + 0] = f[colBase + SOA_COL.X * nUnits + i];
+      this.unitPosData[i * 4 + 1] = f[colBase + SOA_COL.Y * nUnits + i];
+      this.unitPosData[i * 4 + 2] = f[colBase + SOA_COL.FACING * nUnits + i];
+      this.unitPosData[i * 4 + 3] = f[colBase + SOA_COL.ALIVE * nUnits + i];
+
+      // 颜色按 team 索引
+      const t = Math.round(f[colBase + SOA_COL.TEAM * nUnits + i]);
+      const col = TEAM_COLOR[t] ?? 0x888888;
+      this.unitColorData[i * 3 + 0] = ((col >> 16) & 0xff) / 255;
+      this.unitColorData[i * 3 + 1] = ((col >> 8) & 0xff) / 255;
+      this.unitColorData[i * 3 + 2] = (col & 0xff) / 255;
+
+      // 同步更新已有 view 的 root.position（兼容现有渲染路径）
+      const soaId = Math.round(f[colBase + SOA_COL.ID * nUnits + i]);
+      const entId = slots?.[soaId]?.id ?? soaId;
+      const v = this.views.get(entId);
+      if (v) {
+        const x = f[colBase + SOA_COL.X * nUnits + i];
+        const y = f[colBase + SOA_COL.Y * nUnits + i];
+        v.root.position.set(toX(x), this.heightAt(x, y), toZ(y));
+        v.root.rotation.y = f[colBase + SOA_COL.FACING * nUnits + i];
+      }
+    }
+
+    this.unitPosCount = n;
+    // 触发 GPU buffer 上传（three.js 内部调 device.queue.writeBuffer）
+    this.unitPosAttr.needsUpdate = true;
+    this.unitColorAttr.needsUpdate = true;
+    if (this.unitMarker) this.unitMarker.geometry.instanceCount = n;
+    return { nUnits, n };
+  }
+
+  /**
+   * 构建单位标记网格——GPU buffer 验证用。
+   *
+   * 每个单位一个小方块，顶点着色器从 InstancedBufferAttribute 直接读位置，
+   * 跳过 JS 对象中间层。默认隐藏，诊断时通过 view.unitMarker.visible = true 开启。
+   */
+  _buildUnitMarker() {
+    const s = 40;
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      -s, 0, -s,  s, 0, -s,  s, 0, s,  -s, 0, s,
+    ], 3));
+    geo.setIndex([0, 1, 2,  0, 2, 3]);
+    geo.setAttribute('instancePos', this.unitPosAttr);
+    geo.setAttribute('instanceColor', this.unitColorAttr);
+    geo.instanceCount = 0;
+
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: `
+        attribute vec4 instancePos;
+        attribute vec3 instanceColor;
+        varying vec3 vColor;
+        varying float vAlive;
+        void main() {
+          vColor = instanceColor;
+          vAlive = instancePos.w;
+          gl_Position = projectionMatrix * modelViewMatrix *
+            vec4(position.xyz + vec3(instancePos.x, 2.0, -instancePos.y), 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlive;
+        void main() {
+          if (vAlive < 0.5) discard;
+          gl_FragColor = vec4(vColor, 0.7);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+
+    this.unitMarker = new THREE.Mesh(geo, mat);
+    this.unitMarker.frustumCulled = false;
+    this.unitMarker.visible = false;
+    this.scene.add(this.unitMarker);
   }
 
   /**

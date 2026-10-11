@@ -27,7 +27,8 @@ const STATIC_TREES = { '/shared/': '.', '/three/': 'node_modules', '/assets/': '
 // close, which left those tests unable to reach the thing they test. They are
 // the only files under tools/ that go anywhere: the .py and .mjs next to them
 // are source, and make_serve.py strips even these three from a deploy.
-const BENCH_PAGE = /^\/tools\/[A-Za-z0-9_.-]+\.html$/;
+// 兼容 Windows（path.normalize 把 / 转为 \）
+const BENCH_PAGE = /^[/\\]tools[/\\][A-Za-z0-9_.-]+\.html$/;
 
 function resolveFile(urlPath) {
   let rel;
