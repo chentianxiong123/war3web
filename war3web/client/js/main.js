@@ -48,7 +48,7 @@ const S = {
   ents: new Map(),           // id -> latest server state
   prev: new Map(),           // id -> previous state (for interpolation)
   lastSnap: 0, snapDt: 1 / 15,
-  selected: null, bounds: null, ready: false, showScore: false, cinematic: false, booted: false,
+  selected: null, bounds: null, ready: false, showScore: false, cinematic: false, booted: false, camCentered: false,
   castPending: null, itemPending: null, unitCast: null, minimapImg: null, debug: false,
   hoverId: null, altHeld: false,
   unitModels: null,          // also feeds the lobby's rotating hero preview
@@ -213,35 +213,46 @@ net.on(Msg.SNAPSHOT, (m) => {
   ui.quests = m.s.quests || [];
   selection.prune(id => S.ents.has(id) && S.ents.get(id).sel !== false);
   refreshSelection();
+  // 游戏开始时把相机对准玩家出生点（第一个城镇大厅或第一个单位）
+  if (!S.camCentered && S.ents.size > 0) {
+    S.camCentered = true;
+    // 找玩家的第一个建筑或单位
+    let target = null;
+    for (const e of S.ents.values()) {
+      if (e.t === S.slot && e.a === 1) { target = e; break; }
+    }
+    if (target) {
+      view.camTarget.set(target.x, 0, -target.y);
+    }
+  }
 });
 
 net.on(Msg.EVENT, (m) => {
   for (const ev of m.ev) handleEvent(ev);
 });
 
-// M5: 二进制 SOA 快照通道——主数据源。
+// M5: 二进制 SOA 快照通道——位置/HP 高频更新通道。
 // server 每 tick 发送 binary 快照，client 用 snapshotFromBinary 解码后
-// 创建/更新/删除单位（同 JSON handler 逻辑）。
+// 只更新已有视图的位置/朝向/HP（不创建新视图，视图创建交给 JSON handler）。
 // slots registry 由 server 在 SLOTS 消息中推送，client 存 S.slots。
 net.on('s', (bytes) => {
   const data = bytes.slice(1);   // 去掉 tag 字节
   if (data.byteLength < 20) return;
   const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  // slots 未加载时 snapshotFromBinary 拿不到 typeKey——跳过创建，只更新已有视图位置
-  const slotsReady = S.slots && Object.keys(S.slots).length > 0;
   const ents = snapshotFromBinary(buf, S.slots || {}, S.colors || []);
   const seen = new Set();
   for (const e of ents) {
     seen.add(e.i);
     const old = S.ents.get(e.i);
     S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
-    const meta = findMeta(e);
-    S.ents.set(e.i, Object.assign({}, meta, e));
-    // slots 就绪前不创建新视图（standIn 兜底），等 JSON handler 创建
-    if (slotsReady && !view.views.has(e.i)) view.spawnView(S.ents.get(e.i));
-    else if (old && old.u !== e.u) {
-      view.removeView(e.i);
-      view.spawnView(S.ents.get(e.i));
+    // 更新 ents 数据（位置/HP/朝向），但不覆盖元数据（model/typeKey 等由 JSON handler 管理）
+    if (old) {
+      old.x = e.x; old.y = e.y; old.f = e.f;
+      old.h = e.h; old.a = e.a; old.mv = e.mv;
+    } else {
+      // 新单位——只记录数据，不创建视图（等 JSON handler 用完整元数据创建）
+      const meta = findMeta(e);
+      S.ents.set(e.i, Object.assign({}, meta, e));
     }
   }
   // 删除 wasm 已确认死亡/移除的单位（只处理 S.slots 注册过的）
