@@ -133,6 +133,26 @@
   首死 id——**melee_close 死亡1532/JS1573、melee_apart 1551/1592、melee_3v1 544/511**
   三场景全过。引擎回归 114/114、sim_test 全绿。
 
+#### 2.8 远程武器导弹 C 移植（f63e678）——4/4 场景硬门禁全过 ✅
+- **`engine/src/sim.c` 新增 SimMissile 表**（SIM_MISSILE_MAX=256，SOA 平铺）：
+  active/srcId/targetId/x/y/dx,dy（aim 快照，JS launchMissile 的 dest）/speed/deadlineMs/
+  amount（**发射时已 roll 好**，JS releaseAttack 先 roll 再发弹）/atkTypeIdx。
+- **`release_attack` 分叉**（对齐 3103-3105）：`weaponKind != 0 && missileSpeed > 0`
+  → 发射导弹（伤害延迟到命中）；否则近战直击 `sim_damage`。spawn_fight 补存 missileSpeed
+  （原第 20 参没存进 SimUnit）。
+- **`step_missiles(dt)`**（对齐 2929-2957）：homing 追踪（目标死 → 无伤坠落）、
+  aimX/aimY 每 tick 取目标当前位、travel=speed·dt、reach=dist-radius、到达或超 deadline →
+  命中调 `sim_damage`（射手已死则空耗）、否则按 dx/dist·travel 推进。
+- **`sim_combat_step` 顺序**：先 `step_missiles(dt)` 再单位循环（stepMissiles 在 JS step()
+  里本就先于单位循环；发射发生在攻击内，下一 tick 才动——自然对齐）。
+- **`sim_spawn_fight` 增至 21 参**（+missileSpeed）。CMakeLists 导出不变（无新导出）。
+- **golden 增 ranged_hwat**：hwat（人类哨兵，missile kind + 1300 速度 + 射程 300）vs hfoo。
+  探测锁定：hp525/armor large/dmg 17+1d5/atkCd 1.5s/attackPoint 0.4/backswing 0.77/
+  pierce/radius 32/moveSpeed 220/acq 500。golden 记录 types 数组供 C 侧按类型加载武器。
+- **combat_test 对照 ranged_hwat**：死亡 1056 vs 1101（Δ45=容差边缘，随机 roll 抖动）、
+  首击 7=7、攻击数 50 vs 52、HP 曲 OK、首死 id 1=1——**4/4 场景全过**。
+- melee_3v1 的 JS deathTick 511→544：hfoo 伤害 11-13 随机，死亡 tick 抖动在 ±45 容差内。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
