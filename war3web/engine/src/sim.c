@@ -100,6 +100,14 @@ typedef struct {
   int level;                 // 单位等级（赏金回退公式用）
   // ---- 渲染（阶段 4：快照驱动渲染）----
   double mana, maxMana;      // 英雄蓝条（JS u.mana / u.maxMana；非英雄为 0）
+  // ---- 建筑建造（M4 阶段 5：worker 建造进度）----
+  int buildType;             // 建筑类型索引（0..SIM_BUILDING_KINDS-1）；仅在 buildOrderActive=1 时有效
+  double buildX, buildY;     // 建筑落位坐标
+  double buildTime;          // 建造总时间（秒）
+  double buildProgress;      // 建造进度 0-100
+  int buildOrderActive;      // 1 = 有建造命令（orderType==5 同步）
+  int buildTargetId;         // 幽灵单位 id（可选，-1 = 无）
+  int completedId;           // 建造完成产出的建筑单位 id（-1 = 未完成）
 } SimUnit;
 static SimUnit U[SIM_MAX];
 // Buff 独立表（不改 SimUnit 体积）：BUFFS[id][slot]
@@ -127,6 +135,50 @@ typedef struct {
 static SimMissile M[SIM_MISSILE_MAX];
 static int FXSEQ;
 static int DMG_TABLE_SET;
+
+// ---- 物品表（M4 阶段 4：物品系统）----
+// 对齐 server/world.js ITEMS（80-94）+ createItem/giveItem/dropItem（1470-1540）：
+// 地面物品（owner=-1）+ 持有者（unitId）+ 耐久。typeIdx 对应硬编码物品类型表。
+// JS 能力层通过 wasm API 桥控制，两套共存（用户明确要求，不删 JS）。
+#define SIM_ITEM_MAX 256
+#define SIM_ITEM_TYPE_MAX 4
+typedef struct {
+  int active;         // 是否占用
+  int owner;          // 持有者单位 id（-1 = 地面）
+  double x, y;        // 位置（地面物品；持有中可忽略）
+  int typeIdx;        // 类型索引（对应 SIM_ITEM_TYPES）
+  double hp, maxHp;   // 耐久（Amph 魔法盾吸收伤害）
+  // 预留：abilities 位集（regeneration/vampiric 等）
+} SimItem;
+static SimItem ITEMS[SIM_ITEM_MAX];
+// 物品类型表：[maxHp, 一次性?]
+//   0 = Samo（圣光卷轴，一次性使用）  1 = Ssam（治疗药水，一次性使用）
+//   2 = Amph（魔法盾，耐久 200，吸收伤害）  3 = 预留
+static const double SIM_ITEM_TYPES[SIM_ITEM_TYPE_MAX][2] = {
+  { 1.0,   1.0 },   // Samo 圣光卷轴：maxHp 1，一次性
+  { 1.0,   1.0 },   // Ssam 治疗药水：maxHp 1，一次性
+  { 200.0, 0.0 },   // Amph 魔法盾：耐久 200，非一次性（吸收伤害）
+  { 1.0,   1.0 },   // 预留
+};
+
+// ---- 建筑类型表（M4 阶段 5：硬编码，不查 unittypes.json）----
+// 字段：[hp, armor, radius, buildTime(秒), kind]
+//   kind 4 = 普通建筑（不占基地槽，kind 3 保留给 htow 基地）
+// 数值参考 data/unittypes.json + 任务说明（baam/bhut 用任务给定值）。
+#define SIM_BUILDING_KINDS 6
+typedef struct {
+  double hp, armor, radius;
+  double buildTime;   // 建造总时间（秒）
+  int kind;           // 产出单位的 kind 字段
+} SimBuildingType;
+static const SimBuildingType SIM_BUILDING_TYPES[SIM_BUILDING_KINDS] = {
+  { 4500, 3, 60,  60, 4 },   // 0: baam 兽族地堡
+  { 1200, 0, 60,  30, 4 },   // 1: bhut 兽族牛车
+  {  700, 2, 50,  55, 4 },   // 2: twog 人族弓箭塔
+  { 1500, 5, 80,  60, 4 },   // 3: hbar 人族兵营
+  { 1050, 5, 80,  70, 4 },   // 4: hars 人族修道院
+  { 1200, 5, 80,  60, 4 },   // 5: harm 人族工坊
+};
 
 // ---- 经济（阶段 2）：玩家资源（JS player.gold）----
 static double GOLD[16];
@@ -164,6 +216,7 @@ enum {
   SIM_ORD_MOVE = 2,        // move 到 (x,y)
   SIM_ORD_ATTACK_MOVE = 3, // attackMove 到 (x,y)
   SIM_ORD_ATTACK = 4,      // attack 目标单位 targetId
+  SIM_ORD_BUILD = 5,       // build（M4 阶段 5：建筑建造）
 };
 typedef struct { int unitId, op, targetId; double x, y; } SimOrder;
 static SimOrder ORDS[SIM_ORD_MAX];
@@ -196,9 +249,11 @@ void sim_clear_all(void) {
   memset(U, 0, sizeof(U));
   memset(BUFFS, 0, sizeof(BUFFS));
   memset(M, 0, sizeof(M));
+  memset(ITEMS, 0, sizeof(ITEMS));   // M4 阶段 4：物品表清零
   memset(GOLD, 0, sizeof(GOLD));
   for (int i = 0; i < SIM_MAX; i++) {
     U[i].mineId = -1; U[i].baseId = -1; U[i].orderTargetId = -1; U[i].attackWindupTarget = -1;
+    U[i].buildTargetId = -1; U[i].completedId = -1;   // M4 阶段 5：建造字段初始
   }
   EVN = 0; FXSEQ = 0; SIM_NOW = 0;
   OCN = 0;
@@ -1415,4 +1470,89 @@ void sim_step(double dt) {
     step_move_unit(u, id, dt);   // stepMove
     step_attack_unit(u, id, dt);     // stepAttack
   }
+}
+
+// ------------------------------------------------------------------ 物品（M4 阶段 4）
+// 数据结构 + 类型表见文件顶部 ITEMS/SIM_ITEM_TYPES 段。语义对齐 server/world.js
+// createItem（1470）/giveItem（1518）/dropItem（1528）/removeItem（1481）：
+//   spawn      → createItem（分配槽位、写入位置/类型/耐久）
+//   pickup     → giveItem（设置 owner；不删、不消耗，交给上层能力桥）
+//   drop       → dropItem（owner=-1、写位置；不做 freeItemSpot 微调）
+//   destroy    → removeItem（清槽位；不从持有者 items 数组移除，交给上层）
+// 物品效果（Samo 治疗、Ssam 治疗、Amph 魔法盾吸伤）暂不接入，预留 abilities 位集。
+
+/** 创建物品。id<0 时自动分配空闲槽位；返回物品 id（=槽位），失败返回 -1。
+ *  typeIdx 越界也返回 -1。owner<0 视为地面（-1）。hp<=0 用类型默认 maxHp。 */
+int sim_item_spawn(int id, int typeIdx, double x, double y, int owner, double hp) {
+  if (typeIdx < 0 || typeIdx >= SIM_ITEM_TYPE_MAX) return -1;
+  int slot;
+  if (id >= 0 && id < SIM_ITEM_MAX) {
+    if (ITEMS[id].active) return -1;   // 显式槽位被占用
+    slot = id;
+  } else {
+    slot = -1;
+    for (int i = 0; i < SIM_ITEM_MAX; i++) if (!ITEMS[i].active) { slot = i; break; }
+    if (slot < 0) return -1;           // 表满
+  }
+  const double tMax = SIM_ITEM_TYPES[typeIdx][0];
+  const double tHp = (hp > 0) ? hp : tMax;
+  SimItem* it = &ITEMS[slot];
+  it->active = 1;
+  it->owner  = (owner < 0) ? -1 : owner;
+  it->x = x; it->y = y;
+  it->typeIdx = typeIdx;
+  it->hp = tHp; it->maxHp = tMax;
+  return slot;
+}
+
+/** 单位拾取物品：设置 owner。返回 1 成功 / 0 失败（无效 id 或槽位空）。 */
+int sim_item_pickup(int itemId, int unitId) {
+  if (itemId < 0 || itemId >= SIM_ITEM_MAX) return 0;
+  if (unitId < 0 || unitId >= SIM_MAX) return 0;
+  if (!ITEMS[itemId].active) return 0;
+  ITEMS[itemId].owner = unitId;
+  return 1;
+}
+
+/** 单位丢弃物品：owner=-1，写位置。返回 1 成功 / 0 失败。 */
+int sim_item_drop(int itemId, double x, double y) {
+  if (itemId < 0 || itemId >= SIM_ITEM_MAX) return 0;
+  if (!ITEMS[itemId].active) return 0;
+  ITEMS[itemId].owner = -1;
+  ITEMS[itemId].x = x; ITEMS[itemId].y = y;
+  return 1;
+}
+
+/** 销毁物品：清槽位。返回 1 成功 / 0 失败（无效 id 或槽位空）。 */
+int sim_item_destroy(int itemId) {
+  if (itemId < 0 || itemId >= SIM_ITEM_MAX) return 0;
+  if (!ITEMS[itemId].active) return 0;
+  ITEMS[itemId].active = 0;
+  ITEMS[itemId].owner = -1;
+  ITEMS[itemId].hp = 0; ITEMS[itemId].maxHp = 0;
+  return 1;
+}
+
+/** 活动物品数。 */
+int sim_item_count(void) {
+  int n = 0;
+  for (int i = 0; i < SIM_ITEM_MAX; i++) if (ITEMS[i].active) n++;
+  return n;
+}
+
+/** 读物品列表：out[i*6] = id, typeIdx, x, y, owner, hp。返回实际写入条数。 */
+int sim_get_items(float* out, int maxN) {
+  int n = 0;
+  for (int i = 0; i < SIM_ITEM_MAX && n < maxN; i++) {
+    if (!ITEMS[i].active) continue;
+    const SimItem* it = &ITEMS[i];
+    out[6*n]   = (float)i;
+    out[6*n+1] = (float)it->typeIdx;
+    out[6*n+2] = (float)it->x;
+    out[6*n+3] = (float)it->y;
+    out[6*n+4] = (float)it->owner;
+    out[6*n+5] = (float)it->hp;
+    n++;
+  }
+  return n;
 }
