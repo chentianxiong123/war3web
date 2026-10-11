@@ -911,6 +911,34 @@ int sim_flush_orders(void) {
   return applied;
 }
 
+/** M6: 用 world.js 已算好的路径整段接管单位行走（替代 flush 里 A* 的结果）。
+ *  pts 是世界坐标 float2 对（起始点 u->x,u->y 后的途经点，含终点）；n>=1；
+ *  op 取 SIM_ORD_MOVE / SIM_ORD_ATTACK_MOVE；op==0 或 n<=0 清路径回 idle。
+ *  调用时机：sim_flush_orders() 之后、sim_step() 之前——覆盖 flush 自己 route
+ *  的路径，保证两套模拟逐 tick 同轨（world stepMove 的 shift 只改内容不改引用，
+ *  故引用没变时无需重复调用，repath 换数组时才需要）。 */
+void sim_command_path(int id, const float* pts, int n, int op) {
+  if (id < 0 || id >= SIM_MAX) return;
+  SimUnit* u = &U[id];
+  if (op == 0 || n <= 0 || pts == NULL) {
+    sim_set_path_u(u, NULL, 0);
+    if (u->orderType == 3 || u->orderType == 4) {
+      u->orderType = 0; u->orderTargetId = -1;
+      u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
+    }
+    return;
+  }
+  if (!u->alive) return;
+  const int cap = n > 512 ? 512 : n;
+  double dbuf[1024];
+  for (int i = 0; i < cap; i++) { dbuf[2 * i] = pts[2 * i]; dbuf[2 * i + 1] = pts[2 * i + 1]; }
+  sim_set_path_u(u, dbuf, cap);
+  u->orderType = (op == SIM_ORD_ATTACK_MOVE) ? 4 : 3;
+  u->orderTargetId = -1;
+  u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
+  u->goalX = dbuf[2 * (cap - 1)]; u->goalY = dbuf[2 * (cap - 1) + 1];
+}
+
 // =====================================================================
 // Buff 系统（阶段 4 收尾：JS 能力层 → C 单位的桥）
 // =====================================================================
@@ -1598,13 +1626,17 @@ static void consumable_pass(void) {
   }
 }
 
-/** 全量 tick（M4 目标 wasm_step）：gather → missiles → 单位循环（AI/move/attack）。
- *  对齐 JS step()：stepGathers(发单) → stepMissiles → 单位循环。 */
+/** 全量 tick（M6 wasm_step）：missiles → 单位循环（AI/move/attack）。
+ *  对齐 JS step() 的移动/战斗部分。
+ *  M6 变更：**不跑 gather_pass**。wasm 农民/经济移动 100% 由 room 的命令镜像
+ *  + world 路径接管驱动（sim_command_path）——world stepGathers 是经济行为的
+ *  唯一权威，wasm 再自主找矿/route 会在细节时序上与 world 分叉（造成 binary
+ *  与 JSON 位置大距离漂移）。gather 状态机仍保留在 sim_econ_step（econ_test
+ *  独立用），sim_step 主线不用它。 */
 void sim_step(double dt) {
   SIM_NOW++;
   expire_buffs();              // buff 过期清理（step 2602）
   regen_pass(dt);              // 生命回复（step 2606-2608）
-  gather_pass();
   build_pass(dt);              // M4 阶段 5：建造进度推进
   step_missiles(dt);
   for (int id = 0; id < SIM_MAX; id++) {

@@ -41,6 +41,7 @@ export class Room {
     this.world = null;
     this.eng = null;
     this.loop = null;
+    this._tickRef = 0;   // 自调节 tick 循环的累计基准（ms）
     this.snapAcc = 0;
     this.bootReport = null;
     this.resetTimer = null;
@@ -57,6 +58,10 @@ export class Room {
     // 的数字 slot 还原成 typeKey/模型/可选标记
     this.wasmSlots = new Map();
     this.wasmSlotsDirty = false;
+    // M6: 世界单位 u.order 内容快照（worldUnitId -> key），用于命令镜像 diff
+    this._mirrored = new Map();
+    // M6: 世界单位 u.path 引用快照（worldUnitId -> u.path），用于路径接管 diff
+    this._mirrorPathRef = new Map();
     // M5: client 确认收到 binary 后，JSON 快照降频（每 5 帧 ≈ 每 10 tick）
     this.clientBinaryReady = false;
     this.jsonAcc = 0;
@@ -254,12 +259,11 @@ export class Room {
       // RTS 训练: 选中建筑 -> 训练单位 (Terenas 官方对战)
       const units = sel(4);
       for (const unit of units) W.order(unit, { type: 'train', trainType: m.trainType });
-      this._wasmCommand(m, units);   // wasm 无训练队列语义，内部跳过；产物由 _syncWasm 同步
+      // 训练产物由 _syncWasm 同步 spawn；wasm 无训练队列语义
     } else if (m.t === Msg.BUILD) {
       // RTS 建造: 选中农民 -> 在 (x,y) 建建筑
       const units = sel(4);
       for (const unit of units) W.order(unit, { type: 'build', buildType: m.buildType, x: m.x, y: m.y });
-      this._wasmCommand(m, units);
     } else if (m.t === 'castUnit') {
       // Casting from a selected unit's command card. The ability is named
       // outright instead of by slot, because a non-hero's card is the list in
@@ -293,8 +297,7 @@ export class Room {
         }
       }
       if (queueFull) this.send(p.ws, { t: Msg.ERROR, m: 'Order queue is full (35 commands).' });
-      // M6: 同一批单位把命令镜像进 wasm（binary 快照位置才与 JSON 一致）
-      this._wasmCommand(m, sel(12));
+      // 玩家命令只进 world（u.order），下一 tick 由 _mirrorWorldOrders 统一镜像进 wasm
     } else {
       return;   // 未知消息类型，不处理
     }
@@ -303,37 +306,75 @@ export class Room {
   }
 
   /**
-   * M6: 把玩家命令同步进 wasm（位置/战斗核心镜像）。world.js 语义仍权威；
-   * wasm 收到相同命令后，binary SOA 快照才与 JSON 一致，binary 通道才可启用。
-   * 边界：只对 wasm 有槽位的单位下发；wasm 无训练/技能语义（跳过）；
-   * attack 目标在 wasm 无槽位（野怪等地形单位不 spawn）时按 attack-move 到
-   * 其位置近似。
+   * M6: 世界单位命令 → wasm 镜像（统一命令源）。
+   * world 的 order() 是全部命令的入口——玩家命令与内部自动命令（stepGathers
+   * 采矿 move、callForHelp 求助攻击等）都会写 u.order。每 tick 对每个有 wasm
+   * 槽位的单位比较 u.order 内容快照，变化即 push 进 wasm：
+   *   idle→stop、hold→hold、move→move、attackMove/patrol→attackMove、
+   *   attack→attack(目标有槽位)/attackMove(目标位置近似)、follow→move 近似。
+   * wasm 侧自带 gather_pass/build_pass，命令流一致后两边状态机同步推进。
+   * 边界：wasm 无训练/技能语义（跳过）；野怪等无槽位单位不镜像（不参与 wasm）。
+   * 玩家命令不再单独接线（删除 _wasmCommand 分支）——命令只进 u.order，
+   * 下一 tick 由本函数统一捕获，单一来源不会双写打架。
    */
-  _wasmCommand(m, units) {
+  _mirrorWorldOrders() {
     if (!this.wasmReady || !this.world) return;
+    const W = this.world;
     const OP = SIM_ORD;
-    for (const u of units) {
-      const slot = this.wasmSlotOf.get(u.id);
-      if (slot == null) continue;
+    for (const [wuId, slot] of this.wasmSlotOf) {
+      const u = W.units.get(wuId);
+      if (!u || !u.alive) continue;
+      const o = u.order || { type: 'idle' };
+      const key = `${o.type}|${o.x ?? ''}|${o.y ?? ''}|${o.targetId ?? ''}`;
+      if (this._mirrored.get(wuId) === key) continue;
+      this._mirrored.set(wuId, key);
       const B = this.bridge;
-      if (m.t === Msg.MOVE) {
-        if (!(Number.isFinite(m.x) && Number.isFinite(m.y))) continue;
-        B.pushOrder(slot, m.patrol || m.attack ? OP.attackMove : OP.move, m.x, m.y);
-      } else if (m.t === Msg.STOP) {
-        B.pushOrder(slot, OP.stop, 0, 0);
-      } else if (m.t === 'hold') {
-        B.pushOrder(slot, OP.hold, 0, 0);
-      } else if (m.t === Msg.ATTACK || m.t === 'smart') {
-        const target = this.world.target(m.targetId);
-        if (!target) continue;
-        const tSlot = this.wasmSlotOf.get(target.id);
-        if (tSlot != null) B.pushOrder(slot, OP.attack, 0, 0, tSlot);
-        else if (Number.isFinite(target.x) && Number.isFinite(target.y))
-          B.pushOrder(slot, OP.attackMove, target.x, target.y);
-      } else if (m.t === Msg.BUILD) {
-        B.orderBuild(slot, m.buildType, m.x, m.y);
+      const t = o.type;
+      if (process.env.WAR3_TRACE_MIRROR === String(u.id)) {
+        console.log(`[m]${this.world.tick} u${u.id} order ${t}(${o.x},${o.y},tgt=${o.targetId ?? ''}) path=${u.path ? u.path.length : 0}`);
       }
-      // TRAIN / castUnit：wasm 无对应语义，跳过（训练产物由 _syncWasm 同步 spawn）
+      if (t === 'idle' || t === 'stop') B.pushOrder(slot, OP.stop, 0, 0);
+      else if (t === 'hold') B.pushOrder(slot, OP.hold, 0, 0);
+      else if (t === 'move') B.pushOrder(slot, OP.move, o.x, o.y);
+      else if (t === 'attackMove' || t === 'patrol') B.pushOrder(slot, OP.attackMove, o.x ?? 0, o.y ?? 0);
+      else if (t === 'attack' || t === 'follow') {
+        const target = o.targetId != null ? W.units.get(o.targetId) : null;
+        if (!target || !target.alive || target.isDest) { B.pushOrder(slot, OP.stop, 0, 0); continue; }
+        const tSlot = this.wasmSlotOf.get(target.id);
+        if (t === 'attack' && tSlot != null) B.pushOrder(slot, OP.attack, 0, 0, tSlot);
+        else B.pushOrder(slot, t === 'follow' ? OP.move : OP.attackMove, target.x, target.y);
+      }
+      // train/cast/其余：wasm 无对应语义，跳过
+    }
+  }
+
+  /**
+   * M6: world 单位路径 → wasm（引用 diff：stepMove 的 shift 只改内容不改引用，
+   * routeUnit / requestMovementPath 重算时换新数组）。
+   * 必须在 flushOrders() 之后调用——覆盖 flush 里 sim_order_move 自己 A* 的路径，
+   * 让 wasm 单位沿 world 同一条路径走，位置逐 tick 同轨。
+   */
+  _applyWorldPaths() {
+    if (!this.wasmReady || !this.world) return;
+    const W = this.world;
+    const OP = SIM_ORD;
+    for (const [wuId, slot] of this.wasmSlotOf) {
+      const u = W.units.get(wuId);
+      if (!u || !u.alive) continue;
+      const o = u.order || { type: 'idle' };
+      const t = o.type;
+      const active = (t === 'move' || t === 'attackMove' || t === 'patrol') && u.path && u.path.length;
+      const ref = active ? u.path : null;
+      if (this._mirrorPathRef.get(wuId) === ref) continue;
+      this._mirrorPathRef.set(wuId, ref);
+      if (process.env.WAR3_TRACE_MIRROR === String(wuId)) {
+        console.log(`[p]${W.tick} u${wuId} path ${ref ? ref.length + 'pts' : 'null'} order=${t}`);
+      }
+      if (ref === null) {
+        this.bridge.commandPath(slot, null);   // 到达/打断：清 wasm 路径
+      } else {
+        this.bridge.commandPath(slot, u.path, t === 'patrol' ? OP.attackMove : OP.move);
+      }
     }
   }
 
@@ -371,7 +412,19 @@ export class Room {
     // M4 阶段 4：wasm 桥异步初始化，不阻塞开局；init 完成后 stepLoop 自动开始同步
     this._initWasm();
     this.broadcastState();
-    this.loop = setInterval(() => this.stepLoop(), 1000 / TICK_HZ);
+    // 自调节 tick 循环：setInterval 在 stepLoop 耗时波动时周期漂移（用户观感
+    // "掉tick/一抽一抽"——binary 帧到达间隔忽长忽短，客户端位置节拍跳动）。
+    // 改为按累计时间对齐：每 tick 后基于基准时间补偿下一周期，stepLoop 耗时可吸收。
+    this._tickRef = performance.now() + 1000 / TICK_HZ;
+    this.loop = setTimeout(() => this._tickLoop(), 1000 / TICK_HZ);
+  }
+
+  /** 自调节 tick：对齐到 _tickRef 累计时刻，stepLoop 耗时不会累积漂移。 */
+  _tickLoop() {
+    this.stepLoop();
+    this._tickRef += 1000 / TICK_HZ;
+    const delay = Math.max(0, this._tickRef - performance.now());
+    this.loop = setTimeout(() => this._tickLoop(), delay);
   }
 
   /** 异步加载 wasm 桥（失败时静默降级，仍跑纯 JS 模拟）。 */
@@ -504,8 +557,11 @@ export class Room {
       // 各自 tick，SOA 快照以 wasm 为准；JSON 快照仍以 world.js 为准（两套共存）
       if (this.wasmReady) {
         this._syncWasm();
-        // M6: 上一批命令（_wasmCommand push 的）在 step 前生效
+        // M6: 世界单位命令变化 → wasm（含玩家命令 + stepGathers 等自动命令）
+        this._mirrorWorldOrders();
         this.bridge.flushOrders();
+        // M6: flush 会自己 A*，这里用 world 已算好的路径整段覆盖 → 逐 tick 同轨
+        this._applyWorldPaths();
         this.bridge.step(1 / TICK_HZ);
       }
       const scriptEvents = this.eng.flushClientEvents();
@@ -525,6 +581,13 @@ export class Room {
         return;
       }
       if (all.length) this.broadcast({ t: Msg.EVENT, ev: all.slice(0, 200) });
+      // M6: binary 位置/HP 快照每 tick 广播（30 Hz）——位置主通道，绝不能被
+      // 15 Hz 节流（否则每 67ms 才跳一次位置 = 用户看到的"一抽一抽/掉 tick"）。
+      // JSON 快照才按 clientBinaryReady 降频（元数据刷新）。
+      if (this.wasmReady) {
+        try { this._broadcastWasmSnapshot(); }
+        catch (e) { console.error('wasm snapshot broadcast failed:', e.message); }
+      }
       if (++this.snapAcc >= TICK_HZ / SNAP_HZ) {
         this.snapAcc = 0;
         // M5: slots registry 变化时推送（client 用它解码 binary 快照）
@@ -532,9 +595,6 @@ export class Room {
           this._broadcastSlots();
           this.wasmSlotsDirty = false;
         }
-        // M5: binary 快照始终全速（15 Hz），作为主数据源
-        try { this._broadcastWasmSnapshot(); }
-        catch (e) { console.error('wasm snapshot broadcast failed:', e.message); }
         // M5: JSON 快照——clientBinaryReady 后降频（每 5 帧 ≈ 每 10 tick）
         // 降频后 JSON 负责元数据刷新（buff/物品/资源/计分板），binary 负责位置
         this.jsonAcc++;

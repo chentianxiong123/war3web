@@ -3,13 +3,13 @@ import { AlertHistory } from './alerts.js';
 import { Selection } from './selection.js';
 import { minimapPoint } from './minimap.js';
 import { Net } from './net.js';
-import { Renderer, toX, toZ } from './render.js';
+import { Renderer, toX, toZ, snapshotFromBinary } from './render.js';
 import { UI, Lang } from './ui.js';
 import { HeroPreview } from './heroview.js';
 import { Overlay } from './overlay.js';
 import { buildConsole, buildTopBar, placeIn } from './console.js';
 import { Audio } from './audio.js';
-import { Msg, Phase, Ent, DEST_ID } from '/shared/const.js';
+import { Msg, Phase, Ent, DEST_ID, TICK_HZ } from '/shared/const.js';
 
 const alerts = new AlertHistory();
 const net = new Net();
@@ -175,26 +175,46 @@ net.on(Msg.SNAPSHOT, (m) => {
   const now = performance.now();
   S.snapDt = Math.max(1 / 60, Math.min(0.5, (now - S.lastSnap) / 1000)) || 1 / 15;
   S.lastSnap = now;
+  // binary 通道启用后：wasm 注册单位的位置/朝向/HP/移动由 binary 快照独占
+  //（33ms 高频），JSON 每 5 tick 再写一次会把它覆盖成 167ms 前的旧值，形成
+  // 台阶跳变/振荡（"走路抽搐"）。JSON 对这些单位只更新元数据（模型/类型/
+  // buff/生命状态），位置保持 binary 最新值。
+  const wasmIds = S.binaryReadySent && S.slots ? new Set(Object.values(S.slots).map((s) => s.id)) : null;
   const seen = new Set();
   for (const e of m.s.ents) {
     // M5: binary-ready 时跳过死亡单位——由 binary 通道管理删除，避免 JSON 重新添加导致闪烁
     if (S.binaryReadySent && !e.a) continue;
     seen.add(e.i);
-
-    const old = S.ents.get(e.i);
-    S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
-    const meta = findMeta(e);
-    S.ents.set(e.i, Object.assign({}, meta, e));
-    // A unit can change type mid-game -- Metamorphosis swaps the hero for its
-    // alternate form -- and the view is built once from the model that type
-    // names, so it has to be rebuilt when the type underneath it changes.
-    if (!view.views.has(e.i)) view.spawnView(S.ents.get(e.i));
-    else if (old && old.u !== e.u) {
-      view.removeView(e.i);
-      view.spawnView(S.ents.get(e.i));
+    if (wasmIds && wasmIds.has(e.i)) {
+      const old = S.ents.get(e.i);
+      const merged = Object.assign({}, findMeta(e), e);
+      if (old) {
+        merged.x = old.x; merged.y = old.y; merged.f = old.f;
+        merged.h = old.h; merged.mv = old.mv;
+      }
+      S.ents.set(e.i, merged);
+      if (!view.views.has(e.i)) view.spawnView(merged);
+      else if (old && old.u !== e.u) {
+        view.removeView(e.i);
+        view.spawnView(merged);
+      }
+      if (e.b || old?.b) view.syncBuffArt(e.i, e.b, S.buffArt);
+    } else {
+      const old = S.ents.get(e.i);
+      S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
+      const meta = findMeta(e);
+      S.ents.set(e.i, Object.assign({}, meta, e));
+      // A unit can change type mid-game -- Metamorphosis swaps the hero for its
+      // alternate form -- and the view is built once from the model that type
+      // names, so it has to be rebuilt when the type underneath it changes.
+      if (!view.views.has(e.i)) view.spawnView(S.ents.get(e.i));
+      else if (old && old.u !== e.u) {
+        view.removeView(e.i);
+        view.spawnView(S.ents.get(e.i));
+      }
+      // the models the unit's buffs hang on it; a no-op unless the set changed
+      if (e.b || old?.b) view.syncBuffArt(e.i, e.b, S.buffArt);
     }
-    // the models the unit's buffs hang on it; a no-op unless the set changed
-    if (e.b || old?.b) view.syncBuffArt(e.i, e.b, S.buffArt);
   }
   for (const id of [...S.ents.keys()]) {
     if (seen.has(id)) continue;
@@ -235,18 +255,49 @@ net.on(Msg.EVENT, (m) => {
   for (const ev of m.ev) handleEvent(ev);
 });
 
-// M5/M6 二进制通道——暂缓启用。
-// 现状：server 的玩家命令（move/attack/build/train）只派发到 JS world
-//（房间 handleMessage -> W.order()），从未同步进 wasm 模拟。wasm 只有
-// spawn + step + buff，单位在 wasm 里永远停在出生点。于是 binary 快照
-// 的位置是"静态出生点"，与真正在动的 JSON 快照每次都会打架——每 10 tick
-// 相互覆盖一次，表现就是农民移动时来回闪、建筑像被拖动。
-// 对策：binary 通道先停用（解析但丢弃），JSON 快照保持全速作为唯一权威
-//（位置/HP/生命周期/create/delete），等命令真正接入 wasm 后再启用 binary。
+// M6 二进制 SOA 快照通道——位置/HP 高频更新通道。
+// server 每 tick 发送 binary 快照，client 解码后只更新已有视图的位置/朝向/HP
+//（不创建视图，视图创建交给 JSON handler）。
+// 曾因 wasm 收不到命令（位置=静态出生点）与 JSON 打架造成来回闪烁而停用
+//（4282efc）；M6 命令+路径全镜像后 binary 与 JSON 逐帧一致（avg≈4 单位），
+// 通道恢复。首次收到 binary 后通知 server 降频 JSON 快照。
 net.on('s', (bytes) => {
   const data = bytes.slice(1);   // 去掉 tag 字节
   if (data.byteLength < 20) return;
-  // 暂不写客户端状态；保留 socket 兼容即可
+  // binary 每 tick 到达：重置插值节拍。若不重置，alpha 会按 JSON 的 166ms
+  // 间隔走满 1 后“直接跳”到每 33ms 前移的目标点，形成 30Hz 步进抽搐。
+  S.snapDt = 1000 / TICK_HZ;
+  S.lastSnap = performance.now();
+  const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  const ents = snapshotFromBinary(buf, S.slots || {}, S.colors || []);
+  const seen = new Set();
+  for (const e of ents) {
+    seen.add(e.i);
+    const old = S.ents.get(e.i);
+    S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
+    // 更新 ents 数据（位置/HP/朝向），不覆盖元数据（model/typeKey 等由 JSON handler 管理）
+    if (old) {
+      old.x = e.x; old.y = e.y; old.f = e.f;
+      old.h = e.h; old.a = e.a; old.mv = e.mv;
+    } else {
+      const meta = findMeta(e);
+      S.ents.set(e.i, Object.assign({}, meta, e));
+    }
+  }
+  // 删除 wasm 已确认死亡/移除的单位（只处理 S.slots 注册过的）
+  if (S.slots) {
+    for (const slot of Object.values(S.slots)) {
+      const id = slot.id;
+      if (!seen.has(id) && S.ents.has(id)) {
+        S.ents.delete(id); S.prev.delete(id); view.removeView(id);
+      }
+    }
+  }
+  // 首次收到 binary，通知 server 降频 JSON 快照
+  if (!S.binaryReadySent) {
+    S.binaryReadySent = true;
+    net.send({ t: Msg.BINARY_READY });
+  }
 });
 
 net.on(Msg.CHATMSG, (m) => ui.log(`<b>${escapeHtml(m.from)}:</b> ${escapeHtml(m.text)}`));

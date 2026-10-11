@@ -171,16 +171,15 @@ try {
   check('wasm 农民收到命令并在移动（接线生效，binary Δ>60）', wasmMoved > 60, `Δ=${wasmMoved.toFixed(1)}`);
   check('JS 农民同步在移动（JSON Δ>300）', jsonMoved > 300, `Δ=${jsonMoved.toFixed(1)}`);
 
-  // 一致性报告（非门禁）：world 内部自动命令（stepGathers 采矿循环）在 world.step 里
-  // 直接 order(move)，不经过 room.command，故未镜像进 wasm；两者逐帧偏差是真实差距，
-  // 供后续对齐工作量化——不是接线逻辑本身的问题（order_test 已证明同序命令 C/JS 一致）。
+  // M6 门禁 3：两套模拟逐帧同轨（命令+路径全镜像后 avg 应 ≈4 单位）
   let maxDev = 0, sumDev = 0;
   for (const s of samples) {
     const d = Math.hypot(s.bx - s.jx, s.by - s.jy);
     maxDev = Math.max(maxDev, d); sumDev += d;
   }
   const avgDev = samples.length ? sumDev / samples.length : Infinity;
-  console.log(`  [报告] binary 与 JSON 逐帧偏差 avg=${avgDev.toFixed(1)} max=${maxDev.toFixed(1)} n=${samples.length}（world 自动采矿未镜像所致）`);
+  check('binary 与 JSON 位置逐帧一致（平均偏差 ≤12）', samples.length > 0 && avgDev <= 12,
+        `avg=${avgDev.toFixed(2)} max=${maxDev.toFixed(2)} n=${samples.length}`);
 
   if (A.errs.length) console.log('  [client errs]', A.errs.slice(0, 3).join(' | '));
 } finally {

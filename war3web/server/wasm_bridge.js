@@ -102,6 +102,8 @@ export class WasmBridge {
     this._evBuf = 0;
     this._buildBuf = 0;   // M4 阶段 5：建造状态读取 buffer
     this._initDone = false;
+    this._pathMem = 0;    // M6: world 路径同步 scratch（float 点数，懒分配）
+    this._pathCap = 0;
   }
 
   /** 加载 wasm + 初始化 grid + damage table。幂等，重复调用返回 true。 */
@@ -273,6 +275,30 @@ export class WasmBridge {
   /** M6: 使已入队命令生效（每次 sim_step 前调用一次）。 */
   flushOrders() {
     if (this.eng) this.eng._sim_flush_orders();
+  }
+
+  /**
+   * M6: 用 world.js 已算好的路径整段接管单位行走（覆盖 flush 里 A* 的结果）。
+   * world 的 u.path 是 [x,y] 世界坐标途经点数组（含终点，stepMove shift 消费）；
+   * 传 null 清空路径回 idle。
+   * @param {number} id wasm 槽位
+   * @param {number[][]|null} pts world u.path
+   * @param {number} op SIM_ORD.move / SIM_ORD.attackMove
+   */
+  commandPath(id, pts, op = SIM_ORD.move) {
+    if (!this.eng) return;
+    if (!pts || !pts.length) { this.eng._sim_command_path(id | 0, 0, 0, 0); return; }
+    const need = pts.length * 2;
+    if (need > this._pathCap) {
+      if (this._pathMem) this.eng._free(this._pathMem);
+      this._pathMem = this.eng._malloc(need * 4);
+      this._pathCap = need;
+    }
+    const f32 = this.eng.HEAPF32;
+    for (let i = 0, j = this._pathMem >> 2; i < pts.length; i++) {
+      f32[j++] = pts[i][0]; f32[j++] = pts[i][1];
+    }
+    return this.eng._sim_command_path(id | 0, this._pathMem, pts.length | 0, op | 0);
   }
 
   /**
