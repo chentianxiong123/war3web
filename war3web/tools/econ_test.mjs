@@ -23,7 +23,7 @@ const K = { htow: 3, ngol: 2, hpea: 1 };
 const SPEED = { hpea: 190, htow: 0, ngol: 0 };
 const RAD = { hpea: 16, htow: 176, ngol: 50 };
 for (let i = 0; i < s.pos.length; i++) {
-  eng._sim_spawn_econ(i, s.pos[i][0], s.pos[i][1], K[s.kinds[i]], s.pl[i], SPEED[s.kinds[i]], RAD[s.kinds[i]]);
+  eng._sim_spawn_econ(i, s.pos[i][0], s.pos[i][1], K[s.kinds[i]], s.pl[i], SPEED[s.kinds[i]], RAD[s.kinds[i]], s.face?.[i] || 0, s.hp?.[i] || 0);
 }
 
 // 记录 C 侧 gold 事件

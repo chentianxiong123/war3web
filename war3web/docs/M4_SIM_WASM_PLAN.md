@@ -199,6 +199,47 @@
   精确等于 deathTick——**4/4 全过**。
 - **回归**：combat 4/4、econ 全过、engine 114/114、sim_test 全绿（零回归）。
 
+#### 2.11 SOA 快照序列化进 WASM（阶段 3）——2/2 场景逐字段对账全过 ✅
+- **`sim_snapshot(buf, maxN)`**：单位属性按列写入 wasm 连续 buffer，为 M5
+  「wasm heap → GPU buffer」零拷贝链路与收尾「删 JS 双实现」准备。
+  布局（全 f32，int 直接位塞）：`header(5) = tick, nowMs, nUnits, nMissiles, nEvents`
+  + 单位列（`nUnits × 11`，列序 `x, y, facing, hp, maxHp, alive, team, playerIndex,
+  kind, moving, gathering`）+ 玩家资源（`gold[16]`）+ 导弹列（`nMissiles × 2`，x,y）
+  + 事件列（`nEvents × 4`，tick/type/a/b）。
+  调用方先传 maxN，`need > maxN` 时不写只返回需要量（按需分配）。
+- **活/死单位口径对齐**：JS `snapshot()` 收全部未 removed 单位（死亡单位带 `a:0`），
+  故 C 用 `radius > 0` 作「曾放置」标记（`sim_spawn` 恒置 radius>0），而非 `alive`——
+  死单位保留最后坐标，nUnits 两侧精确相等。
+- **`sim_clear_all` 全字段重置**（原实现只清 alive/nPath）：`memset(U,M,GOLD)` +
+  sentinel 补 `mineId/baseId/orderTargetId/attackWindupTarget = -1`。
+  原实现让前一场景的 radius/team/gold 残留到下一场景，快照对账直接暴露。
+- **`sim_spawn_econ` 增 facing/hp**：JS createUnit 传朝向、经济单位也有 HP
+  （hpea 220 / ngol 1500 / htow 150000），快照要比对就得带进来。
+- **赏金移植（门禁抓出的真实缺口）**：JS `awardKill`（world.js 884-889）击杀即向
+  杀害者所属玩家发 `victim.bounty || 10 + level*4`（hfoo 20 / hwat 25）。
+  C 侧 `SimUnit` 增 `bounty`/`level`，`sim_damage` 击杀分支结算
+  `GOLD[src.playerIndex] += bounty || 10 + 4*level`，新增 `sim_set_meta(id, playerIndex,
+  bounty, level)` 承载这三个 spawn 签名外的字段。**只结算金、不发事件**——JS 的
+  `bounty` 浮字事件另受 `owner.givesBounty` 门控，那是地图 init 给 Player 0..7 开启的
+  玩家槽状态，尚未移植。
+- **新 golden tools/snapshot_golden.mjs** → `goldens/snapshot_trace.json`：经济采集
+  （htow+ngol+hpea）与远程战斗（hwat vs hfoo）两场景，5 个检查点（t1/60/180/360/600）
+  各录 `units[x,y,facing,hp,maxHp,team,pi,alive,mv]` + `gold[12]` + `nMissiles`。
+  重跑字节级对比确认：经济场景完全确定，仅战斗场景 HP 因伤害 roll 抖动 ±1-4。
+- **新测试 tools/snapshot_test.mjs（阶段 3 门禁）**：C 侧跑同场景 `sim_step` 到各检查点，
+  `sim_snapshot` 解码后逐字段对账。门禁：单位数精确、Δx/Δy ≤2、Δfacing ≤0.1、
+  team/pi/alive 精确、mv 不匹配 ≤1、经济 ΔHP/gold ≤0/10、战斗 ΔHP/gold ≤40/30
+  （击杀时刻受 RNG 影响，允许差一次赏金）、导弹数 Δ≤1。
+  **结果 2/2 全过**：单位数 3/3、2/2 精确；Δx0 Δy0 Δf0.00；经济 ΔHP0 Δgold0；
+  战斗 ΔHP ≤15（≤40 门禁）；meta/mv 全 0。
+- **门禁价值**：这一轮对账抓出三类真实问题——`sim_clear_all` 跨场景残留、
+  快照列序与 JS 9 字段顺序错位（alive/team/pi 三列互换）、击杀赏金未移植。
+  前两者属对账工具与快照接口的口径问题，第三者是 C 模拟的实质缺口。
+- **回归**：combat 4/4、econ 全过、sim_step 4/4、sim_test 全绿、engine 114/114（零回归）。
+  `npm test` 的 73 个失败均为环境性（Puppeteer 无法启动浏览器 Code 21）或
+  server 侧预存断言，与本 diff 无关——`git status` 确认未触碰 `server/`，
+  唯一改动的共享产物 `goldens/econ_trace.json` 只被通过的 `econ_test` 读取。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
@@ -221,18 +262,26 @@
   零拷贝链路），Node 端只做协议封装，不再逐对象序列化
 - 门禁：快照字节与现有 JS 快照逐字段对账（单位数/坐标/生命/资源）
 
-## 3. SOA 快照布局草案
+## 3. SOA 快照布局（阶段 3 已落地，见 2.11）
+
+原草案（magic/version/CRC32/mana/typeId）按实际需要对齐为：
 
 ```
-struct SnapHeader { u32 magic; u32 version; u32 tick; u32 nUnits; }
-// 单位列（每列 nUnits × f32/i32）：
-//   x[], y[], facing[], life[], maxLife[], mana[], maxMana[],
-//   typeId[], pi[], flags(alive/visible)[]
-// 弹道列、经济列（金/木 per player）
-// 结尾：CRC32（或每列 xxhash，供对账定位差异列）
+// 全 f32 连续 buffer；int 直接位塞（tick/team/pi/kind 值域小，f32 无损）
+f32 header[5]  = tick, nowMs, nUnits, nMissiles, nEvents
+f32 单位列[nUnits × 11]，列序：
+      x, y, facing, hp, maxHp, alive, team, playerIndex, kind, moving, gathering
+f32 gold[16]                          // 玩家资源（经济列）
+f32 导弹列[nMissiles × 2]             // x, y
+f32 事件列[nEvents × 4]               // tick, type, a, b
 ```
-固定列布局 = 快照体积稳定（几千单位 × ~30 字节 ≈ 百 KB/tick @15Hz ≈ 1.5MB/s，
-远低于 WebSocket 压力线，且 M5 零拷贝后无 JS 序列化开销）。
+- **未做 magic/version/CRC32**：对账门禁直接逐字段比对，比列哈希更直接定位差异；
+  跨版本兼容待多实现并存时再加。
+- **未做 mana/typeId**：C 侧未移植法力与字符串类型键（JS 侧 `typeKey` 经
+  `UNIT_CASTABLE` 等查表，客户端自己从 data/abilities.json 读名与图标）；
+  单位标识用 `kind` 整数 + `team`/`playerIndex`，渲染分类足够。
+- **体积**：单位 11 × 4 = 44 B/单位（草案估 ~30 B），几千单位 ≈ 百 KB/tick，
+  量级不变，仍远低于 WebSocket 压力线。
 
 ## 4. 数据流（M4→M5 衔接）
 
@@ -247,12 +296,12 @@ server tick
 
 ## 5. 分步排期（对当前推进速度的保守估计）
 
-| 阶段 | 内容 | 预计 |
-|---|---|---|
-| 1 | 移动/寻路/碰撞进 WASM | 1-2 周 |
-| 2 | 弹道/攻击/经济进 WASM | 1-2 周 |
-| 3 | SOA 快照 + 对账门禁 | 1 周 |
-| 收尾 | 删 JS 双实现/开关切换 | 1 周 |
+| 阶段 | 内容 | 预计 | 状态 |
+|---|---|---|---|
+| 1 | 移动/寻路/碰撞进 WASM | 1-2 周 | ✅ |
+| 2 | 弹道/攻击/经济进 WASM | 1-2 周 | ✅（全量 tick + 事件桥） |
+| 3 | SOA 快照 + 对账门禁 | 1 周 | ✅（见 2.11） |
+| 收尾 | 删 JS 双实现/开关切换 | 1 周 | 待开始 |
 
 ## 6. 风险与对策
 

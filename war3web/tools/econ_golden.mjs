@@ -29,6 +29,8 @@ peas.push(w.createUnit(p0, 'hpea', 1392, 1104, 0));
 const pos = [base, mine, ...peas].map((u) => [Math.round(u.x), Math.round(u.y)]);
 const kinds = [base, mine, ...peas].map((u) => u.typeKey);
 const pl = [0, 2, 0];   // base p0 / mine n1 / pea p0
+const hp = [base, mine, ...peas].map((u) => u.maxHp);
+const face = [base, mine, ...peas].map((u) => u.facing);
 
 const goldEvents = [];   // [t, gold]
 const peaTrace = [];     // [t, x, y]
@@ -45,7 +47,7 @@ peas[0].removed = true;   // 防 delete 后引用报错（golden 只读 pos）
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify({
   world: 'terenas', dt: 1 / 30,
-  scene: { pos, kinds, pl },
+  scene: { pos, kinds, pl, hp, face },
   goldEvents: goldEvents,
   peaTrace,
 }, null, 1));

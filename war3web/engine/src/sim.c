@@ -61,6 +61,9 @@ typedef struct {
   int gatherPhase;           // 0=none 1=toMine 2=mining 3=toBase
   int mineId, baseId;
   double gatherUntilMs;      // 挖矿完成毫秒
+  // ---- 赏金（阶段 3：awardKill）----
+  double bounty;             // 击杀赏金（JS type.bountyPlus；0 → 回退 10 + level*4）
+  int level;                 // 单位等级（赏金回退公式用）
 } SimUnit;
 static SimUnit U[SIM_MAX];
 static long long SIM_NOW;   // tick 计数（模拟 world.now）
@@ -123,7 +126,13 @@ void sim_spawn(int id, double x, double y, double facing, double speed, double r
   U[id].nPath = 0; U[id].goalX = 1e18; U[id].goalY = 1e18;   // 初始目标无效 → 首次必寻路
 }
 void sim_clear_all(void) {
-  for (int i = 0; i < SIM_MAX; i++) { U[i].alive = 0; U[i].nPath = 0; }
+  // 全字段归零（防跨场景残留：radius/team/playerIndex/hp/gather 等）
+  memset(U, 0, sizeof(U));
+  memset(M, 0, sizeof(M));
+  memset(GOLD, 0, sizeof(GOLD));
+  for (int i = 0; i < SIM_MAX; i++) {
+    U[i].mineId = -1; U[i].baseId = -1; U[i].orderTargetId = -1; U[i].attackWindupTarget = -1;
+  }
   EVN = 0; FXSEQ = 0; SIM_NOW = 0;
   OCN = 0;
 }
@@ -697,6 +706,13 @@ void sim_spawn_fight(int id, double x, double y, double facing, double speed, do
   u->acquisitionRange = 500; u->homeX = x; u->homeY = y;
 }
 
+/** 单位元数据（不在 spawn_fight 签名里的部分）：所属玩家槽 + 赏金 + 等级。
+ *  awardKill 用 playerIndex 记账、用 bounty/level 定金额（见 sim_damage）。 */
+void sim_set_meta(int id, int playerIndex, double bounty, int level) {
+  if (id < 0 || id >= SIM_MAX) return;
+  U[id].playerIndex = playerIndex; U[id].bounty = bounty; U[id].level = level;
+}
+
 /** 伤害结算（damage() 纯数值子集）。返回实际伤害。 */
 static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   SimUnit* t = &U[tgtId];
@@ -706,7 +722,19 @@ static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   dmg *= armor_factor(t->armor);
   t->hp -= dmg;
   t->dmgCount++;
-  if (t->hp <= 0) { t->alive = 0; t->deathCount = 1; ev_push(SIM_EV_DEATH, (int)(t - U), 0); }
+  if (t->hp <= 0) {
+    t->alive = 0; t->deathCount = 1;
+    // awardKill（world.js 884-889）：击杀赏金归杀害者所属玩家。
+    // 金额 = victim.bounty（bountyPlus）非零则用它，否则 10 + level*4。
+    // JS 的 bounty *事件*（浮字）另受 owner.givesBounty 门控——那是地图/玩家槽
+    // 状态（map init 给 Player 0..7 开启），尚未移植，故此处只结算金、不发事件。
+    if (srcId >= 0 && srcId < SIM_MAX && srcId != tgtId) {
+      const SimUnit* src = &U[srcId];
+      if (src->playerIndex >= 0 && src->playerIndex < 16)
+        GOLD[src->playerIndex] += (t->bounty > 0 ? t->bounty : 10.0 + 4.0 * (double)t->level);
+    }
+    ev_push(SIM_EV_DEATH, (int)(t - U), 0);
+  }
   return dmg;
 }
 
@@ -866,11 +894,14 @@ void sim_get_fight(int id, float* out) {
 }
 
 // ------------------------------------------------------------------ 经济（阶段 2：stepGathers）
-/** 放置经济单位：kind 0=other 1=hpea(农民) 2=ngol(金矿) 3=htow(基地)。 */
-void sim_spawn_econ(int id, double x, double y, int kind, int playerIndex, double speed, double radius) {
-  sim_spawn(id, x, y, 0, speed, radius, 0, 0);
+/** 放置经济单位：kind 0=other 1=hpea(农民) 2=ngol(金矿) 3=htow(基地)。
+ *  facing/hp 供快照对账（JS 侧 hpea 420 / ngol 1250 / htow 4500，朝向随 createUnit 传入）。 */
+void sim_spawn_econ(int id, double x, double y, int kind, int playerIndex, double speed, double radius,
+                    double facing, double hp) {
+  sim_spawn(id, x, y, facing, speed, radius, 0, 0);
   SimUnit* u = &U[id];
   u->kind = kind; u->playerIndex = playerIndex;
+  u->hp = hp; u->maxHp = hp; u->team = 0;
   u->gatherPhase = 0; u->mineId = -1; u->baseId = -1; u->gatherUntilMs = 0;
 }
 
@@ -969,6 +1000,77 @@ int sim_events_get(float* out, int maxN) {
     out[4 * i + 2] = (float)EV[i].a; out[4 * i + 3] = (float)EV[i].b;
   }
   return n;
+}
+
+// ------------------------------------------------------------------ SOA 快照（阶段 3）
+// 单位属性按列布局写入 wasm 连续 buffer，供 M5「wasm heap → GPU buffer」零拷贝链路
+// 与 M4 收尾「删 JS 双实现」的对账门禁。布局（全部 f32，int 直接位塞）：
+//   header(5)：tick, nowMs, nUnits, nMissiles, nEvents
+//   单位列（nUnits × 11，列序固定）：
+//     x, y, facing, hp, maxHp, alive, team, playerIndex, kind, moving, gathering
+//   玩家资源（16）：gold[0..15]
+//   导弹列（nMissiles × 2）：x, y
+//   事件列（nEvents × 4）：tick, type, a, b
+// 返回需要的 float 总数；maxN 不足则只返回需要量、不写（调用方按返回量分配）。
+#define SIM_SNAP_COLS 11
+int sim_snapshot(float* buf, int maxN) {
+  int nU = 0;
+  for (int i = 0; i < SIM_MAX; i++) if (U[i].radius > 0) nU++;   // radius>0 = 曾放置（含死亡，对齐 JS ents 含 a:0）
+  int nM = 0;
+  for (int i = 0; i < SIM_MISSILE_MAX; i++) if (M[i].active) nM++;
+  const int need = 5 + nU * SIM_SNAP_COLS + 16 + nM * 2 + EVN * 4;
+  if (maxN < need) return need;
+  int p = 0;
+  // header
+  buf[p++] = (float)SIM_NOW;
+  buf[p++] = (float)(SIM_NOW * (1000.0 / 30.0));
+  buf[p++] = (float)nU;
+  buf[p++] = (float)nM;
+  buf[p++] = (float)EVN;
+  // 单位列（列序：x y facing hp maxHp alive team pi kind moving gathering）
+  for (int c = 0; c < SIM_SNAP_COLS; c++) {
+    int idx = 0;
+    for (int i = 0; i < SIM_MAX; i++) {
+      const SimUnit* u = &U[i];
+      if (u->radius <= 0) continue;
+      float v = 0;
+      switch (c) {
+        case 0: v = (float)u->x; break;
+        case 1: v = (float)u->y; break;
+        case 2: v = (float)u->facing; break;
+        case 3: v = (float)u->hp; break;
+        case 4: v = (float)u->maxHp; break;
+        case 5: v = u->alive ? 1 : 0; break;
+        case 6: v = (float)u->team; break;
+        case 7: v = (float)u->playerIndex; break;
+        case 8: v = (float)u->kind; break;
+        case 9: v = (u->nPath > 0) ? 1 : 0; break;  // moving（有路径即在动）
+        case 10: v = (u->gatherPhase != 0) ? 1 : 0; break;  // gathering
+      }
+      buf[p++] = v; idx++;
+    }
+  }
+  // 玩家资源：gold[16]
+  for (int i = 0; i < 16; i++) buf[p++] = (float)GOLD[i];
+  // 导弹列
+  for (int c = 0; c < 2; c++) {
+    for (int i = 0; i < SIM_MISSILE_MAX; i++) {
+      if (!M[i].active) continue;
+      buf[p++] = (float)((c == 0) ? M[i].x : M[i].y);
+    }
+  }
+  // 事件列
+  for (int c = 0; c < 4; c++) {
+    for (int i = 0; i < EVN; i++) {
+      float v = 0;
+      if (c == 0) v = (float)EV[i].tick;
+      else if (c == 1) v = (float)EV[i].type;
+      else if (c == 2) v = (float)EV[i].a;
+      else v = (float)EV[i].b;
+      buf[p++] = v;
+    }
+  }
+  return need;
 }
 
 /** 全量 tick（M4 目标 wasm_step）：gather → missiles → 单位循环（AI/move/attack）。
