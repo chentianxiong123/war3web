@@ -278,6 +278,33 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
 - **M3（JASS 引擎）：3.1 词法语法 ✅ → 3.2 完整 AST ✅ → 3.3 拼接全量解析 ✅
   （670KB 逐字节一致）→ 3.4 VM 执行器 ✅ → 3.5 natives 分发表 ✅
   （~140 个，war3map.j main 全链跑通）→ 3.6 触发器同步执行 + C/JS 全局强对照 ✅
-  （880 全局 0 差异）→ 剩余：natives 语义深化②（Melee 系 610 次 stub：
-  CreateUnits 序列化/玩家对象表/事件注册）
-- M2（WebGPU 渲染）/ M5（zero-copy）：未开始
+  （880 全局 0 差异）→ 3.7-3.24 natives 语义深化 ✅（玩家表/单位表/rect/group/
+  force/item/hashtable/region/触发器条件+事件/玩家联盟/出生点/哈希表/物品/
+  能力/科技/数学族/销毁回收/GameState 事件）
+  → 剩余：触发器事件驱动执行（注册侧完整、触发侧待做）
+- **M4（模拟核心进 WASM）：阶段 1-3 ✅ + 收尾进行中**
+  （详见 docs/M4_SIM_WASM_PLAN.md）
+  - 阶段 1 ✅：移动/寻路/碰撞（A* + 碰撞检测 + 路径平滑）
+  - 阶段 2 ✅：近战/导弹/经济/赏金 + 事件桥（attack/missileEnd/death/bounty）
+  - 阶段 3 ✅：SOA 快照 15 列 + 对账门禁 2/2
+  - 收尾 🔄：命令输入通道 ✅ 2.12 → 快照驱动渲染 ✅ 2.13 → buff 效果桥 ✅ 2.14
+    → 剩余：vampiric/regen/stun/silence/invis 效果深化、建筑/物品系统
+- **M2（WebGPU 渲染）：步骤 A/B/C ✅，步骤 D 待决策**
+  （详见 docs/M2_WEBGPU_MIGRATION.md）
+  - 步骤 A ✅：WebGPURenderer 试点开关（localStorage.webgpu=1 切换）
+  - 步骤 B ✅：对局实测 95 单位模型 43754 draw calls
+  - 步骤 C ✅：粒子降级过渡（ShaderMaterial 不兼容 → WebGPU 通道跳过）
+  - 步骤 D ⏸：移除 WebGL 开关 or 长期保留回退——待 render_test 全绿决定
+- M5（zero-copy 数据流）/ M6（全量 + 规模验证）：未开始
+
+## 六、验证命令（M4 模拟核心）
+
+```bash
+npm run engine                # 引擎重建（WASM）
+node tools/combat_test.mjs    # 近战 3 + 远程导弹 1 场景对账
+node tools/econ_test.mjs      # 采集循环对账
+node tools/sim_step_test.mjs  # 全量 tick + 事件桥
+node tools/snapshot_test.mjs  # SOA 快照字段级对账
+node tools/order_test.mjs     # 显式命令输入通道
+node tools/snaprender_test.mjs # 快照驱动渲染适配层
+```
