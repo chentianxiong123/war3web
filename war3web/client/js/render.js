@@ -1022,11 +1022,29 @@ export class Renderer {
       gltf.scene.traverse((o) => {
         if (o.isMesh) {
           o.frustumCulled = false;
+          // WebGPU 兼容性：GLB 模型的 MeshStandardMaterial 在 WebGPU 下可能不渲染，
+          // 统一替换为 MeshLambertMaterial 确保可见（与 standIn 一致）。
           const mats = Array.isArray(o.material) ? o.material : [o.material];
           for (const mm of mats) {
             if (mm.map) mm.map.colorSpace = THREE.SRGBColorSpace;
             mm.side = mm.side ?? THREE.FrontSide;
           }
+          // 用 MeshLambertMaterial 替换原始材质，保留纹理引用
+          const newMats = mats.map(mm => {
+            const nm = new THREE.MeshLambertMaterial({
+              map: mm.map || null,
+              color: mm.color ? mm.color.getHex() : 0xffffff,
+              transparent: mm.transparent,
+              opacity: mm.opacity,
+              alphaTest: mm.alphaTest,
+              side: mm.side,
+              depthTest: mm.depthTest,
+              depthWrite: mm.depthWrite,
+              blending: mm.blending,
+            });
+            return nm;
+          });
+          o.material = Array.isArray(o.material) ? newMats : newMats[0];
         }
       });
       const rec = { gltf, meta, bounds: cullBoundsOf(meta) };
@@ -1118,6 +1136,12 @@ export class Renderer {
     // a geoset. prims is indexed one-to-one against meta.geosets and must hold
     // nothing but the model's own geometry.
     view.prims = this.applyMaterials(obj, meta, view);
+    // WebGPU 兼容性兜底：如果 GLB 模型的材质不兼容（MeshStandardMaterial 等），
+    // prims 可能为空或不可见。fallback 到 standIn 确保单位可见。
+    if (!view.prims || view.prims.length === 0) {
+      view.root.remove(obj);
+      return standIn();
+    }
     view.emitters = this.attachEmitters(obj);
     view.ribbons = this.attachRibbons(obj);
     // Deliberately no lights on unit views: a unit lives for the whole game and
