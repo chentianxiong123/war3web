@@ -7,8 +7,12 @@ import { World, TYPES, int2id, id2int } from './world.js';
 import { JassEngine } from './jass/engine.js';
 import { Phase, Msg, TICK_HZ, SNAP_HZ } from '../shared/const.js';
 import { BUILD } from './build.js';
+import { WasmBridge, SIM_BUF_KINDS } from './wasm_bridge.js';
 import fs from 'node:fs';
 import path from 'node:path';
+
+// wasm 认识的 buff kind 名（用于判断 world.js 的 buff 能否桥接到 wasm）
+const SIM_BUFF_KINDS = new Set(Object.keys(SIM_BUF_KINDS));
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 export const GAME = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/game.json'), 'utf8'));
@@ -40,6 +44,15 @@ export class Room {
     this.snapAcc = 0;
     this.bootReport = null;
     this.resetTimer = null;
+    // M4 阶段 4：wasm 桥 —— world.js 是权威源（能力/触发器/物品），
+    // wasm 跑模拟核心（移动/攻击/经济/buff 效果）。两套通过 wasm_bridge
+    // 的 spawn/applyBuff/step API 桥接，binary 通道推 SOA 快照给客户端。
+    this.bridge = new WasmBridge();
+    this.wasmReady = false;
+    // 单位 ↔ wasm 槽位映射：worldUnitId <-> wasmSlot
+    this.wasmSlotOf = new Map();
+    this.wasmWorldOf = new Map();
+    this.wasmSlotSeq = 0;
   }
 
   get list() {
@@ -147,6 +160,12 @@ export class Room {
     if (this.resetTimer) clearTimeout(this.resetTimer);
     this.resetTimer = null;
     this.loop = null; this.world = null; this.eng = null; this.phase = Phase.LOBBY;
+    // M4 阶段 4：wasm 侧清场（单位/事件），下次开局重新同步；wasm 内存本身
+    // 保留（walk grid、dmg table 已初始化，无需重复加载）
+    if (this.bridge._initDone) this.bridge.clearAll();
+    this.wasmSlotOf.clear();
+    this.wasmWorldOf.clear();
+    this.wasmSlotSeq = 0;
     for (const p of this.players.values()) {
       if (p.dropTimer) { clearTimeout(p.dropTimer); p.dropTimer = null; }
       // Somebody who left during the match was kept so the script could still
@@ -283,8 +302,78 @@ export class Room {
       `${this.world.units.size} units, ${this.bootReport.errors.length} errors`);
     this.phase = Phase.PLAYING;
     // 官方对战图: 玩家单位由 war3map.j 脚本创建, 无需 FOC 英雄
+    // M4 阶段 4：wasm 桥异步初始化，不阻塞开局；init 完成后 stepLoop 自动开始同步
+    this._initWasm();
     this.broadcastState();
     this.loop = setInterval(() => this.stepLoop(), 1000 / TICK_HZ);
+  }
+
+  /** 异步加载 wasm 桥（失败时静默降级，仍跑纯 JS 模拟）。 */
+  async _initWasm() {
+    if (this.wasmReady) return;
+    try {
+      await this.bridge.init();
+      this.wasmReady = true;
+      console.log(`[${this.id}] wasm bridge ready`);
+    } catch (e) {
+      // wasm 加载失败不应中止匹配：world.js 仍在跑完整模拟
+      console.error(`[${this.id}] wasm init failed:`, e.message);
+    }
+  }
+
+  /**
+   * 每 tick 同步：把 world.js 里新创建的单位 spawn 到 wasm，并注入当前 buff。
+   * 只处理 wasm 认识 typeKey 的单位（hfoo/hwat/hpea/建筑等），其余跳过——
+   * 这正是两套共存的边界：wasm 跑它认识的，JS 跑剩下的。
+   */
+  _syncWasm() {
+    if (!this.wasmReady || !this.world) return;
+    const W = this.world;
+    for (const u of W.units.values()) {
+      // 只同步客户端可见、活着、非拾取道具的单位（与 world.snapshot() 过滤条件一致）
+      if (!u.alive || u.hidden || u.removed || u.pickerProp) continue;
+      if (W.isDummy(u)) continue;
+      if (this.wasmSlotOf.has(u.id)) continue;
+      if (this.wasmSlotSeq >= this.bridge.maxUnits) break;   // 槽位耗尽，跳过本 tick
+      const slot = this.wasmSlotSeq++;
+      const ok = this.bridge.spawn(slot, u.x, u.y, u.typeKey, {
+        facing: u.facing, team: u.team, playerIndex: u.playerIndex,
+        bounty: u.bounty, level: u.level, hp: u.hp, maxHp: u.maxHp,
+      });
+      if (!ok) continue;   // wasm 不认识此 typeKey，槽位留给下次（wasmSlotSeq 单调递增）
+      this.wasmSlotOf.set(u.id, slot);
+      this.wasmWorldOf.set(slot, u.id);
+      // 新单位可能带着初始 buff（例如出生光环）——一并注入
+      for (const b of (u.buffs || [])) this._syncBuffToWasm(u, b);
+    }
+  }
+
+  /** 把单个 buff 注入 wasm（code=-1 时按 kind 替换，否则按 code 替换）。 */
+  _syncBuffToWasm(u, b) {
+    if (!b || !b.kind) return;
+    const slot = this.wasmSlotOf.get(u.id);
+    if (slot == null) return;
+    // wasm_bridge 支持的名字：speed/mana/armor/vampiric/regen/damage/morph/
+    // stun/slow/weaken/innerfire/invis/defend/rage/manashield/silence
+    const kind = b.kind;
+    if (typeof kind === 'string' && !SIM_BUFF_KINDS.has(kind)) return;
+    const code = b.code != null ? b.code : -1;
+    // until 是绝对毫秒，wasm 侧要相对时长（0 = 永久）
+    const untilMs = b.until ? Math.max(0, b.until - (this.world.now || 0)) : 0;
+    this.bridge.applyBuff(slot, kind, code, untilMs, b.pct ?? 0, b.atkPct ?? 0, b.flat ?? 0);
+  }
+
+  /** 推送一帧 SOA 二进制快照（与 JSON 快照并列发送）。 */
+  _broadcastWasmSnapshot() {
+    if (!this.wasmReady) return;
+    const snap = this.bridge.snapshot();
+    if (!snap.bufSize || snap.bufSize <= 0) return;
+    const byteLen = snap.bufSize * 4;
+    const src = this.bridge.eng.HEAPU8;
+    // 拷贝出 wasm 堆，避免 ws.send 之后 wasm 内存被下一次 step 覆盖
+    const buf = new Uint8Array(byteLen);
+    buf.set(src.subarray(snap.bufAddr, snap.bufAddr + byteLen));
+    this.broadcastBinary(Msg.SNAPSHOT_BIN, buf);
   }
 
   stepLoop() {
@@ -292,6 +381,12 @@ export class Room {
     try {
       this.eng.update(dt);
       const events = this.world.step();
+      // M4 阶段 4：wasm 独立推进（移动/攻击/经济/buff 效果）——与 world.step()
+      // 各自 tick，SOA 快照以 wasm 为准；JSON 快照仍以 world.js 为准（两套共存）
+      if (this.wasmReady) {
+        this._syncWasm();
+        this.bridge.step(1 / TICK_HZ);
+      }
       const scriptEvents = this.eng.flushClientEvents();
       const all = events.concat(scriptEvents);
       // the map declares the winner itself
@@ -314,6 +409,10 @@ export class Room {
         const snap = this.world.snapshot();
         snap.board = this.scriptBoard();
         this.broadcast({ t: Msg.SNAPSHOT, s: snap });
+        // M4 阶段 4：额外推送 SOA 二进制快照（1 字节 tag 's' + Float32Array）
+        // —— 客户端可选择 JSON 或 binary 通道更新；渲染路径切换留待后续阶段
+        try { this._broadcastWasmSnapshot(); }
+        catch (e) { console.error('wasm snapshot broadcast failed:', e.message); }
         // The map's permanent text tags -- the lane and shop labels -- are made
         // once, at init, and broadcast once. They are scenery rather than an
         // event, so anyone who connects later is caught up on them here; a tag
