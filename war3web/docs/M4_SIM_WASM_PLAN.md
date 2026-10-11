@@ -153,6 +153,27 @@
   首击 7=7、攻击数 50 vs 52、HP 曲 OK、首死 id 1=1——**4/4 场景全过**。
 - melee_3v1 的 JS deathTick 511→544：hfoo 伤害 11-13 随机，死亡 tick 抖动在 ±45 容差内。
 
+#### 2.9 采集经济 C 移植（f735424）——采集循环硬门禁全过 ✅
+- **`engine/src/sim.c` 新增**：
+  - SimUnit 增 `kind`（0=other 1=hpea 2=ngol 3=htow）/`playerIndex`/gather 状态
+    （gatherPhase 0=none 1=toMine 2=mining 3=toBase、mineId/baseId/gatherUntilMs）。
+  - 全局 `GOLD[16]`（JS player.gold）。
+  - `sim_spawn_econ(id,x,y,kind,playerIndex,speed,radius)` 放置经济单位。
+  - `sim_get_res(playerIndex,out)` 读玩家资源（out[0]=gold）。
+  - `walk_spot_near`（JS walkSpotNear 1391-1402：16 固定偏移 clearFootprint 单点探测）。
+  - `sim_econ_step(dt)`（stepGathers 1342-1388 子集：hpea 且玩家 0/1）：
+    toMine（近矿<140 → mining 1.8s；否则 walkSpotNear 下单 move）→ mining 完成
+    → 找 base（kind=htow 且同 player）→ toBase（近基<280 或 idle 无路径 → +10 金回矿）
+    → 空闲农民自动找最近 ngol。农民移动推进（step_move_unit 仅经济单位）。
+- **CMakeLists** 增导出 `_sim_spawn_econ,_sim_econ_step,_sim_get_res`。
+- **golden**（tools/econ_golden.mjs → goldens/econ_trace.json）：htow(1616,1200) +
+  ngol(1488,1104) + hpea(1398,1106)，录 gold 事件 tick 全序列 + 农民轨迹抽样。
+  首金 t57、周期 ~56.7 tick（挖矿 1.8s=54 tick 主导）。
+- **econ_test 对照**：前 8 次交金逐次 Δ≤6（实测 Δ1-3）、末次 Δ≤20、交金次数 Δ≤1、
+  农民终位一致——**采集循环硬门禁全过**。
+- **节拍差异**：C 恒 56 tick/周期、JS 平均 56.7（浮点毫秒累积 + 移动差）→ 3600 tick
+  边界 C 64 次 vs JS 63 次，末次差 17 tick，均在容差内。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
