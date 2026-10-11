@@ -104,11 +104,13 @@ typedef struct {
 static SimUnit U[SIM_MAX];
 // Buff 独立表（不改 SimUnit 体积）：BUFFS[id][slot]
 static SimBuff BUFFS[SIM_MAX][SIM_BUFF_MAX];
-// buff 效果派生（定义见下「Buff 系统」段；前置声明供 step_move_unit / release_attack 用）
+// buff 效果派生（定义见下「Buff 系统」段；前置声明供 step_move_unit / release_attack / sim_damage 用）
 static double buff_speed_mul(int id);
 static double buff_dmg_mul(int id);
 static double buff_atkcd_mul(int id);
 static double buff_armor_bonus(int id);
+static SimBuff* buff_find(int id, int kindIdx);
+double sim_heal(int id, double amount);   // 前置声明供 sim_damage 用
 static long long SIM_NOW;   // tick 计数（模拟 world.now）
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
 
@@ -671,6 +673,8 @@ static int sim_route(SimUnit* u, int id, double tx, double ty) {
 /** 单单位 move 分支推进一步（对齐 stepMove 2834-2855；sim_tick 与 sim_move 共用）。 */
 static void step_move_unit(SimUnit* u, int id, double dt) {
   if (!u->alive || u->nPath == 0) return;
+  // stun（SIM_BUF_STUN）：跳过移动（对齐 JS step 2621：stunned → 跳过 stepMove）。
+  if (buff_find(id, SIM_BUF_STUN)) return;
   const double gx = u->path[0], gy = u->path[1];
   // turnToward（预算 turnRate·dt/0.03）
   const double angle = atan2(gy - u->y, gx - u->x);
@@ -977,6 +981,18 @@ static int expire_buffs(void) {
   return n;
 }
 
+/** 生命回复 pass（step 2606-2608 子集）：每个有 SIM_BUF_REGEN buff 的单位
+ *  每 tick 回复 flat * dt，cap at maxHp。对齐 JS：u.hp += u.hpReg * dt。
+ *  C 侧用 buff 实现（b.flat 为每秒回复量），不区分英雄/非英雄。 */
+static void regen_pass(double dt) {
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive) continue;
+    SimBuff* rg = buff_find(id, SIM_BUF_REGEN);
+    if (rg && rg->flat > 0) sim_heal(id, rg->flat * dt);
+  }
+}
+
 /** 伤害结算（damage() 纯数值子集 + buff 减伤/吸蓝）。返回实际伤害。 */
 static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   SimUnit* t = &U[tgtId];
@@ -1021,6 +1037,13 @@ static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
       }
     }
     ev_push(SIM_EV_DEATH, (int)(t - U), 0);
+  }
+  // vampiric（SIM_BUF_VAMPIRIC）：攻击者按 dmg*pct 回血，cap at maxHp。
+  // 对齐 world.js releaseAttack 3101：src.lifesteal && dealt > 0 → heal(src, dealt * lifesteal)。
+  // C 侧用 buff 实现（b.pct 为吸血百分比），覆盖近战直击 + 远程导弹 onHit 两条路径。
+  if (srcId >= 0 && srcId < SIM_MAX && srcId != tgtId && dmg > 0) {
+    SimBuff* vamp = buff_find(srcId, SIM_BUF_VAMPIRIC);
+    if (vamp && vamp->pct > 0) sim_heal(srcId, dmg * vamp->pct);
   }
   return dmg;
 }
@@ -1381,6 +1404,7 @@ int sim_snapshot(float* buf, int maxN) {
 void sim_step(double dt) {
   SIM_NOW++;
   expire_buffs();              // buff 过期清理（step 2602）
+  regen_pass(dt);              // 生命回复（step 2606-2608）
   gather_pass();
   step_missiles(dt);
   for (int id = 0; id < SIM_MAX; id++) {
