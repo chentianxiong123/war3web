@@ -7,7 +7,7 @@ import { World, TYPES, int2id, id2int } from './world.js';
 import { JassEngine } from './jass/engine.js';
 import { Phase, Msg, TICK_HZ, SNAP_HZ } from '../shared/const.js';
 import { BUILD } from './build.js';
-import { WasmBridge, SIM_BUF_KINDS } from './wasm_bridge.js';
+import { WasmBridge, SIM_BUF_KINDS, SIM_ORD } from './wasm_bridge.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -252,10 +252,14 @@ export class Room {
     };
     if (m.t === Msg.TRAIN) {
       // RTS 训练: 选中建筑 -> 训练单位 (Terenas 官方对战)
-      for (const unit of sel(4)) W.order(unit, { type: 'train', trainType: m.trainType });
+      const units = sel(4);
+      for (const unit of units) W.order(unit, { type: 'train', trainType: m.trainType });
+      this._wasmCommand(m, units);   // wasm 无训练队列语义，内部跳过；产物由 _syncWasm 同步
     } else if (m.t === Msg.BUILD) {
       // RTS 建造: 选中农民 -> 在 (x,y) 建建筑
-      for (const unit of sel(4)) W.order(unit, { type: 'build', buildType: m.buildType, x: m.x, y: m.y });
+      const units = sel(4);
+      for (const unit of units) W.order(unit, { type: 'build', buildType: m.buildType, x: m.x, y: m.y });
+      this._wasmCommand(m, units);
     } else if (m.t === 'castUnit') {
       // Casting from a selected unit's command card. The ability is named
       // outright instead of by slot, because a non-hero's card is the list in
@@ -289,11 +293,48 @@ export class Room {
         }
       }
       if (queueFull) this.send(p.ws, { t: Msg.ERROR, m: 'Order queue is full (35 commands).' });
+      // M6: 同一批单位把命令镜像进 wasm（binary 快照位置才与 JSON 一致）
+      this._wasmCommand(m, sel(12));
     } else {
       return;   // 未知消息类型，不处理
     }
     // M6: 命令处理后立即广播快照（不等下一个 tick），降低输入延迟
     this.broadcastSnapshotNow();
+  }
+
+  /**
+   * M6: 把玩家命令同步进 wasm（位置/战斗核心镜像）。world.js 语义仍权威；
+   * wasm 收到相同命令后，binary SOA 快照才与 JSON 一致，binary 通道才可启用。
+   * 边界：只对 wasm 有槽位的单位下发；wasm 无训练/技能语义（跳过）；
+   * attack 目标在 wasm 无槽位（野怪等地形单位不 spawn）时按 attack-move 到
+   * 其位置近似。
+   */
+  _wasmCommand(m, units) {
+    if (!this.wasmReady || !this.world) return;
+    const OP = SIM_ORD;
+    for (const u of units) {
+      const slot = this.wasmSlotOf.get(u.id);
+      if (slot == null) continue;
+      const B = this.bridge;
+      if (m.t === Msg.MOVE) {
+        if (!(Number.isFinite(m.x) && Number.isFinite(m.y))) continue;
+        B.pushOrder(slot, m.patrol || m.attack ? OP.attackMove : OP.move, m.x, m.y);
+      } else if (m.t === Msg.STOP) {
+        B.pushOrder(slot, OP.stop, 0, 0);
+      } else if (m.t === 'hold') {
+        B.pushOrder(slot, OP.hold, 0, 0);
+      } else if (m.t === Msg.ATTACK || m.t === 'smart') {
+        const target = this.world.target(m.targetId);
+        if (!target) continue;
+        const tSlot = this.wasmSlotOf.get(target.id);
+        if (tSlot != null) B.pushOrder(slot, OP.attack, 0, 0, tSlot);
+        else if (Number.isFinite(target.x) && Number.isFinite(target.y))
+          B.pushOrder(slot, OP.attackMove, target.x, target.y);
+      } else if (m.t === Msg.BUILD) {
+        B.orderBuild(slot, m.buildType, m.x, m.y);
+      }
+      // TRAIN / castUnit：wasm 无对应语义，跳过（训练产物由 _syncWasm 同步 spawn）
+    }
   }
 
   start() {
@@ -463,6 +504,8 @@ export class Room {
       // 各自 tick，SOA 快照以 wasm 为准；JSON 快照仍以 world.js 为准（两套共存）
       if (this.wasmReady) {
         this._syncWasm();
+        // M6: 上一批命令（_wasmCommand push 的）在 step 前生效
+        this.bridge.flushOrders();
         this.bridge.step(1 / TICK_HZ);
       }
       const scriptEvents = this.eng.flushClientEvents();

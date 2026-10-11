@@ -43,6 +43,10 @@ const SIM_BUF = {
 };
 const BUF_BY_NAME = Object.fromEntries(Object.entries(SIM_BUF).map(([k, v]) => [k, v]));
 
+// C 命令枚举（engine/src/sim.c SIM_ORD_*，216-221 行）
+// 0 stop / 1 hold / 2 move / 3 attackMove / 4 attack / 5 build
+export const SIM_ORD = { stop: 0, hold: 1, move: 2, attackMove: 3, attack: 4, build: 5 };
+
 // 默认单位类型表（Terenas 官方实测值，与 combat_test/snaprender_test/buff_test 一致）
 // kind: 0=other/fight 1=hpea(农民) 2=ngol(金矿) 3=htow(基地)
 const DEFAULT_TYPES = {
@@ -254,6 +258,21 @@ export class WasmBridge {
     const g = this.eng.HEAPF32[b >> 2];
     this.eng._free(b);
     return g;
+  }
+
+  /**
+   * M6: 入队一条命令（op 见 SIM_ORD_*）。targetId 为目标单位的 wasm 槽位
+   * （attack 用），否则 0。命令在 sim_flush_orders() 后、sim_step 前生效。
+   * @returns {boolean} 是否入队成功
+   */
+  pushOrder(id, op, x, y, targetId = 0) {
+    if (!this.eng) return false;
+    return this.eng._sim_order_push(id | 0, op | 0, +x || 0, +y || 0, targetId | 0) === 1;
+  }
+
+  /** M6: 使已入队命令生效（每次 sim_step 前调用一次）。 */
+  flushOrders() {
+    if (this.eng) this.eng._sim_flush_orders();
   }
 
   /**
