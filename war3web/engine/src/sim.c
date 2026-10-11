@@ -55,6 +55,12 @@ typedef struct {
   int orderType;             // 0=idle 1=attack（自动获取）
   int orderTargetId;
   double acquisitionRange, homeX, homeY;
+  // ---- 经济（阶段 2：stepGathers）----
+  int kind;                  // 0=other 1=hpea 2=ngol 3=htow（JS typeKey 判定）
+  int playerIndex;
+  int gatherPhase;           // 0=none 1=toMine 2=mining 3=toBase
+  int mineId, baseId;
+  double gatherUntilMs;      // 挖矿完成毫秒
 } SimUnit;
 static SimUnit U[SIM_MAX];
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
@@ -71,6 +77,9 @@ typedef struct {
 } SimMissile;
 static SimMissile M[SIM_MISSILE_MAX];
 static int DMG_TABLE_SET;
+
+// ---- 经济（阶段 2）：玩家资源（JS player.gold）----
+static double GOLD[16];
 
 /** 伤害倍率表装载（sim_test 从 gameplay.json 读入；JS 侧 HEAPF32 写 → float* 读）。 */
 void sim_set_dmg_table(const float* tbl) {
@@ -834,4 +843,96 @@ void sim_get_fight(int id, float* out) {
   SimUnit* u = &U[id];
   out[0] = (float)u->hp; out[1] = (float)u->atkTimer; out[2] = (float)u->attackWindupRemaining;
   out[3] = (float)u->atkCount; out[4] = (float)u->dmgCount; out[5] = (float)u->alive;
+}
+
+// ------------------------------------------------------------------ 经济（阶段 2：stepGathers）
+/** 放置经济单位：kind 0=other 1=hpea(农民) 2=ngol(金矿) 3=htow(基地)。 */
+void sim_spawn_econ(int id, double x, double y, int kind, int playerIndex, double speed, double radius) {
+  sim_spawn(id, x, y, 0, speed, radius, 0, 0);
+  SimUnit* u = &U[id];
+  u->kind = kind; u->playerIndex = playerIndex;
+  u->gatherPhase = 0; u->mineId = -1; u->baseId = -1; u->gatherUntilMs = 0;
+}
+
+/** 读玩家资源：gold = out[0]。 */
+void sim_get_res(int playerIndex, float* out) {
+  out[0] = (float)(playerIndex >= 0 && playerIndex < 16 ? GOLD[playerIndex] : 0);
+}
+
+/** 找 (cx,cy) 附近第一个可走点（JS walkSpotNear 1391-1402：16 个固定偏移探测）。 */
+static int walk_spot_near(double cx, double cy, SimUnit* u, double* ox, double* oy) {
+  const double offs[16][2] = {
+    {-80,-80},{80,-80},{-80,80},{80,80},{0,-120},{0,120},{-120,0},{120,0},
+    {-130,-130},{130,-130},{-130,130},{130,130},{0,-160},{0,160},{-160,0},{160,0},
+  };
+  for (int i = 0; i < 16; i++) {
+    const double x = cx + offs[i][0], y = cy + offs[i][1];
+    if (clear_footprint(x, y, x, y, u->radius)) { *ox = x; *oy = y; return 1; }
+  }
+  return 0;
+}
+
+/** 农民采集 tick（stepGathers 1342-1388 子集：hpea 且玩家 0/1）。
+ *  toMine →(近矿140) mining 1.8s → toBase →(近基 280 或 idle 无路径) +10 金 → 循环。 */
+void sim_econ_step(double dt) {
+  SIM_NOW++;
+  const double nowMs = SIM_NOW * (1000.0 / 30.0);
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive || u->kind != 1 || u->playerIndex > 1) continue;   // hpea 且玩家 0/1
+    if (u->mineId >= 0) {
+      const SimUnit* mine = &U[u->mineId];
+      if (!mine->alive) { u->mineId = -1; u->gatherPhase = 0; continue; }
+      if (u->gatherPhase == 1) {   // toMine
+        if (hypot(u->x - mine->x, u->y - mine->y) < 140) {
+          u->gatherPhase = 2; u->gatherUntilMs = nowMs + 1800;   // 挖矿 1.8s
+          u->nPath = 0; u->orderType = 0;
+        } else if (u->nPath == 0 && u->orderType == 0) {
+          double sx, sy;
+          if (walk_spot_near(mine->x, mine->y, u, &sx, &sy)) sim_route(u, id, sx, sy);
+        }
+      } else if (u->gatherPhase == 2) {   // mining
+        if (nowMs >= u->gatherUntilMs) {
+          int baseId = -1;
+          for (int i = 0; i < SIM_MAX; i++) {
+            const SimUnit* b = &U[i];
+            if (b->alive && b->kind == 3 && b->playerIndex == u->playerIndex) { baseId = i; break; }
+          }
+          if (baseId < 0) { u->mineId = -1; u->gatherPhase = 0; continue; }
+          u->gatherPhase = 3; u->baseId = baseId;
+          const SimUnit* base = &U[baseId];
+          double sx, sy;
+          if (walk_spot_near(base->x, base->y, u, &sx, &sy)) sim_route(u, id, sx, sy);
+          else u->mineId = -1;
+        }
+      } else if (u->gatherPhase == 3) {   // toBase
+        const SimUnit* base = u->baseId >= 0 ? &U[u->baseId] : NULL;
+        const int arrived = base && (hypot(u->x - base->x, u->y - base->y) < 280
+          || (u->orderType == 0 && u->nPath == 0));
+        if (arrived) {
+          if (u->playerIndex >= 0 && u->playerIndex < 16) GOLD[u->playerIndex] += 10;
+          u->gatherPhase = 1;   // 回矿继续（JS: gather = { mineId, phase: 'toMine' }）
+        }
+      }
+    } else if (u->orderType == 0 && u->nPath == 0) {
+      // 空闲农民自动找最近金矿（WC3 默认行为）
+      int best = -1; double bd = 1e18;
+      for (int i = 0; i < SIM_MAX; i++) {
+        const SimUnit* m = &U[i];
+        if (!m->alive || m->kind != 2) continue;
+        const double d = hypot(m->x - u->x, m->y - u->y);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best >= 0) {
+        u->mineId = best; u->gatherPhase = 1;
+        sim_route(u, id, U[best].x, U[best].y);
+      }
+    }
+  }
+  // 农民移动推进（stepMove 子集：仅经济单位走路径）
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive || u->kind != 1) continue;
+    step_move_unit(u, id, dt);
+  }
 }
