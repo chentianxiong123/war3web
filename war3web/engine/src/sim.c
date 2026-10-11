@@ -36,6 +36,40 @@ static int occ_clear(double px, double py) {
 #define SIM_MAX 1024
 #define SIM_ARMOR_KINDS 8   // small/medium/large/fort/normal/hero/divine/none
 #define SIM_ATK_KINDS 7     // normal/pierce/siege/magic/chaos/spells/hero
+
+// ---- Buff 表（阶段 4 收尾：能力/触发器效果层）----
+// 对齐 world.js u.buffs[]（applyBuff 1776-1785 / recalc 823-835 / damage 1102-1122）。
+// kindIdx 与 abilities.js AURA_BUFFS 的 kind 字符串一一对应；JS 侧 applyBuff 传入
+// 时用同一索引，这样两套共存时 JS 施放能力 → C 单位生效走同一条效果语义。
+#define SIM_BUFF_MAX 4
+enum {
+  SIM_BUF_SPEED = 0,   // b.pct → 移动速度倍率
+  SIM_BUF_MANA,        // 纯标记（mana 相关）
+  SIM_BUF_ARMOR,       // b.armor → 护甲加成
+  SIM_BUF_VAMPIRIC,    // b.pct → 生命偷取（未接入，预留）
+  SIM_BUF_REGEN,       // b.flat → 生命回复（未接入，预留）
+  SIM_BUF_DAMAGE,      // b.pct → 伤害加成（未接入，预留）
+  SIM_BUF_MORPH,       // b.pct → 体型/伤害倍率
+  SIM_BUF_STUN,        // 定身（未接入，预留）
+  SIM_BUF_SLOW,        // b.pct 移速 / b.atkPct 攻速
+  SIM_BUF_WEAKEN,      // b.pct → 伤害削弱
+  SIM_BUF_INNERFIRE,   // b.pct 伤害 / b.armor 护甲
+  SIM_BUF_INVIS,       // 隐身标记（未接入，预留）
+  SIM_BUF_DEFEND,      // b.pct 减伤 / b.atkPct 攻速
+  SIM_BUF_RAGE,        // b.pct → 攻击倍率
+  SIM_BUF_MANASHIELD,  // b.pct 吸伤 / b.flat = manaPerHp
+  SIM_BUF_SILENCE,     // 沉默标记（未接入，预留）
+  SIM_BUFF_KINDS
+};
+typedef struct {
+  int active;
+  int kindIdx;
+  int code;          // buff 美术代码索引（-1 = 无；快照 b[] 用）
+  long long untilMs; // 过期时间（world.now 毫秒；0 = 永久）
+  double pct;        // 百分比效果（见上各 kind 说明）
+  double atkPct;     // 攻击速度削减（slow / defend）
+  double flat;       // armor 加成 或 manashield 的 manaPerHp
+} SimBuff;
 typedef struct {
   double x, y, facing;
   double speed, radius;
@@ -68,6 +102,13 @@ typedef struct {
   double mana, maxMana;      // 英雄蓝条（JS u.mana / u.maxMana；非英雄为 0）
 } SimUnit;
 static SimUnit U[SIM_MAX];
+// Buff 独立表（不改 SimUnit 体积）：BUFFS[id][slot]
+static SimBuff BUFFS[SIM_MAX][SIM_BUFF_MAX];
+// buff 效果派生（定义见下「Buff 系统」段；前置声明供 step_move_unit / release_attack 用）
+static double buff_speed_mul(int id);
+static double buff_dmg_mul(int id);
+static double buff_atkcd_mul(int id);
+static double buff_armor_bonus(int id);
 static long long SIM_NOW;   // tick 计数（模拟 world.now）
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
 
@@ -151,6 +192,7 @@ void sim_spawn(int id, double x, double y, double facing, double speed, double r
 void sim_clear_all(void) {
   // 全字段归零（防跨场景残留：radius/team/playerIndex/hp/gather 等）
   memset(U, 0, sizeof(U));
+  memset(BUFFS, 0, sizeof(BUFFS));
   memset(M, 0, sizeof(M));
   memset(GOLD, 0, sizeof(GOLD));
   for (int i = 0; i < SIM_MAX; i++) {
@@ -641,7 +683,7 @@ static void step_move_unit(SimUnit* u, int id, double dt) {
     if (fabs(delta) - amount >= 1e-9) return;   // 转向未到位，本 tick 不动
   }
   const double dx = gx - u->x, dy = gy - u->y, d = hypot(dx, dy);
-  const double stepLen = u->speed * dt;
+  const double stepLen = u->speed * buff_speed_mul(id) * dt;
   const double fraction = d > 0 ? fmin(1, stepLen / d) : 0;
   const double nx = u->x + dx * fraction, ny = u->y + dy * fraction;
   int b2[SIM_MAX], nb2 = blockers_for(u, nx, ny, b2);   // step 扫掠矩形候选
@@ -797,13 +839,169 @@ int sim_flush_orders(void) {
   return applied;
 }
 
-/** 伤害结算（damage() 纯数值子集）。返回实际伤害。 */
+// =====================================================================
+// Buff 系统（阶段 4 收尾：JS 能力层 → C 单位的桥）
+// =====================================================================
+// 语义对齐 world.js：
+//   applyBuff  1776-1783：按 code 替换（有 code 比 code，否则比 kind）后 push
+//   recalc     823-835：armor/regen/slow/rage/morph/innerfire/weaken 派生
+//   damage     1090,1102-1122：damageTakenMul / defend 减伤 / manashield 吸蓝
+//   step       2602-2603：过期清理
+// 两套共存时：JS 施放能力 → 调 sim_apply_buff → C 单位在移动/攻击/受击中生效。
+
+/** 当前生效的 buff 数（until 已过或未 active 的不算）。 */
+static int buff_count(int id) {
+  int n = 0;
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    const SimBuff* b = &BUFFS[id][i];
+    if (b->active && (b->untilMs == 0 || b->untilMs > SIM_NOW)) n++;
+  }
+  return n;
+}
+
+/** 找指定 kind 的生效 buff（用于减伤/吸蓝这类"取一个即算"的效果）。 */
+static SimBuff* buff_find(int id, int kindIdx) {
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    SimBuff* b = &BUFFS[id][i];
+    if (b->active && b->kindIdx == kindIdx && (b->untilMs == 0 || b->untilMs > SIM_NOW)) return b;
+  }
+  return NULL;
+}
+
+/** 护甲加成（recalc 828：armorTotal += b.armor）。 */
+static double buff_armor_bonus(int id) {
+  double a = 0;
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    const SimBuff* b = &BUFFS[id][i];
+    if (!b->active || (b->untilMs != 0 && b->untilMs <= SIM_NOW)) continue;
+    if (b->kindIdx == SIM_BUF_ARMOR || b->kindIdx == SIM_BUF_INNERFIRE) a += b->flat;
+  }
+  return a;
+}
+
+/** 移动速度倍率（recalc 830：slow → moveSpeed *= 1-pct）。 */
+static double buff_speed_mul(int id) {
+  double m = 1;
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    const SimBuff* b = &BUFFS[id][i];
+    if (b->active && b->kindIdx == SIM_BUF_SLOW && (b->untilMs == 0 || b->untilMs > SIM_NOW))
+      m *= 1 - b->pct;
+  }
+  return m;
+}
+
+/** 攻击冷却倍率（recalc 831-832：slow/defend 的 atkPct → attackSpeedMul *= 1-atkPct；
+ *  冷却是攻速的倒数，所以 mcd *= 1/(1-atkPct) = 1/(倍率)）。 */
+static double buff_atkcd_mul(int id) {
+  double as = 1;
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    const SimBuff* b = &BUFFS[id][i];
+    if (!b->active || (b->untilMs != 0 && b->untilMs <= SIM_NOW)) continue;
+    if (b->kindIdx == SIM_BUF_SLOW && b->atkPct) as *= 1 - b->atkPct;
+    if (b->kindIdx == SIM_BUF_DEFEND && b->atkPct) as *= 1 - b->atkPct;
+  }
+  return as > 0.05 ? 1.0 / as : 20.0;   // 下限防除零（1-1.0 = 0）
+}
+
+/** 伤害倍率（recalc 833-834：rage/morph/innerfire +pct，weaken -pct）。 */
+static double buff_dmg_mul(int id) {
+  double m = 1;
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    const SimBuff* b = &BUFFS[id][i];
+    if (!b->active || (b->untilMs != 0 && b->untilMs <= SIM_NOW)) continue;
+    if (b->kindIdx == SIM_BUF_RAGE || b->kindIdx == SIM_BUF_MORPH || b->kindIdx == SIM_BUF_INNERFIRE)
+      m *= 1 + b->pct;
+    if (b->kindIdx == SIM_BUF_WEAKEN) m *= 1 - b->pct;
+  }
+  return m;
+}
+
+/** JS 侧施加 buff：按 code 替换，无 code 则按 kind（applyBuff 1782）。返回写入槽位，满则 -1。 */
+int sim_apply_buff(int id, int kindIdx, int code, long long untilMs,
+                   double pct, double atkPct, double flat) {
+  if (id < 0 || id >= SIM_MAX || !U[id].alive) return -1;
+  int slot = -1;
+  for (int i = 0; i < SIM_BUFF_MAX; i++) {
+    SimBuff* b = &BUFFS[id][i];
+    if (!b->active) { if (slot < 0) slot = i; continue; }
+    const int same = (code >= 0) ? (b->code == code) : (b->kindIdx == kindIdx);
+    if (same) { slot = i; break; }
+  }
+  if (slot < 0) return -1;
+  SimBuff* b = &BUFFS[id][slot];
+  b->active = 1; b->kindIdx = kindIdx; b->code = code; b->untilMs = untilMs;
+  b->pct = pct; b->atkPct = atkPct; b->flat = flat;
+  return slot;
+}
+
+/** 驱散：清掉单位所有 buff（clearBuffs 1788-1792）。 */
+void sim_clear_buffs(int id) {
+  if (id < 0 || id >= SIM_MAX) return;
+  memset(BUFFS[id], 0, sizeof(BUFFS[id]));
+}
+
+/** 读 buff 列表：out[i*2]=kindIdx, out[i*2+1]=code（快照 b[] 的数值来源）。返回个数。 */
+int sim_get_buffs(int id, int* out, int maxN) {
+  if (id < 0 || id >= SIM_MAX) return 0;
+  int n = 0;
+  for (int i = 0; i < SIM_BUFF_MAX && n < maxN / 2; i++) {
+    const SimBuff* b = &BUFFS[id][i];
+    if (!b->active || (b->untilMs != 0 && b->untilMs <= SIM_NOW)) continue;
+    out[n * 2] = b->kindIdx; out[n * 2 + 1] = b->code;
+    n++;
+  }
+  return n;
+}
+
+/** 治疗（heal 1771-1775）。返回实际回复量。 */
+
+double sim_heal(int id, double amount) {
+  if (id < 0 || id >= SIM_MAX || !U[id].alive || amount <= 0) return 0;
+  SimUnit* u = &U[id];
+  const double before = u->hp;
+  u->hp = fmin(u->maxHp, u->hp + amount);
+  return u->hp - before;
+}
+
+/** buff 过期清理（step 2602）。返回过期个数。 */
+static int expire_buffs(void) {
+  int n = 0;
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive) continue;
+    for (int i = 0; i < SIM_BUFF_MAX; i++) {
+      SimBuff* b = &BUFFS[id][i];
+      if (b->active && b->untilMs != 0 && b->untilMs <= SIM_NOW) { b->active = 0; n++; }
+    }
+  }
+  return n;
+}
+
+/** 伤害结算（damage() 纯数值子集 + buff 减伤/吸蓝）。返回实际伤害。 */
 static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   SimUnit* t = &U[tgtId];
   if (!t->alive) return 0;
   double dmg = amount;
   dmg *= type_bonus(atkTypeIdx, t->armorTypeIdx);
-  dmg *= armor_factor(t->armor);
+  // armor + buff 护甲加成（recalc 828）
+  dmg *= armor_factor(t->armor + buff_armor_bonus(tgtId));
+  // defend 减伤（damage 1102-1103）
+  SimBuff* def = buff_find(tgtId, SIM_BUF_DEFEND);
+  if (def && dmg > 0) dmg *= 1 - def->pct;
+  // manashield 吸蓝（damage 1109-1122）
+  SimBuff* sh = buff_find(tgtId, SIM_BUF_MANASHIELD);
+  if (sh && dmg > 0) {
+    const double rate = sh->flat;   // manaPerHp（负值 = 反哺，同 JS）
+    double absorbed = dmg * sh->pct;
+    if (rate > 0) {
+      absorbed = fmin(absorbed, t->mana / rate);
+      t->mana = fmax(0, t->mana - absorbed * rate);
+      if (t->mana <= 0) sh->active = 0;
+    } else if (rate < 0) {
+      t->mana = fmin(t->maxMana, t->mana - absorbed * rate);
+    }
+    dmg -= absorbed;
+  }
   t->hp -= dmg;
   t->dmgCount++;
   if (t->hp <= 0) {
@@ -833,6 +1031,7 @@ static void release_attack(SimUnit* u, SimUnit* t) {
   double amount = u->dmgBase;
   const int dice = (int)u->dmgDice;
   for (int i = 0; i < dice; i++) amount += floor(rng_next() * fmax(1, u->dmgSides)) + 1;
+  amount *= buff_dmg_mul(slot);   // rage/morph/innerfire/weaken（recalc 833-834）
   u->atkCount++;
   // 远程：非 normal 武器 + 有导弹速度 → 发射导弹（伤害延迟到命中，对齐 releaseAttack 3103-3104）
   if (u->weaponKind != 0 && u->missileSpeed > 0) {
@@ -852,7 +1051,7 @@ static void release_attack(SimUnit* u, SimUnit* t) {
 }
 
 /** 单单位攻击 tick（stepAttack 子集，对齐 2991-3044）。 */
-static void step_attack_unit(SimUnit* u, double dt) {
+static void step_attack_unit(SimUnit* u, int id, double dt) {
   if (u->atkTimer > 0) u->atkTimer = fmax(0, u->atkTimer - dt);
   if (!u->alive) return;
   // windup 推进
@@ -897,7 +1096,7 @@ static void step_attack_unit(SimUnit* u, double dt) {
     if (fabs(delta) - amount >= 1e-9) return;   // 转向未到位
   }
   if (u->atkTimer > 0) return;
-  u->atkTimer = fmax(u->atkCd, u->attackPoint + u->attackBackswing);   // speed mul 1
+  u->atkTimer = fmax(u->atkCd, u->attackPoint + u->attackBackswing) * buff_atkcd_mul(id);   // 攻速 buff
   u->attackWindupRemaining = u->attackPoint;
   u->attackWindupTarget = tgt;
   ev_push(SIM_EV_ATTACK, (int)(u - U), tgt);   // JS emit({t:'attack', id:u, target:t})
@@ -977,7 +1176,7 @@ void sim_combat_step(double dt) {
     if (!u->alive) continue;
     step_ai_unit(u, id);         // stepAI
     step_move_unit(u, id, dt);   // stepMove
-    step_attack_unit(u, dt);     // stepAttack
+    step_attack_unit(u, id, dt);     // stepAttack
   }
 }
 
@@ -1181,6 +1380,7 @@ int sim_snapshot(float* buf, int maxN) {
  *  对齐 JS step()：stepGathers(发单) → stepMissiles → 单位循环。 */
 void sim_step(double dt) {
   SIM_NOW++;
+  expire_buffs();              // buff 过期清理（step 2602）
   gather_pass();
   step_missiles(dt);
   for (int id = 0; id < SIM_MAX; id++) {
@@ -1188,6 +1388,6 @@ void sim_step(double dt) {
     if (!u->alive) continue;
     step_ai_unit(u, id);         // stepAI
     step_move_unit(u, id, dt);   // stepMove
-    step_attack_unit(u, dt);     // stepAttack
+    step_attack_unit(u, id, dt);     // stepAttack
   }
 }
