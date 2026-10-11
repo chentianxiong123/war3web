@@ -3,7 +3,7 @@ import { AlertHistory } from './alerts.js';
 import { Selection } from './selection.js';
 import { minimapPoint } from './minimap.js';
 import { Net } from './net.js';
-import { Renderer, toX, toZ } from './render.js';
+import { Renderer, toX, toZ, snapshotFromBinary } from './render.js';
 import { UI, Lang } from './ui.js';
 import { HeroPreview } from './heroview.js';
 import { Overlay } from './overlay.js';
@@ -204,6 +204,16 @@ net.on(Msg.SNAPSHOT, (m) => {
 
 net.on(Msg.EVENT, (m) => {
   for (const ev of m.ev) handleEvent(ev);
+});
+
+// M4 阶段 4：二进制 SOA 快照通道（tag 's'，server 每 tick 与 JSON 并列发送）。
+// render.js 已有 updateFromBinary 方法，直接调用。
+// JSON 快照负责元数据（typeKey/模型/颜色），binary 负责位置/朝向/HP 高频更新。
+net.on('s', (bytes) => {
+  const data = bytes.slice(1);   // 去掉 tag 字节
+  if (data.byteLength < 20) return;
+  const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  view.updateFromBinary(buf, S.slots || {}, S.colors || []);
 });
 
 net.on(Msg.CHATMSG, (m) => ui.log(`<b>${escapeHtml(m.from)}:</b> ${escapeHtml(m.text)}`));
