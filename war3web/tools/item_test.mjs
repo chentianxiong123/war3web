@@ -4,6 +4,9 @@
 // 场景 2：单位拾取物品 → owner 变更
 // 场景 3：单位丢弃物品 → owner 恢复为 -1
 // 场景 4：销毁物品 → sim_item_count 减少
+// 场景 5：魔法盾吸伤（Amph 吸收伤害，目标不受伤）
+// 场景 6：魔法盾耗尽（Amph hp≤0 后目标开始受伤）
+// 场景 7：一次性消耗品自动使用（Samo 低血自动回复）
 //
 // 用法：node tools/item_test.mjs
 //
@@ -109,8 +112,68 @@ check("边界 drop 无效 itemId 返回 0", eng._sim_item_drop(999, 0, 0) === 0)
 check("边界 destroy 无效 itemId 返回 0", eng._sim_item_destroy(999) === 0);
 check("边界 表满时 count 不变", eng._sim_item_count() === 0);
 
+// ---- 场景 5：魔法盾吸伤（Amph 吸收伤害）----
+{
+  const sg = eng._malloc(6 * 4);
+  eng._sim_clear_all();
+  // 目标（u0）：高 HP，无攻击（atkRange=0），moveSpeed=0
+  eng._sim_spawn_fight(0, 0, 0, 0, 0, 31, 1000, 1000, 0, 2, 1, 0, 0, 1, 1.0, 0, 0.1, 0.1, 1, 0, 0);
+  // 攻击者（u1）：dmg=50，atkRange=200，朝向 π（面向目标，无需转身）
+  eng._sim_spawn_fight(1, 100, 0, Math.PI, 0, 31, 1000, 1000, 0, 2, 0, 50, 0, 1, 1.0, 200, 0.1, 0.1, 1, 0, 0);
+  const amphId = eng._sim_item_spawn(-1, ITEM_AMPH, 0, 0, -1, 0);
+  eng._sim_item_pickup(amphId, 0);
+  for (let t = 0; t < 10; t++) eng._sim_step(1/30);
+  const n5 = eng._sim_get_items(buf, 8);
+  let amphHp5 = 200;
+  for (let i = 0; i < n5; i++) if (H[b + 6*i] === amphId) { amphHp5 = H[b + 6*i + 5]; break; }
+  check(`场景5 Amph hp 减少 (200→${Math.round(amphHp5)})`, amphHp5 < 200);
+  eng._sim_get_fight(0, sg);
+  const targetHp5 = eng.HEAPF32[sg >> 2];
+  check(`场景5 u0 hp 不变 (1000→${Math.round(targetHp5)})`, Math.abs(targetHp5 - 1000) < 1);
+  eng._free(sg);
+}
+
+// ---- 场景 6：魔法盾耗尽（Amph hp≤0 后目标开始受伤）----
+{
+  const sg = eng._malloc(6 * 4);
+  eng._sim_clear_all();
+  eng._sim_spawn_fight(0, 0, 0, 0, 0, 31, 1000, 1000, 0, 2, 1, 0, 0, 1, 1.0, 0, 0.1, 0.1, 1, 0, 0);
+  eng._sim_spawn_fight(1, 100, 0, Math.PI, 0, 31, 1000, 1000, 0, 2, 0, 50, 0, 1, 1.0, 200, 0.1, 0.1, 1, 0, 0);
+  const amphId = eng._sim_item_spawn(-1, ITEM_AMPH, 0, 0, -1, 0);
+  eng._sim_item_pickup(amphId, 0);
+  for (let t = 0; t < 200; t++) eng._sim_step(1/30);
+  const n6 = eng._sim_get_items(buf, 8);
+  let amphFound = false;
+  for (let i = 0; i < n6; i++) if (H[b + 6*i] === amphId) { amphFound = true; break; }
+  check("场景6 Amph 已耗尽销毁", !amphFound);
+  eng._sim_get_fight(0, sg);
+  const targetHp6 = eng.HEAPF32[sg >> 2];
+  check(`场景6 u0 hp 减少 (1000→${Math.round(targetHp6)})`, targetHp6 < 1000);
+  eng._free(sg);
+}
+
+// ---- 场景 7：一次性消耗品自动使用（Samo 低血自动回复）----
+{
+  const sg = eng._malloc(6 * 4);
+  eng._sim_clear_all();
+  eng._sim_spawn_fight(0, 0, 0, 0, 0, 31, 1000, 1000, 0, 2, 1, 0, 0, 1, 1.0, 0, 0.1, 0.1, 1, 0, 0);
+  // 攻击者：dmg=300（一击将 u0 打到 700，低于 75% 阈值触发自动使用）
+  eng._sim_spawn_fight(1, 100, 0, Math.PI, 0, 31, 1000, 1000, 0, 2, 0, 300, 0, 1, 1.0, 200, 0.1, 0.1, 1, 0, 0);
+  const samoId = eng._sim_item_spawn(-1, ITEM_SAMO, 0, 0, -1, 0);
+  eng._sim_item_pickup(samoId, 0);
+  for (let t = 0; t < 10; t++) eng._sim_step(1/30);
+  const n7 = eng._sim_get_items(buf, 8);
+  let samoFound = false;
+  for (let i = 0; i < n7; i++) if (H[b + 6*i] === samoId) { samoFound = true; break; }
+  check("场景7 Samo 已自动使用并销毁", !samoFound);
+  eng._sim_get_fight(0, sg);
+  const targetHp7 = eng.HEAPF32[sg >> 2];
+  check(`场景7 u0 hp 被治疗 (700→${Math.round(targetHp7)})`, targetHp7 > 700);
+  eng._free(sg);
+}
+
 eng._free(buf);
 
 console.log(`\nitem_test: ${pass}/${pass + fail} 项通过`);
-console.log(allOk ? "item_test: 全部通过（4 场景 + 边界）" : "item_test: 存在失败");
+console.log(allOk ? "item_test: 全部通过（7 场景 + 边界）" : "item_test: 存在失败");
 process.exitCode = allOk ? 0 : 1;

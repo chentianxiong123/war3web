@@ -120,6 +120,7 @@ static double buff_armor_bonus(int id);
 static SimBuff* buff_find(int id, int kindIdx);
 double sim_heal(int id, double amount);   // 前置声明供 sim_damage 用
 static void build_pass(double dt);        // 前置声明供 sim_step / sim_econ_step 用
+int sim_item_destroy(int itemId);         // 前置声明供 consumable_pass 用
 static long long SIM_NOW;   // tick 计数（模拟 world.now）
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
 
@@ -1082,6 +1083,19 @@ static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
     }
     dmg -= absorbed;
   }
+  // 魔法盾吸伤（Amph, typeIdx=2）：目标持有 Amph 时从物品 hp 扣减伤害（吸收直到耐久耗尽）。
+  // 对齐 JS applyItemDamage 语义：dmg > 0 才吸收，物品 hp <= 0 时销毁。
+  for (int i = 0; i < SIM_ITEM_MAX; i++) {
+    SimItem* it = &ITEMS[i];
+    if (!it->active || it->owner != tgtId || it->typeIdx != 2) continue;
+    if (it->hp <= 0) { it->active = 0; continue; }
+    if (dmg > 0) {
+      const double absorbed = fmin(dmg, it->hp);
+      it->hp -= absorbed;
+      dmg -= absorbed;
+      if (it->hp <= 0) it->active = 0;
+    }
+  }
   t->hp -= dmg;
   t->dmgCount++;
   if (t->hp <= 0) {
@@ -1557,6 +1571,30 @@ static void build_pass(double dt) {
   }
 }
 
+/** 一次性消耗品自动使用 pass：低血单位持有 Samo/Ssam 时自动回复。
+ *  触发条件：单位存活 + 持有未使用物品（hp>0）+ hp < 75% maxHp。
+ *  Samo 圣光卷轴（typeIdx=0）：回复 100 HP；Ssam 治疗药水（typeIdx=1）：回复 50 HP。
+ *  使用后销毁物品。对齐 JS useItem 语义。 */
+static void consumable_pass(void) {
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive || u->maxHp <= 0) continue;
+    if (u->hp >= 0.75 * u->maxHp) continue;   // 高血不用
+    for (int i = 0; i < SIM_ITEM_MAX; i++) {
+      SimItem* it = &ITEMS[i];
+      if (!it->active || it->owner != id || it->hp <= 0) continue;
+      if (it->typeIdx == 0) {
+        sim_heal(id, 100);   // Samo 圣光卷轴
+        sim_item_destroy(i);
+      } else if (it->typeIdx == 1) {
+        sim_heal(id, 50);   // Ssam 治疗药水
+        sim_item_destroy(i);
+      } else continue;
+      break;   // 每 tick 每单位最多用一次
+    }
+  }
+}
+
 /** 全量 tick（M4 目标 wasm_step）：gather → missiles → 单位循环（AI/move/attack）。
  *  对齐 JS step()：stepGathers(发单) → stepMissiles → 单位循环。 */
 void sim_step(double dt) {
@@ -1573,6 +1611,7 @@ void sim_step(double dt) {
     step_move_unit(u, id, dt);   // stepMove
     step_attack_unit(u, id, dt);     // stepAttack
   }
+  consumable_pass();             // M4 阶段 4：一次性消耗品自动使用
 }
 
 // ------------------------------------------------------------------ 物品（M4 阶段 4）
@@ -1582,7 +1621,7 @@ void sim_step(double dt) {
 //   pickup     → giveItem（设置 owner；不删、不消耗，交给上层能力桥）
 //   drop       → dropItem（owner=-1、写位置；不做 freeItemSpot 微调）
 //   destroy    → removeItem（清槽位；不从持有者 items 数组移除，交给上层）
-// 物品效果（Samo 治疗、Ssam 治疗、Amph 魔法盾吸伤）暂不接入，预留 abilities 位集。
+// 物品效果（M4 阶段 4 接入）：Samo/Ssam 在 consumable_pass 自动回复，Amph 在 sim_damage 吸伤。
 
 /** 创建物品。id<0 时自动分配空闲槽位；返回物品 id（=槽位），失败返回 -1。
  *  typeIdx 越界也返回 -1。owner<0 视为地面（-1）。hp<=0 用类型默认 maxHp。 */
