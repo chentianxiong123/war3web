@@ -241,7 +241,10 @@ static double type_bonus(int atk, int armor) {
 
 void sim_spawn(int id, double x, double y, double facing, double speed, double radius, int fly, int pathingOff) {
   if (id < 0 || id >= SIM_MAX) return;
-  U[id].x = x; U[id].y = y; U[id].facing = facing;
+  U[id].x = x; U[id].y = y;
+  // 归一化初始朝向到 [-π, π]（对齐 step_move_unit/step_attack_unit 的 atan2 归一化）
+  // 否则 idle 单位朝向可能超出范围，渲染器插值时产生绕圈/颤抖。
+  U[id].facing = atan2(sin(facing), cos(facing));
   U[id].speed = speed; U[id].radius = radius;
   U[id].alive = 1; U[id].fly = fly; U[id].pathingOff = pathingOff;
   U[id].nPath = 0; U[id].goalX = 1e18; U[id].goalY = 1e18;   // 初始目标无效 → 首次必寻路
