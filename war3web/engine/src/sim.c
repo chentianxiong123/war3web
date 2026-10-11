@@ -51,6 +51,10 @@ typedef struct {
   double atkTimer, attackWindupRemaining;
   int attackWindupTarget;
   long long atkCount, dmgCount, deathCount;
+  // ---- AI（阶段 2：stepAI 追击子集）----
+  int orderType;             // 0=idle 1=attack（自动获取）
+  int orderTargetId;
+  double acquisitionRange, homeX, homeY;
 } SimUnit;
 static SimUnit U[SIM_MAX];
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
@@ -520,6 +524,36 @@ int sim_order_move(int id, double tx, double ty) {
   return 1;
 }
 
+/** routeUnit = movementPath(u, tx, ty, [])：空 blockers（无实体阻挡）。
+ *  AI 追击（stepAI 发包后 stepMove 2814-2832 requestMovementPath body=false → routeUnit）。
+ *  返回 1 成功 / -1 无路径。 */
+static int sim_route(SimUnit* u, int id, double tx, double ty) {
+  if (!u->alive) return -1;
+  const double radius = u->pathingOff ? 0 : u->radius;
+  if (clear_footprint(u->x, u->y, tx, ty, radius)) {   // 快路径：直线（无实体）
+    double p[2] = { tx, ty };
+    sim_set_path_u(u, p, 1);
+    return 1;
+  }
+  // 慢路径：入口（起点格）+ A*（无 occupancy；OCN=0 时不查实体）
+  int s0, s1, t0, t1;
+  nearest_walkable(u->x, u->y, 24, radius, &s0, &s1);
+  nearest_walkable(tx, ty, 24, radius, &t0, &t1);
+  if (s0 < 0 || t0 < 0) return -1;
+  const double ex = OX + (s0 + 0.5) * SIM_PCELL, ey = OY + (s1 + 0.5) * SIM_PCELL;
+  if (!clear_footprint(u->x, u->y, ex, ey, radius)) return -1;   // canAdvance(entry, [])
+  OCN = 0;
+  float buf[1024];
+  const int n = sim_find_path_r(ex, ey, tx, ty, buf, 512, radius);
+  if (n < 0) return -1;
+  double* pts = (double*)malloc(sizeof(double) * 2 * (size_t)(n + 1));
+  pts[0] = ex; pts[1] = ey;
+  for (int i = 0; i < n; i++) { pts[2 * (i + 1)] = buf[2 * i]; pts[2 * (i + 1) + 1] = buf[2 * i + 1]; }
+  sim_set_path_u(u, pts, n + 1);
+  free(pts);
+  return 1;
+}
+
 /** 单单位 move 分支推进一步（对齐 stepMove 2834-2855；sim_tick 与 sim_move 共用）。 */
 static void step_move_unit(SimUnit* u, int id, double dt) {
   if (!u->alive || u->nPath == 0) return;
@@ -618,6 +652,9 @@ void sim_spawn_fight(int id, double x, double y, double facing, double speed, do
   u->atkTypeIdx = atkTypeIdx; u->weaponKind = weaponKind;
   u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
   u->atkCount = 0; u->dmgCount = 0; u->deathCount = 0;
+  // AI 初始：idle、acquisitionRange 500（hfoo 实测）、home = spawn
+  u->orderType = 0; u->orderTargetId = -1;
+  u->acquisitionRange = 500; u->homeX = x; u->homeY = y;
 }
 
 /** 伤害结算（damage() 纯数值子集）。返回实际伤害。 */
@@ -659,13 +696,19 @@ static void step_attack_unit(SimUnit* u, double dt) {
     }
     return;
   }
-  // 自动目标扫描（stepAttack 3012-3024：敌对 + 距离 < atkRange+半径+40）
-  int tgt = -1; double bd = 1e18;
-  for (int i = 0; i < SIM_MAX; i++) {
-    SimUnit* o = &U[i];
-    if (!o->alive || o == u || o->team == u->team) continue;
-    const double d = hypot(o->x - u->x, o->y - u->y);
-    if (d < u->atkRange + o->radius + 40 && d < bd) { bd = d; tgt = i; }
+  // 目标选择（JS stepAttack 3012-3024）：AI 固定目标（order.targetId）优先，
+  // 目标失效才自动扫描（攻击中不换目标）
+  int tgt = -1;
+  if (u->orderTargetId >= 0 && U[u->orderTargetId].alive && U[u->orderTargetId].team != u->team)
+    tgt = u->orderTargetId;
+  if (tgt < 0) {
+    double bd = 1e18;
+    for (int i = 0; i < SIM_MAX; i++) {
+      SimUnit* o = &U[i];
+      if (!o->alive || o == u || o->team == u->team) continue;
+      const double d = hypot(o->x - u->x, o->y - u->y);
+      if (d < u->atkRange + o->radius + 40 && d < bd) { bd = d; tgt = i; }
+    }
   }
   if (tgt < 0) return;
   SimUnit* t = &U[tgt];
@@ -687,14 +730,45 @@ static void step_attack_unit(SimUnit* u, double dt) {
   u->attackWindupTarget = tgt;
 }
 
-/** 战斗 tick：每单位 移动 → 攻击 → 死亡回收（对齐 step 单位循环顺序）。 */
+/** 单单位 AI tick（stepAI 2656-2709 追击子集）：
+ *  idle → 获取范围内扫描敌对最近 → attack；
+ *  attack → 目标死亡回 idle；距离 > atkRange+radius 追击（目标记忆判据自动冷却），
+ *  否则停（path 清空，原地打）。leash 跳过（战斗场景 home 附近）。 */
+static void step_ai_unit(SimUnit* u, int id) {
+  if (u->orderType == 0) {
+    int best = -1; double bd = 1e18;
+    for (int i = 0; i < SIM_MAX; i++) {
+      SimUnit* o = &U[i];
+      if (!o->alive || o == u || o->team == u->team) continue;
+      const double d = hypot(o->x - u->x, o->y - u->y);
+      if (d <= u->acquisitionRange && d < bd) { bd = d; best = i; }
+    }
+    if (best >= 0) { u->orderType = 1; u->orderTargetId = best; }
+    return;
+  }
+  // attack
+  SimUnit* t = &U[u->orderTargetId];
+  if (u->orderTargetId < 0 || !t->alive) { u->orderType = 0; u->orderTargetId = -1; u->nPath = 0; return; }
+  const double d = hypot(t->x - u->x, t->y - u->y);
+  if (d > u->atkRange + t->radius) {
+    // 追击：JS stepMove 用 routeUnit（无实体阻挡）；目标移动才重寻路（goalX 快照）
+    if (u->goalX != t->x || u->goalY != t->y || u->nPath == 0) {
+      if (sim_route(u, id, t->x, t->y) >= 0) { u->goalX = t->x; u->goalY = t->y; }
+    }
+  } else {
+    u->nPath = 0;   // 在射程内：停（stepMove 2814-2832）
+  }
+}
+
+/** 战斗 tick：每单位 AI → 移动 → 攻击（对齐 step 单位循环顺序）。 */
 void sim_combat_step(double dt) {
   SIM_NOW++;
   for (int id = 0; id < SIM_MAX; id++) {
     SimUnit* u = &U[id];
     if (!u->alive) continue;
-    step_move_unit(u, id, dt);       // stepMove
-    step_attack_unit(u, dt);         // stepAttack
+    step_ai_unit(u, id);         // stepAI
+    step_move_unit(u, id, dt);   // stepMove
+    step_attack_unit(u, dt);     // stepAttack
   }
 }
 

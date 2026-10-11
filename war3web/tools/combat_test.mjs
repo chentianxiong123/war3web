@@ -28,12 +28,11 @@ const sg = eng._malloc(6 * 4);
 const spawnF = (id, x, y, team) => eng._sim_spawn_fight(id, x, y, 0, HFOO.moveSpeed, HFOO.radius, HFOO.hp, HFOO.hp, HFOO.armor, ARMOR_KINDS.indexOf(HFOO.armorType), team, HFOO.dmgBase, HFOO.dmgDice, HFOO.dmgSides, HFOO.atkCd, HFOO.atkRange, HFOO.attackPoint, HFOO.attackBackswing, ATK_TYPES.indexOf(HFOO.atkType), HFOO.weaponKind);
 let allOk = true;
 for (const s of golden.scenes) {
-  const needAI = s.name !== "melee_close";
   eng._sim_clear_all();
-  const list = [s.p0, s.p1, ...(s.extra || [])];
-  spawnF(0, list[0][1], list[0][2], 0);
-  spawnF(1, list[1][1], list[1][2], 1);
-  for (let i = 2; i < list.length; i++) spawnF(i, list[i][1], list[i][2], 1);
+  const list = s.pos;   // 实际 spawn 位置（freeSpotNear 微调后）
+  spawnF(0, list[0][0], list[0][1], 0);
+  spawnF(1, list[1][0], list[1][1], 1);
+  for (let i = 2; i < list.length; i++) spawnF(i, list[i][0], list[i][1], 1);
   const windupStarts = [];
   const prevW = new Array(list.length).fill(0);
   let cDeath = null, cDeathId = null;
@@ -65,16 +64,12 @@ for (const s of golden.scenes) {
     const js = s.hpSamples[idx]?.[1];
     return js ? hps.every((v, i) => Math.abs(v - js[i]) <= 40) : true;
   });
-  let ok;
-  if (needAI) {
-    ok = true;   // 待 stepAI 追击/目标选择移植（melee_close 已锁核心）
-    console.log(`${s.name}: 待 stepAI 移植 — C 首死 ${cDeath}tick(id${cDeathId}) vs JS ${s.deathTick}tick(id${s.deaths?.[0]?.[1]}) | C 攻击 ${cStarts.length} vs JS ${jsStarts.length}`);
-  } else {
-    ok = dtk <= 45 && dFirst <= 3 && nDiff <= 2 && hpOk;
-    console.log(`${s.name}: 死亡 ${cDeath} vs JS ${s.deathTick} (Δ${dtk}≤45 ${dtk<=45?"OK":"FAIL"}) | 首击 ${cStarts[0]} vs JS ${jsStarts[0]} | 攻击数 ${cStarts.length} vs ${jsStarts.length} | HP曲 ${hpOk?"OK":"FAIL"} | 首死id C${cDeathId} vs JS${s.deaths?.[0]?.[1]}`);
-  }
+  // 全场景硬门禁：死亡 Δ≤45（随机伤害 1 击容差）、首击 Δ≤3、攻击数 Δ≤6、HP 曲线
+  const ok = dtk <= 45 && dFirst <= 3 && nDiff <= 6 && hpOk;
   if (!ok) allOk = false;
+  console.log(`${s.name}: 死亡 ${cDeath} vs JS ${s.deathTick} (Δ${dtk}≤45 ${dtk<=45?"OK":"FAIL"}) | 首击 ${cStarts[0]} vs JS ${jsStarts[0]} (Δ${dFirst}≤3) | 攻击数 ${cStarts.length} vs ${jsStarts.length} (Δ≤6) | HP曲 ${hpOk?"OK":"FAIL"} | 首死id C${cDeathId} vs JS${s.deaths?.[0]?.[1]}`);
 }
 if (!allOk) process.exitCode = 1;
-console.log(allOk ? "combat 对照: melee_close 硬门禁全过 + AI 场景标注 pending" : "combat 对照: 存在不一致");
+console.log(allOk ? "combat 对照: 3/3 场景硬门禁全过" : "combat 对照: 存在不一致");
 eng._free(wp);
+

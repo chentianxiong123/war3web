@@ -27,12 +27,17 @@ const scenes = [
 const runs = [];
 for (const s of scenes) {
   const w = new World();
+  // 最小 player 表（playerOf 需有效才能得到真实敌对：同 player/同 team 互不进攻）；
+  // eventId 返回 null 让 JASS 事件桥早退（本脚本只录引擎行为）
+  w.jass = { players: Array.from({ length: 12 }, (_, i) => ({ index: i, team: i >= 1 ? 1 : 0 })),
+    eventId: () => null, fire: () => {}, triggers: [] }; 
   const p0 = { index: 0, team: 0 };
   const p1 = { index: 1, team: 1 };
   const units = [];
-  units.push(w.createUnit(p0, s.p0[0], s.p0[1], 0));
-  units.push(w.createUnit(p1, s.p1[0], s.p1[1], 0));
+  units.push(w.createUnit(p0, s.p0[0], s.p0[1], s.p0[2], 0));
+  units.push(w.createUnit(p1, s.p1[0], s.p1[1], s.p1[2], 0));
   for (const [type, x, y] of s.extra || []) units.push(w.createUnit(p1, type, x, y, 0));
+  const initPos = units.map((u) => [Math.round(u.x), Math.round(u.y)]);
   const atkEvents = [];
   const hpSamples = [];
   let deathTick = null;
@@ -49,6 +54,7 @@ for (const s of scenes) {
     if (deathTick != null && units.every((u) => !u.alive)) break;
   }
   runs.push({
+    pos: initPos,
     p0: s.p0, p1: s.p1, extra: s.extra,
     name: s.name,
     nUnits: units.length,
@@ -65,6 +71,13 @@ for (const s of scenes) {
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify({ world: 'terenas', dt: 1 / 30, scenes: runs }, null, 1));
 console.log('combat golden 已存档:', OUT);
+
+
+
+
+
+
+
 
 
 
