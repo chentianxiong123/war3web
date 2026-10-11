@@ -53,6 +53,13 @@ export class Room {
     this.wasmSlotOf = new Map();
     this.wasmWorldOf = new Map();
     this.wasmSlotSeq = 0;
+    // M5: slots registry（wasm slot -> { id, u, k, sel}），client 用它把 SOA
+    // 的数字 slot 还原成 typeKey/模型/可选标记
+    this.wasmSlots = new Map();
+    this.wasmSlotsDirty = false;
+    // M5: client 确认收到 binary 后，JSON 快照降频（每 5 帧 ≈ 每 10 tick）
+    this.clientBinaryReady = false;
+    this.jsonAcc = 0;
   }
 
   get list() {
@@ -75,8 +82,10 @@ export class Room {
         // the permanent tags and the atmosphere go out again with the next
         // snapshot, as they do for anyone who was not there when they were set
         back.tagsSent = false;
+        this.wasmSlotsDirty = true;   // M5: 重连后重新推送 slots registry
         this.welcome(back);
         this.broadcastState();
+        this.sendSlots(back);          // M6: 重连后立即推送 slots registry
         return back;
       }
     }
@@ -104,8 +113,10 @@ export class Room {
                 slot: chosen, team: chosen, token: randomUUID(),
                 ready: false, kills: 0, deaths: 0, dropTimer: null };
     this.players.set(p.id, p);
+    this.wasmSlotsDirty = true;   // M5: 新玩家需要 slots registry 解码 binary
     this.welcome(p);
     this.broadcastState();
+    this.sendSlots(p);             // M6: 新玩家加入后立即推送 slots registry
     return p;
   }
 
@@ -166,6 +177,10 @@ export class Room {
     this.wasmSlotOf.clear();
     this.wasmWorldOf.clear();
     this.wasmSlotSeq = 0;
+    this.wasmSlots.clear();
+    this.wasmSlotsDirty = false;
+    this.clientBinaryReady = false;
+    this.jsonAcc = 0;
     for (const p of this.players.values()) {
       if (p.dropTimer) { clearTimeout(p.dropTimer); p.dropTimer = null; }
       // Somebody who left during the match was kept so the script could still
@@ -207,6 +222,11 @@ export class Room {
         break;
       }
       case Msg.PING: this.send(p.ws, { t: Msg.PONG, c: m.c }); break;
+      // M5: client 确认收到 binary 快照，JSON 快照降频
+      case Msg.BINARY_READY:
+        this.clientBinaryReady = true;
+        this.jsonAcc = 0;
+        break;
       default: this.command(p, m);
     }
   }
@@ -233,14 +253,10 @@ export class Room {
     if (m.t === Msg.TRAIN) {
       // RTS 训练: 选中建筑 -> 训练单位 (Terenas 官方对战)
       for (const unit of sel(4)) W.order(unit, { type: 'train', trainType: m.trainType });
-      return;
-    }
-    if (m.t === Msg.BUILD) {
+    } else if (m.t === Msg.BUILD) {
       // RTS 建造: 选中农民 -> 在 (x,y) 建建筑
       for (const unit of sel(4)) W.order(unit, { type: 'build', buildType: m.buildType, x: m.x, y: m.y });
-      return;
-    }
-    if (m.t === 'castUnit') {
+    } else if (m.t === 'castUnit') {
       // Casting from a selected unit's command card. The ability is named
       // outright instead of by slot, because a non-hero's card is the list in
       // the snapshot rather than a fixed layout the server holds, and
@@ -253,9 +269,7 @@ export class Room {
         if (!r.ok && !bad) bad = r.reason;
       }
       if (bad) this.send(p.ws, { t: Msg.ERROR, m: bad });
-      return;
-    }
-    if ([Msg.MOVE, Msg.STOP, 'hold', Msg.ATTACK, 'smart'].includes(m.t)) {
+    } else if ([Msg.MOVE, Msg.STOP, 'hold', Msg.ATTACK, 'smart'].includes(m.t)) {
       let queueFull = false;
       for (const unit of sel(12)) {
         const issue = order => {
@@ -275,8 +289,11 @@ export class Room {
         }
       }
       if (queueFull) this.send(p.ws, { t: Msg.ERROR, m: 'Order queue is full (35 commands).' });
-      return;
+    } else {
+      return;   // 未知消息类型，不处理
     }
+    // M6: 命令处理后立即广播快照（不等下一个 tick），降低输入延迟
+    this.broadcastSnapshotNow();
   }
 
   start() {
@@ -329,6 +346,7 @@ export class Room {
   _syncWasm() {
     if (!this.wasmReady || !this.world) return;
     const W = this.world;
+    let dirty = false;
     for (const u of W.units.values()) {
       // 只同步客户端可见、活着、非拾取道具的单位（与 world.snapshot() 过滤条件一致）
       if (!u.alive || u.hidden || u.removed || u.pickerProp) continue;
@@ -343,9 +361,17 @@ export class Room {
       if (!ok) continue;   // wasm 不认识此 typeKey，槽位留给下次（wasmSlotSeq 单调递增）
       this.wasmSlotOf.set(u.id, slot);
       this.wasmWorldOf.set(slot, u.id);
+      // M5: 注册 slots registry——client 用它把 SOA 的数字 slot 还原成 typeKey
+      this.wasmSlots.set(slot, {
+        id: u.id, u: u.typeKey,
+        k: u.isHero ? 1 : u.isBuilding ? 3 : 2,
+        sel: !W.isLocust(u),
+      });
+      dirty = true;
       // 新单位可能带着初始 buff（例如出生光环）——一并注入
       for (const b of (u.buffs || [])) this._syncBuffToWasm(u, b);
     }
+    if (dirty) this.wasmSlotsDirty = true;
   }
 
   /** 把单个 buff 注入 wasm（code=-1 时按 kind 替换，否则按 code 替换）。 */
@@ -363,6 +389,35 @@ export class Room {
     this.bridge.applyBuff(slot, kind, code, untilMs, b.pct ?? 0, b.atkPct ?? 0, b.flat ?? 0);
   }
 
+  /**
+   * M5: 推送 slots registry（wasm slot -> { id, u, k, sel}）+ colors 数组。
+   * client 用它把 SOA 快照里的数字 slot 还原成 typeKey/模型/可选标记。
+   * 只在 registry 变化时发送（wasmSlotsDirty 标志）。
+   */
+  _broadcastSlots() {
+    const slots = {};
+    for (const [slot, info] of this.wasmSlots) slots[slot] = info;
+    const colors = [];
+    for (let i = 0; i < 16; i++) {
+      const p = this.eng?.players?.[i];
+      colors[i] = typeof p?.color === 'number' ? p.color : i;
+    }
+    this.broadcast({ t: Msg.SLOTS, slots, colors });
+  }
+
+  /** M6: 向单个客户端发送 slots registry（新玩家加入时立即推送，不等下一个 tick）。 */
+  sendSlots(p) {
+    if (!p.ws || p.ws.readyState !== 1) return;
+    const slots = {};
+    for (const [slot, info] of this.wasmSlots) slots[slot] = info;
+    const colors = [];
+    for (let i = 0; i < 16; i++) {
+      const pl = this.eng?.players?.[i];
+      colors[i] = typeof pl?.color === 'number' ? pl.color : i;
+    }
+    this.send(p.ws, { t: Msg.SLOTS, slots, colors });
+  }
+
   /** 推送一帧 SOA 二进制快照（与 JSON 快照并列发送）。 */
   _broadcastWasmSnapshot() {
     if (!this.wasmReady) return;
@@ -374,6 +429,21 @@ export class Room {
     const buf = new Uint8Array(byteLen);
     buf.set(src.subarray(snap.bufAddr, snap.bufAddr + byteLen));
     this.broadcastBinary(Msg.SNAPSHOT_BIN, buf);
+  }
+
+  /** M5: 命令处理后立即广播快照（不等下一个 tick），降低输入延迟。 */
+  broadcastSnapshotNow() {
+    if (!this.world) return;
+    // JSON 快照（包含完整 ents/items/res/clock/quests）
+    const snap = this.world.snapshot();
+    snap.board = this.scriptBoard();
+    this.broadcast({ t: Msg.SNAPSHOT, s: snap });
+    // 二进制 SOA 快照（高频位置/HP 更新）
+    try { this._broadcastWasmSnapshot(); }
+    catch (e) { console.error('wasm snapshot broadcast failed:', e.message); }
+    // 重置节拍，避免紧接着的下一 tick 又触发一次快照
+    this.snapAcc = 0;
+    this.jsonAcc = 0;
   }
 
   stepLoop() {
@@ -406,27 +476,38 @@ export class Room {
       if (all.length) this.broadcast({ t: Msg.EVENT, ev: all.slice(0, 200) });
       if (++this.snapAcc >= TICK_HZ / SNAP_HZ) {
         this.snapAcc = 0;
-        const snap = this.world.snapshot();
-        snap.board = this.scriptBoard();
-        this.broadcast({ t: Msg.SNAPSHOT, s: snap });
-        // M4 阶段 4：额外推送 SOA 二进制快照（1 字节 tag 's' + Float32Array）
-        // —— 客户端可选择 JSON 或 binary 通道更新；渲染路径切换留待后续阶段
+        // M5: slots registry 变化时推送（client 用它解码 binary 快照）
+        if (this.wasmSlotsDirty) {
+          this._broadcastSlots();
+          this.wasmSlotsDirty = false;
+        }
+        // M5: binary 快照始终全速（15 Hz），作为主数据源
         try { this._broadcastWasmSnapshot(); }
         catch (e) { console.error('wasm snapshot broadcast failed:', e.message); }
-        // The map's permanent text tags -- the lane and shop labels -- are made
-        // once, at init, and broadcast once. They are scenery rather than an
-        // event, so anyone who connects later is caught up on them here; a tag
-        // with a lifespan is long gone and is deliberately not replayed.
-        for (const p of this.players.values()) {
-          if (!p.ws || p.tagsSent) continue;
-          p.tagsSent = true;
-          // The fog, the music list and the day/night models are set once
-          // during config() and main(), so a client that was not connected then
-          // -- a reconnect, or a second window -- would have a world lit and
-          // fogged by the renderer's own constants. They are scenery in exactly
-          // the way the tags are, and go out with them.
-          const ev = [...this.eng.atmosphereEvents(), ...this.eng.liveTags()];
-          if (ev.length) this.send(p.ws, { t: Msg.EVENT, ev });
+        // M5: JSON 快照——clientBinaryReady 后降频（每 5 帧 ≈ 每 10 tick）
+        // 降频后 JSON 负责元数据刷新（buff/物品/资源/计分板），binary 负责位置
+        this.jsonAcc++;
+        const jsonInterval = this.clientBinaryReady ? 5 : 1;
+        if (this.jsonAcc >= jsonInterval) {
+          this.jsonAcc = 0;
+          const snap = this.world.snapshot();
+          snap.board = this.scriptBoard();
+          this.broadcast({ t: Msg.SNAPSHOT, s: snap });
+          // The map's permanent text tags -- the lane and shop labels -- are made
+          // once, at init, and broadcast once. They are scenery rather than an
+          // event, so anyone who connects later is caught up on them here; a tag
+          // with a lifespan is long gone and is deliberately not replayed.
+          for (const p of this.players.values()) {
+            if (!p.ws || p.tagsSent) continue;
+            p.tagsSent = true;
+            // The fog, the music list and the day/night models are set once
+            // during config() and main(), so a client that was not connected then
+            // -- a reconnect, or a second window -- would have a world lit and
+            // fogged by the renderer's own constants. They are scenery in exactly
+            // the way the tags are, and go out with them.
+            const ev = [...this.eng.atmosphereEvents(), ...this.eng.liveTags()];
+            if (ev.length) this.send(p.ws, { t: Msg.EVENT, ev });
+          }
         }
       }
     } catch (e) {

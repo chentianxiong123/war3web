@@ -52,6 +52,10 @@ const S = {
   castPending: null, itemPending: null, unitCast: null, minimapImg: null, debug: false,
   hoverId: null, altHeld: false,
   unitModels: null,          // also feeds the lobby's rotating hero preview
+  // M5: binary 通道状态
+  slots: null,               // wasm slot -> { id, u, k, sel } registry
+  colors: null,              // playerIndex -> color index 数组
+  binaryReadySent: false,    // 是否已发送 BINARY_READY
 };
 window.__S = S;               // 诊断:外部查看游戏状态
 window.__view = view;             // 诊断:外部投影/点选测试
@@ -156,12 +160,21 @@ net.on(Msg.STATE, (m) => {
   }
 });
 
+// M5: slots registry——server 推送 wasm slot -> { id, u, k, sel } 映射 + colors 数组
+// client 用它把 SOA 快照里的数字 slot 还原成 typeKey/模型/可选标记
+net.on(Msg.SLOTS, (m) => {
+  S.slots = m.slots;
+  S.colors = m.colors;
+});
+
 net.on(Msg.SNAPSHOT, (m) => {
   const now = performance.now();
   S.snapDt = Math.max(1 / 60, Math.min(0.5, (now - S.lastSnap) / 1000)) || 1 / 15;
   S.lastSnap = now;
   const seen = new Set();
   for (const e of m.s.ents) {
+    // M5: binary-ready 时跳过死亡单位——由 binary 通道管理删除，避免 JSON 重新添加导致闪烁
+    if (S.binaryReadySent && !e.a) continue;
     seen.add(e.i);
 
     const old = S.ents.get(e.i);
@@ -206,14 +219,43 @@ net.on(Msg.EVENT, (m) => {
   for (const ev of m.ev) handleEvent(ev);
 });
 
-// M4 阶段 4：二进制 SOA 快照通道（tag 's'，server 每 tick 与 JSON 并列发送）。
-// render.js 已有 updateFromBinary 方法，直接调用。
-// JSON 快照负责元数据（typeKey/模型/颜色），binary 负责位置/朝向/HP 高频更新。
+// M5: 二进制 SOA 快照通道——主数据源。
+// server 每 tick 发送 binary 快照，client 用 snapshotFromBinary 解码后
+// 创建/更新/删除单位（同 JSON handler 逻辑）。
+// slots registry 由 server 在 SLOTS 消息中推送，client 存 S.slots。
 net.on('s', (bytes) => {
   const data = bytes.slice(1);   // 去掉 tag 字节
   if (data.byteLength < 20) return;
   const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-  view.updateFromBinary(buf, S.slots || {}, S.colors || []);
+  const ents = snapshotFromBinary(buf, S.slots || {}, S.colors || []);
+  // 创建/更新单位
+  const seen = new Set();
+  for (const e of ents) {
+    seen.add(e.i);
+    const old = S.ents.get(e.i);
+    S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
+    const meta = findMeta(e);
+    S.ents.set(e.i, Object.assign({}, meta, e));
+    if (!view.views.has(e.i)) view.spawnView(S.ents.get(e.i));
+    else if (old && old.u !== e.u) {
+      view.removeView(e.i);
+      view.spawnView(S.ents.get(e.i));
+    }
+  }
+  // 删除 wasm 已确认死亡/移除的单位（只处理 S.slots 注册过的）
+  if (S.slots) {
+    for (const slot of Object.values(S.slots)) {
+      const id = slot.id;
+      if (!seen.has(id) && S.ents.has(id)) {
+        S.ents.delete(id); S.prev.delete(id); view.removeView(id);
+      }
+    }
+  }
+  // 首次收到 binary，通知 server 降频 JSON 快照
+  if (!S.binaryReadySent) {
+    S.binaryReadySent = true;
+    net.send({ t: Msg.BINARY_READY });
+  }
 });
 
 net.on(Msg.CHATMSG, (m) => ui.log(`<b>${escapeHtml(m.from)}:</b> ${escapeHtml(m.text)}`));

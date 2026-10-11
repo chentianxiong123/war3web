@@ -12,9 +12,13 @@ export const Msg = {
   HELLO: 'hello', JOIN_TEAM: 'joinTeam', PICK_HERO: 'pickHero', READY: 'ready',
   MOVE: 'move', STOP: 'stop', ATTACK: 'attack', CAST: 'cast', TRAIN: 'train', BUILD: 'build',
   LEARN: 'learn', BUY: 'buy', CHAT: 'chat', PING: 'ping',
+  // M5: client 确认收到 binary 快照，server 可降低 JSON 频率
+  BINARY_READY: 'binReady',
   // server -> client
   WELCOME: 'welcome', STATE: 'state', SNAPSHOT: 'snap', EVENT: 'event',
   CHATMSG: 'chatMsg', PONG: 'pong', ERROR: 'error',
+  // M5: slots registry（wasm slot -> { id, u, k, sel}）+ colors
+  SLOTS: 'slots',
   // M5: 二进制 SOA 快照帧（非 JSON，WebSocket binary frame）
   SNAPSHOT_BIN: 'snapBin',
 };
