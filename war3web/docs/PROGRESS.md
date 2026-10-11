@@ -289,12 +289,12 @@ engine.js 1506 行（natives）/ boot.js 73 行。C 版逐模块对照移植，*
   - 阶段 3 ✅：SOA 快照 15 列 + 对账门禁 2/2
   - 收尾 🔄：命令输入通道 ✅ 2.12 → 快照驱动渲染 ✅ 2.13 → buff 效果桥 ✅ 2.14
     → 剩余：vampiric/regen/stun/silence/invis 效果深化、建筑/物品系统
-- **M2（WebGPU 渲染）：步骤 A/B/C ✅，步骤 D 待决策**
+- **M2（WebGPU 渲染）：全部完成 ✅**
   （详见 docs/M2_WEBGPU_MIGRATION.md）
   - 步骤 A ✅：WebGPURenderer 试点开关（localStorage.webgpu=1 切换）
   - 步骤 B ✅：对局实测 95 单位模型 43754 draw calls
   - 步骤 C ✅：粒子降级过渡（ShaderMaterial 不兼容 → WebGPU 通道跳过）
-  - 步骤 D ⏸：移除 WebGL 开关 or 长期保留回退——待 render_test 全绿决定
+  - 步骤 D ✅：决策——长期保留 WebGL 回退（forceWebGL 开关不删）
 - M5（zero-copy 数据流）/ M6（全量 + 规模验证）：未开始
 
 ## 六、验证命令（M4 模拟核心）

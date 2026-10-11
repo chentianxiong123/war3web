@@ -61,8 +61,10 @@ render.js 具体使用点：
      不影响主场景渲染。对策：步骤 C 粒子 TSL 重写或 WebGPU 通道降级粒子
 3. **步骤 C**：粒子 ShaderMaterial → TSL 试点（WebGPU 兼容）+ 性能敏感点
    （Lambert 材质批量）对比，`fps_test` WebGL vs WebGPU 双跑存档
-4. **步骤 D**：移除 WebGL 渲染器开关（或长期保留 `forceWebGL` 回退，
-   随 `render_test` 全绿决定）
+4. **步骤 D ✅（决策：长期保留 WebGL 回退）**：`forceWebGL` 回退开关保留，
+   `localStorage.webgpu=1` 切 WebGPU、默认 WebGL 保底。WebGPU 浏览器覆盖率
+   虽在提升，但 RTS 游戏对兼容性敏感（企业内网/旧浏览器），回退开关成本极低
+   （一个 if 分支），不值得为了"干净"而移除。M2 至此全部完成。
 
 ## 5. 风险与对策
 
