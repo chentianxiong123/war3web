@@ -1022,6 +1022,7 @@ export class Renderer {
       gltf.scene.traverse((o) => {
         if (o.isMesh) {
           o.frustumCulled = false;
+          o.visible = true;  // GLB 导出可能带 visible:false，强制打开
           // WebGPU 兼容性：GLB 模型的 MeshStandardMaterial 在 WebGPU 下可能不渲染，
           // 统一替换为 MeshLambertMaterial 确保可见（与 standIn 一致）。
           const mats = Array.isArray(o.material) ? o.material : [o.material];
