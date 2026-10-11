@@ -344,6 +344,12 @@ export class WasmBridge {
     this.eng._sim_set_hp(id | 0, +hp);
   }
 
+  /** M8：world 权威 Mana 覆盖 wasm（英雄蓝条同步）。clamp 到 [0, maxMana]。 */
+  setMana(id, mana) {
+    if (!this.eng || mana == null) return;
+    this.eng._sim_set_mana(id | 0, +mana);
+  }
+
   /** M7：同步 world 侧的主动死亡（技能/触发/爆炸致死）到 wasm。binary 帧下一 tick 该单位消失。 */
   kill(id) {
     if (!this.eng) return;

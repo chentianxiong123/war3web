@@ -1092,6 +1092,17 @@ void sim_set_hp(int id, double hp) {
   u->hp = fmin(hp, u->maxHp);
 }
 
+/** M8：world 权威 Mana 覆盖 wasm（英雄蓝条同步）。clamp 到 [0, maxMana]。
+ *  mana 不会致死，不走 sim_kill。 */
+void sim_set_mana(int id, double mana) {
+  if (id < 0 || id >= SIM_MAX) return;
+  SimUnit* u = &U[id];
+  if (!u->alive) return;
+  if (mana < 0) mana = 0;
+  if (mana > u->maxMana) mana = u->maxMana;
+  u->mana = mana;
+}
+
 /** buff 过期清理（step 2602）。返回过期个数。 */
 static int expire_buffs(void) {
   int n = 0;

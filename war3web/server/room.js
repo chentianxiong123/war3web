@@ -102,6 +102,9 @@ export class Room {
     this.wasmSlotsDirty = false;
     // M6: 世界单位 u.order 内容快照（worldUnitId -> key），用于命令镜像 diff
     this._mirrored = new Map();
+    // M8: 上次同步的 buff 快照（unitId -> Map<"kind:code", {untilMs, pct, atkPct, flat}>），
+    // 用于逐 tick diff：新增/变更推入 wasm，过期/移除清除 wasm。
+    this._syncedBuffs = new Map();
     // M6: 世界单位 u.path 引用快照（worldUnitId -> u.path），用于路径接管 diff
     this._mirrorPathRef = new Map();
     // M5: client 确认收到 binary 后，JSON 快照降频（每 5 帧 ≈ 每 10 tick）
@@ -386,6 +389,10 @@ export class Room {
         if (t === 'attack' && tSlot != null) B.pushOrder(slot, OP.attack, 0, 0, tSlot);
         else B.pushOrder(slot, t === 'follow' ? OP.move : OP.attackMove, target.x, target.y);
       }
+      else if (t === 'build') {
+        // M8: 建造命令直接调用（不走 pushOrder 队列，orderBuild 是即时 wasm 调用）
+        B.orderBuild(slot, o.typeKey || o.buildType, o.x, o.y);
+      }
       // train/cast/其余：wasm 无对应语义，跳过
     }
   }
@@ -431,6 +438,8 @@ export class Room {
       const w = W.units.get(id);
       if (!w || !w.alive) continue;
       if (Number.isFinite(w.hp)) this.bridge.setHp(slot, w.hp);
+      // M8: 英雄蓝条同步（mana>0 才同步，避免非英雄空调用）
+      if (w.mana > 0) this.bridge.setMana(slot, w.mana);
     }
   }
 
@@ -547,6 +556,41 @@ export class Room {
     this.bridge.applyBuff(slot, kind, code, untilMs, b.pct ?? 0, b.atkPct ?? 0, b.flat ?? 0);
   }
 
+  /** M8: 每 tick 对比 world buff 与上次同步快照，新增/变更推入 wasm，过期/移除清除。 */
+  _syncBuffs() {
+    const W = this.world;
+    const now = W.now || 0;
+    for (const [wuId, slot] of this.wasmSlotOf) {
+      const u = W.units.get(wuId);
+      if (!u || !u.alive) continue;
+      const buffs = u.buffs || [];
+      const current = new Map();
+      for (const b of buffs) {
+        if (!b || !b.kind) continue;
+        const code = b.code != null ? b.code : -1;
+        const key = `${b.kind}:${code}`;
+        const untilMs = b.until ? Math.max(0, b.until - now) : 0;
+        current.set(key, { b, untilMs, pct: b.pct ?? 0, atkPct: b.atkPct ?? 0, flat: b.flat ?? 0 });
+      }
+      const prev = this._syncedBuffs.get(wuId) || new Map();
+      for (const [key, info] of current) {
+        const p = prev.get(key);
+        if (!p || p.untilMs !== info.untilMs || p.pct !== info.pct
+          || p.atkPct !== info.atkPct || p.flat !== info.flat) {
+          this._syncBuffToWasm(u, info.b);
+        }
+      }
+      for (const [key] of prev) {
+        if (!current.has(key)) {
+          const [kind, codeStr] = key.split(':');
+          const code = codeStr !== '-1' ? +codeStr : -1;
+          this.bridge.applyBuff(slot, kind, code, BigInt(0), 0, 0, 0);
+        }
+      }
+      this._syncedBuffs.set(wuId, current);
+    }
+  }
+
   /**
    * M5: 推送 slots registry（wasm slot -> { id, u, k, sel}）+ colors 数组。
    * client 用它把 SOA 快照里的数字 slot 还原成 typeKey/模型/可选标记。
@@ -621,6 +665,8 @@ export class Room {
         this._applyWorldPaths();
         // M7: world HP 权威覆盖 wasm（普攻/技能/物品/毒伤/治疗/触发每 tick 追平）
         this._syncWorldHp();
+        // M8: world buff 变化持续同步 wasm（新增/变更推入，过期/移除清除）
+        this._syncBuffs();
         this.bridge.step(1 / TICK_HZ);
       }
       const scriptEvents = this.eng.flushClientEvents();
