@@ -2812,6 +2812,14 @@ export class Renderer {
     this.tickWater(dt);
     this.updateCamera(dt);
     const tRest = performance.now();
+    // WebGPU 后端未初始化时跳过渲染，避免抛错
+    if (this.renderer?.isWebGPURenderer && !this.renderer.backend?.device) {
+      const tGl = performance.now();
+      const k = 0.1;
+      perf.rest += (tRest - tFx - perf.rest) * k;
+      perf.gl += (tGl - tRest - perf.gl) * k;
+      return dt;
+    }
     this.renderer.render(this.scene, this.camera);
     const tGl = performance.now();
     // smoothed, so the readout is legible rather than flickering
