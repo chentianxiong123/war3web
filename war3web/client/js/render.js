@@ -1333,7 +1333,12 @@ export class Renderer {
    */
   applyMaterials(obj, meta, holder) {
     const prims = [];
-    obj.traverse((o) => { if (o.isMesh) prims.push(o); });
+    obj.traverse((o) => {
+      if (o.isMesh) {
+        o.visible = true;  // skeletonClone 可能保留 GLB 的 visible:false，强制打开
+        prims.push(o);
+      }
+    });
     prims.forEach((mesh, i) => {
       const gi = meta?.geosets?.[i];
       const mt = gi ? meta.materials?.[gi.material] : null;
