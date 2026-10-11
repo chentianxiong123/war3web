@@ -64,6 +64,8 @@ typedef struct {
   // ---- 赏金（阶段 3：awardKill）----
   double bounty;             // 击杀赏金（JS type.bountyPlus；0 → 回退 10 + level*4）
   int level;                 // 单位等级（赏金回退公式用）
+  // ---- 渲染（阶段 4：快照驱动渲染）----
+  double mana, maxMana;      // 英雄蓝条（JS u.mana / u.maxMana；非英雄为 0）
 } SimUnit;
 static SimUnit U[SIM_MAX];
 static long long SIM_NOW;   // tick 计数（模拟 world.now）
@@ -989,13 +991,14 @@ void sim_get_fight(int id, float* out) {
 
 // ------------------------------------------------------------------ 经济（阶段 2：stepGathers）
 /** 放置经济单位：kind 0=other 1=hpea(农民) 2=ngol(金矿) 3=htow(基地)。
- *  facing/hp 供快照对账（JS 侧 hpea 420 / ngol 1250 / htow 4500，朝向随 createUnit 传入）。 */
-void sim_spawn_econ(int id, double x, double y, int kind, int playerIndex, double speed, double radius,
-                    double facing, double hp) {
+ *  team/playerIndex 供快照对账（中立金矿属于中立玩家、team 与玩家队不同）；
+ *  facing/hp 对齐 JS createUnit 传入的朝向与最大生命。 */
+void sim_spawn_econ(int id, double x, double y, int kind, int playerIndex, int team,
+                    double speed, double radius, double facing, double hp) {
   sim_spawn(id, x, y, facing, speed, radius, 0, 0);
   SimUnit* u = &U[id];
-  u->kind = kind; u->playerIndex = playerIndex;
-  u->hp = hp; u->maxHp = hp; u->team = 0;
+  u->kind = kind; u->playerIndex = playerIndex; u->team = team;
+  u->hp = hp; u->maxHp = hp;
   u->gatherPhase = 0; u->mineId = -1; u->baseId = -1; u->gatherUntilMs = 0;
 }
 
@@ -1096,17 +1099,21 @@ int sim_events_get(float* out, int maxN) {
   return n;
 }
 
-// ------------------------------------------------------------------ SOA 快照（阶段 3）
+// ------------------------------------------------------------------ SOA 快照（阶段 3 + 阶段 4 读路径增列）
 // 单位属性按列布局写入 wasm 连续 buffer，供 M5「wasm heap → GPU buffer」零拷贝链路
 // 与 M4 收尾「删 JS 双实现」的对账门禁。布局（全部 f32，int 直接位塞）：
 //   header(5)：tick, nowMs, nUnits, nMissiles, nEvents
-//   单位列（nUnits × 11，列序固定）：
-//     x, y, facing, hp, maxHp, alive, team, playerIndex, kind, moving, gathering
+//   单位列（nUnits × 15，列序固定）：
+//     x, y, facing, hp, maxHp, alive, team, playerIndex, kind, moving, gathering,
+//     id, level, mana, maxMana
 //   玩家资源（16）：gold[0..15]
 //   导弹列（nMissiles × 2）：x, y
 //   事件列（nEvents × 4）：tick, type, a, b
+// 列 11-14 是阶段 4「JS 侧改为读 wasm 快照渲染」补的：id 让 JS 侧按槽位回查
+// typeKey（模型/名称/英雄判定都在 JS 的 unitModels 表里），level/mana/maxMana
+// 是英雄条。追加在末尾，前 11 列不动，旧解码器无需改。
 // 返回需要的 float 总数；maxN 不足则只返回需要量、不写（调用方按返回量分配）。
-#define SIM_SNAP_COLS 11
+#define SIM_SNAP_COLS 15
 int sim_snapshot(float* buf, int maxN) {
   int nU = 0;
   for (int i = 0; i < SIM_MAX; i++) if (U[i].radius > 0) nU++;   // radius>0 = 曾放置（含死亡，对齐 JS ents 含 a:0）
@@ -1121,9 +1128,8 @@ int sim_snapshot(float* buf, int maxN) {
   buf[p++] = (float)nU;
   buf[p++] = (float)nM;
   buf[p++] = (float)EVN;
-  // 单位列（列序：x y facing hp maxHp alive team pi kind moving gathering）
+  // 单位列（列序：x y facing hp maxHp alive team pi kind moving gathering id level mana maxMana）
   for (int c = 0; c < SIM_SNAP_COLS; c++) {
-    int idx = 0;
     for (int i = 0; i < SIM_MAX; i++) {
       const SimUnit* u = &U[i];
       if (u->radius <= 0) continue;
@@ -1140,8 +1146,12 @@ int sim_snapshot(float* buf, int maxN) {
         case 8: v = (float)u->kind; break;
         case 9: v = (u->nPath > 0) ? 1 : 0; break;  // moving（有路径即在动）
         case 10: v = (u->gatherPhase != 0) ? 1 : 0; break;  // gathering
+        case 11: v = (float)i; break;               // 槽位 id（JS 按此回查 typeKey）
+        case 12: v = (float)u->level; break;
+        case 13: v = (float)u->mana; break;
+        case 14: v = (float)u->maxMana; break;
       }
-      buf[p++] = v; idx++;
+      buf[p++] = v;
     }
   }
   // 玩家资源：gold[16]

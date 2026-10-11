@@ -284,6 +284,38 @@
 - **回归**：combat 4/4、econ 全过、sim_step 4/4、snapshot 2/2、sim_test 全绿、
   engine 114/114（零回归）。
 
+#### 2.13 快照驱动渲染（阶段 4 收尾第二步）——2/2 场景全过 ✅
+- **动机**：master plan M4 的第三条交付是「JS 侧改为读 wasm 快照渲染」。此前 SOA
+  快照只有运动/战斗字段，缺**单位标识**——客户端 `findMeta(e)` 靠 `e.u`（typeKey）
+  查模型/名称/英雄判定，快照里没有，渲染无从下手。本步补上读路径。
+- **快照增 4 列（`SIM_SNAP_COLS` 11 → 15）**：`id`（wasm 槽位索引）、`level`、
+  `mana`、`maxMana`。**追加在末尾**，前 11 列偏移不变，旧解码器无需改。
+  `id` 是读路径的关键：JS 侧按槽位回查 `typeKey`/模型/英雄标记，等价于客户端的
+  `findMeta`；`level`/`mana`/`maxMana` 是英雄条。
+- **`sim_spawn_econ` 增 `team` 参数**：原先硬编码 `team=0`，中立金矿属中立玩家
+  时（team 1）与 JS 不一致——门禁直接抓出（`t:0` vs `t:1`）。签名变为
+  `(id,x,y,kind,playerIndex,team,speed,radius,facing,hp)`，econ_golden 同步补
+  `team` 字段。
+- **新 golden tools/render_golden.mjs** → `goldens/render_trace.json`：econ 与
+  ranged_hwat 两场景，录 JS `world.snapshot()` 的 ents 全字段（i/k/u/x/y/f/t/p/c/
+  a/sel/h/H/m/M/l/mv）+ **槽位注册表 `slots`**（id/u/k/sel，供 JS 侧回查）+
+  `colors`（每玩家槽颜色）+ `pos`/`kinds`/`pl`/`team`/`hp`/`face`/`unitBounty`/
+  `level`/`mana`。
+- **新测试 tools/snaprender_test.mjs（阶段 4 门禁）**：内置适配层
+  `snapshotToRender(units, slots, colors)` 把 SOA 快照转成 ents 形状，按单位 id
+  对齐逐字段比对。**结果 2/2 全过**：econ Δx0 Δy0 Δf0.00 Δh0 meta0（精确）；
+  ranged_hwat Δh≤15（RNG 容差 40 内）、其余精确。
+- **门禁抓出的问题**：① golden 的 `pos` 在检查循环**之后**捕获，记成了终态而非
+  初态（Δx224）——移到步进前；② `sim_spawn_econ` 缺 `team`（见上）；③
+  snapshot_test 的 gold 偏移硬编码 `5 + 11*nU`，增列后读到 `id` 列——改为 15；
+  ④ 两个 golden 的金矿 team 设置不一致（0 vs 1）造成朝向分歧 0.64 rad——统一为
+  snapshot_golden 的 team 0 场景。**四者全是对账口径/场景一致性问题，非 C 模拟缺口。**
+- **渲染缺口（C 快照拿不到、由 JS 侧保留）**：`b`（buff 模型）、`bld`（建造
+  进度）、`q`（命令队列长度）、`ab`（可施法列表）、`items`/`clock`/`quests`/`res`
+  （世界级字段）。这些依赖 buff/建筑/能力系统，尚未移植进 C——见 M6。
+- **回归**：combat 4/4、econ 全过、sim_step 4/4、snapshot 2/2、order 3/3、
+  sim_test 全绿、engine 114/114（零回归）。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
@@ -306,26 +338,30 @@
   零拷贝链路），Node 端只做协议封装，不再逐对象序列化
 - 门禁：快照字节与现有 JS 快照逐字段对账（单位数/坐标/生命/资源）
 
-## 3. SOA 快照布局（阶段 3 已落地，见 2.11）
+## 3. SOA 快照布局（阶段 3 落地，阶段 4 增列，见 2.11/2.13）
 
 原草案（magic/version/CRC32/mana/typeId）按实际需要对齐为：
 
 ```
 // 全 f32 连续 buffer；int 直接位塞（tick/team/pi/kind 值域小，f32 无损）
 f32 header[5]  = tick, nowMs, nUnits, nMissiles, nEvents
-f32 单位列[nUnits × 11]，列序：
-      x, y, facing, hp, maxHp, alive, team, playerIndex, kind, moving, gathering
+f32 单位列[nUnits × 15]，列序：
+      x, y, facing, hp, maxHp, alive, team, playerIndex, kind, moving, gathering,
+      id, level, mana, maxMana
 f32 gold[16]                          // 玩家资源（经济列）
 f32 导弹列[nMissiles × 2]             // x, y
 f32 事件列[nEvents × 4]               // tick, type, a, b
 ```
+- 前 11 列是阶段 3 的原始布局；`id`/`level`/`mana`/`maxMana` 是阶段 4 为
+  「JS 侧读 wasm 快照渲染」追加的，**放末尾所以旧解码器无需改**。
+  `id` 是 wasm 槽位索引——JS 侧按它回查 `typeKey`/模型/英雄判定
+  （客户端 `findMeta` 的等价物），是快照能驱动渲染的关键一环。
 - **未做 magic/version/CRC32**：对账门禁直接逐字段比对，比列哈希更直接定位差异；
   跨版本兼容待多实现并存时再加。
-- **未做 mana/typeId**：C 侧未移植法力与字符串类型键（JS 侧 `typeKey` 经
-  `UNIT_CASTABLE` 等查表，客户端自己从 data/abilities.json 读名与图标）；
-  单位标识用 `kind` 整数 + `team`/`playerIndex`，渲染分类足够。
-- **体积**：单位 11 × 4 = 44 B/单位（草案估 ~30 B），几千单位 ≈ 百 KB/tick，
-  量级不变，仍远低于 WebSocket 压力线。
+- **未做 typeId 字符串**：C 侧不存 `typeKey`，靠 `id` + JS 侧注册表回查（客户端
+  本来就自己从 data/abilities.json 读名与图标）。`kind` 保留供经济分支判定。
+- **体积**：单位 15 × 4 = 60 B/单位（阶段 3 为 44 B，草案估 ~30 B），几千单位
+  ≈ 百 KB/tick，量级不变，仍远低于 WebSocket 压力线。
 
 ## 4. 数据流（M4→M5 衔接）
 

@@ -67,6 +67,7 @@ runs.push(runScene('econ', (w) => {
     pos: list.map((u) => [Math.round(u.x), Math.round(u.y)]),
     kinds: list.map((u) => u.typeKey),
     pl: list.map((u) => u.playerIndex),
+    team: list.map((u) => u.team),
     hp: list.map((u) => u.maxHp),
     face: list.map((u) => u.facing),
   };

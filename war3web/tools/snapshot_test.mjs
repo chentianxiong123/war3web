@@ -48,7 +48,7 @@ function decode() {
   const cols = [[], [], [], [], [], [], [], [], [], []];
   for (let i = 0; i < nU; i++) for (let c = 0; c < 10; c++) cols[c].push(F(5 + c * nU + i));
   const gold = [];
-  for (let i = 0; i < 12; i++) gold.push(Math.round(F(5 + 11 * nU + i)));
+  for (let i = 0; i < 12; i++) gold.push(Math.round(F(5 + 15 * nU + i)));
   // 与 golden 的 9 字段顺序对齐：[x, y, facing, hp, maxHp, team, pi, alive, mv]
   // C 列序是 [x,y,facing,hp,maxHp,alive,team,pi,kind,moving,gathering] → 按名映射
   return {
@@ -67,7 +67,7 @@ for (const s of golden.scenes) {
   eng._sim_clear_all();
   if (s.kinds) {   // 经济场景
     for (let i = 0; i < s.pos.length; i++)
-      eng._sim_spawn_econ(i, s.pos[i][0], s.pos[i][1], ECON_KIND[s.kinds[i]], s.pl[i], ECON_SPEED[s.kinds[i]], ECON_RAD[s.kinds[i]], s.face[i], s.hp[i]);
+      eng._sim_spawn_econ(i, s.pos[i][0], s.pos[i][1], ECON_KIND[s.kinds[i]], s.pl[i], s.team?.[i] || 0, ECON_SPEED[s.kinds[i]], ECON_RAD[s.kinds[i]], s.face[i], s.hp[i]);
   } else {         // 战斗场景
     for (let i = 0; i < s.pos.length; i++) {
       const T = COMBAT_TYPES[s.types[i]];
