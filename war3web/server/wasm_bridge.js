@@ -61,6 +61,13 @@ const DEFAULT_TYPES = {
   hpea: { kind: 1, isFight: false, moveSpeed: 190, radius: 16, hp: 160 },
   ngol: { kind: 2, isFight: false, moveSpeed: 0, radius: 50, hp: 50 },
   htow: { kind: 3, isFight: false, moveSpeed: 0, radius: 176, hp: 2000 },
+  // M4 阶段 5：建筑类型（buildTime 单位秒，isBuilding 标记）
+  baam: { kind: 4, isFight: false, moveSpeed: 0, radius: 60, hp: 4500, armor: 3, isBuilding: true, buildTime: 60 },
+  bhut: { kind: 4, isFight: false, moveSpeed: 0, radius: 60, hp: 1200, armor: 0, isBuilding: true, buildTime: 30 },
+  twog: { kind: 4, isFight: false, moveSpeed: 0, radius: 50, hp: 700, armor: 2, isBuilding: true, buildTime: 55 },
+  hbar: { kind: 4, isFight: false, moveSpeed: 0, radius: 80, hp: 1500, armor: 5, isBuilding: true, buildTime: 60 },
+  hars: { kind: 4, isFight: false, moveSpeed: 0, radius: 80, hp: 1050, armor: 5, isBuilding: true, buildTime: 70 },
+  harm: { kind: 4, isFight: false, moveSpeed: 0, radius: 80, hp: 1200, armor: 5, isBuilding: true, buildTime: 60 },
 };
 
 /**
@@ -89,6 +96,7 @@ export class WasmBridge {
     this._sgBuf = 0;
     this._gbBuf = 0;
     this._evBuf = 0;
+    this._buildBuf = 0;   // M4 阶段 5：建造状态读取 buffer
     this._initDone = false;
   }
 
@@ -122,6 +130,8 @@ export class WasmBridge {
     this._gbBuf = this.eng._malloc(4 * 4);
     // 事件读 buffer：预留 8192 条 × 4 float
     this._evBuf = this.eng._malloc(8192 * 4 * 4);
+    // M4 阶段 5：建造状态读 buffer：6 float
+    this._buildBuf = this.eng._malloc(6 * 4);
     // HEAP32 视图（sim_get_buffs 写 int*）
     this._heap32 = new Int32Array(this.eng.HEAPU8.buffer);
 
@@ -246,6 +256,41 @@ export class WasmBridge {
     return g;
   }
 
+  /**
+   * M4 阶段 5：给工人单位下建造命令。
+   * @param {number} id 工人单位槽位
+   * @param {string} typeKey 建筑类型 key（"baam"/"bhut"/"twog"/"hbar"/"hars"/"harm"）
+   * @param {number} x 建筑落位 x
+   * @param {number} y 建筑落位 y
+   * @returns {boolean} 是否成功
+   */
+  orderBuild(id, typeKey, x, y) {
+    const T = this.unitTypes[typeKey];
+    if (!T || !T.isBuilding) return false;
+    // 按 DEFAULT_TYPES 顺序映射到 C 侧 typeIdx
+    const BUILD_ORDER = ["baam", "bhut", "twog", "hbar", "hars", "harm"];
+    const typeIdx = BUILD_ORDER.indexOf(typeKey);
+    if (typeIdx < 0) return false;
+    return this.eng._sim_order_build(id, typeIdx, x, y) === 1;
+  }
+
+  /**
+   * M4 阶段 5：读工人建造状态。
+   * @returns {{ progress, time, active, targetType, targetId, completedId }}
+   */
+  getBuild(id) {
+    this.eng._sim_get_build(id, this._buildBuf);
+    const b = this._buildBuf >> 2;
+    return {
+      progress: this.eng.HEAPF32[b],
+      time: this.eng.HEAPF32[b + 1],
+      active: this.eng.HEAPF32[b + 2],
+      targetType: Math.round(this.eng.HEAPF32[b + 3]),
+      targetId: Math.round(this.eng.HEAPF32[b + 4]),
+      completedId: Math.round(this.eng.HEAPF32[b + 5]),
+    };
+  }
+
   /** 读事件队列（不消耗，不 reset）。 */
   getEvents(maxN = 8192) {
     const n = this.eng._sim_events_get(this._evBuf, maxN);
@@ -319,7 +364,7 @@ export class WasmBridge {
   /** 释放 wasm 内存（进程退出前调用；不调用也可，wasm 内存随模块销毁）。 */
   destroy() {
     if (!this.eng) return;
-    for (const p of [this._snapBuf, this._sgBuf, this._gbBuf, this._evBuf, this._gridPtr]) {
+    for (const p of [this._snapBuf, this._sgBuf, this._gbBuf, this._evBuf, this._buildBuf, this._gridPtr]) {
       if (p) this.eng._free(p);
     }
     this._initDone = false;

@@ -119,6 +119,7 @@ static double buff_atkcd_mul(int id);
 static double buff_armor_bonus(int id);
 static SimBuff* buff_find(int id, int kindIdx);
 double sim_heal(int id, double amount);   // 前置声明供 sim_damage 用
+static void build_pass(double dt);        // 前置声明供 sim_step / sim_econ_step 用
 static long long SIM_NOW;   // tick 计数（模拟 world.now）
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
 
@@ -866,6 +867,14 @@ int sim_flush_orders(void) {
     if (o->unitId < 0 || o->unitId >= SIM_MAX) continue;
     SimUnit* u = &U[o->unitId];
     if (!u->alive) continue;
+    // M4 阶段 5：新命令到达时清除建造状态（建造与移动/攻击互斥）
+    if (u->buildOrderActive) {
+      u->buildOrderActive = 0;
+      u->buildProgress = 0;
+      u->buildTime = 0;
+      u->buildType = -1;
+      u->buildTargetId = -1;
+    }
     switch (o->op) {
       case SIM_ORD_STOP:
       case SIM_ORD_HOLD:
@@ -1130,6 +1139,7 @@ static void release_attack(SimUnit* u, SimUnit* t) {
 
 /** 单单位攻击 tick（stepAttack 子集，对齐 2991-3044）。 */
 static void step_attack_unit(SimUnit* u, int id, double dt) {
+  if (u->kind == 4) return;   // M4 阶段 5：建筑不攻击
   if (u->atkTimer > 0) u->atkTimer = fmax(0, u->atkTimer - dt);
   if (!u->alive) return;
   // windup 推进
@@ -1188,6 +1198,8 @@ static void step_attack_unit(SimUnit* u, int id, double dt) {
  *  atkRange+40 内接战，路径走空才回 idle(0) 恢复 acquisitionRange 全距获取
  *  （对齐 JS stepMove 2799-2810：move 只在到达点停下，不主动绕远追猎）。 */
 static void step_ai_unit(SimUnit* u, int id) {
+  if (u->kind == 4) return;   // M4 阶段 5：建筑不参与 AI 追击
+  if (u->orderType == 5) return;   // BUILD：建造中，无 AI 追击
   if (u->orderType == 3 || u->orderType == 4) {
     if (u->nPath == 0) u->orderType = 0;   // 到达 → idle（可获取）
     return;
@@ -1360,6 +1372,7 @@ static void gather_pass(void) {
 void sim_econ_step(double dt) {
   SIM_NOW++;
   gather_pass();
+  build_pass(dt);              // M4 阶段 5：建造进度推进
   for (int id = 0; id < SIM_MAX; id++) {
     SimUnit* u = &U[id];
     if (!u->alive || u->kind != 1) continue;
@@ -1455,6 +1468,95 @@ int sim_snapshot(float* buf, int maxN) {
   return need;
 }
 
+// ------------------------------------------------------------------ 建筑建造（M4 阶段 5）
+// 语义对齐 world.js stepBuilds（1433-1467）：worker 下建造命令 → 进度推进 →
+// 完成后产出正式建筑单位。简化版：worker 即时建造（不要求走到落位），
+// 完成时自动分配槽位产出建筑。JS 能力层通过 API 桥控制，两套共存。
+
+/** 给工人单位下建造命令（M4 阶段 5）。
+ *  buildingType 0..SIM_BUILDING_KINDS-1；x,y 建筑落位坐标。
+ *  设置 orderType=5（BUILD）、记录 buildTime/进度/目标。
+ *  若 worker 已有建造命令，替换。非 hpea(kind=1) 单位也接受（测试用），
+ *  JS 侧负责校验 isBuilding。返回 1 成功 / 0 失败（id 越界或 type 越界）。 */
+int sim_order_build(int id, int buildingType, double x, double y) {
+  if (id < 0 || id >= SIM_MAX) return 0;
+  if (buildingType < 0 || buildingType >= SIM_BUILDING_KINDS) return 0;
+  SimUnit* u = &U[id];
+  u->orderType = SIM_ORD_BUILD;
+  u->buildOrderActive = 1;
+  u->buildType = buildingType;
+  u->buildX = x; u->buildY = y;
+  u->buildTime = SIM_BUILDING_TYPES[buildingType].buildTime;
+  u->buildProgress = 0;
+  u->buildTargetId = -1;
+  u->completedId = -1;
+  // 建造中停止采集
+  u->mineId = -1; u->baseId = -1; u->gatherPhase = 0;
+  return 1;
+}
+
+/** 读工人建造状态：out[6] = progress, time, active, targetType, targetId, completedId。 */
+void sim_get_build(int id, float* out) {
+  if (id < 0 || id >= SIM_MAX) {
+    for (int i = 0; i < 6; i++) out[i] = 0;
+    if (out) out[3] = -1; out[4] = -1; out[5] = -1;
+    return;
+  }
+  SimUnit* u = &U[id];
+  out[0] = (float)u->buildProgress;
+  out[1] = (float)u->buildTime;
+  out[2] = (float)u->buildOrderActive;
+  out[3] = (float)u->buildType;
+  out[4] = (float)u->buildTargetId;
+  out[5] = (float)u->completedId;
+}
+
+/** 建造完成 → 产出正式建筑单位（自动分配空闲槽位）。
+ *  返回建筑单位 id；失败返回 -1。 */
+static int spawn_completed_building(SimUnit* u, int id) {
+  // 找空闲槽位
+  int newId = -1;
+  for (int i = 0; i < SIM_MAX; i++) {
+    if (!U[i].alive && U[i].radius <= 0) { newId = i; break; }
+  }
+  if (newId < 0) return -1;
+
+  const SimBuildingType* bt = &SIM_BUILDING_TYPES[u->buildType];
+  sim_spawn(newId, u->buildX, u->buildY, 0, 0, bt->radius, 0, 0);
+  SimUnit* b = &U[newId];
+  b->kind = bt->kind;
+  b->playerIndex = u->playerIndex;
+  b->team = u->team;
+  b->hp = bt->hp; b->maxHp = bt->hp;
+  b->armor = bt->armor;
+  b->speed = 0;
+  b->acquisitionRange = 0;   // 建筑不主动追击
+
+  u->completedId = newId;
+  return newId;
+}
+
+/** 建造进度推进（每个 tick 调用一次）。
+ *  worker 有建造命令时 buildProgress += dt / buildTime * 100；
+ *  进度 >= 100 时产出建筑、清除建造命令。 */
+static void build_pass(double dt) {
+  for (int id = 0; id < SIM_MAX; id++) {
+    SimUnit* u = &U[id];
+    if (!u->alive || !u->buildOrderActive || u->orderType != SIM_ORD_BUILD) continue;
+    if (u->buildTime <= 0) { u->buildProgress = 100; continue; }
+    u->buildProgress += dt / u->buildTime * 100.0;
+    if (u->buildProgress >= 100.0) {
+      u->buildProgress = 100.0;
+      spawn_completed_building(u, id);
+      u->buildOrderActive = 0;
+      u->orderType = 0;
+      u->buildType = -1;
+      u->buildTime = 0;
+      u->buildProgress = 0;
+    }
+  }
+}
+
 /** 全量 tick（M4 目标 wasm_step）：gather → missiles → 单位循环（AI/move/attack）。
  *  对齐 JS step()：stepGathers(发单) → stepMissiles → 单位循环。 */
 void sim_step(double dt) {
@@ -1462,6 +1564,7 @@ void sim_step(double dt) {
   expire_buffs();              // buff 过期清理（step 2602）
   regen_pass(dt);              // 生命回复（step 2606-2608）
   gather_pass();
+  build_pass(dt);              // M4 阶段 5：建造进度推进
   step_missiles(dt);
   for (int id = 0; id < SIM_MAX; id++) {
     SimUnit* u = &U[id];
