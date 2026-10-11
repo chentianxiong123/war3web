@@ -54,7 +54,7 @@ enum {
   SIM_BUF_SLOW,        // b.pct 移速 / b.atkPct 攻速
   SIM_BUF_WEAKEN,      // b.pct → 伤害削弱
   SIM_BUF_INNERFIRE,   // b.pct 伤害 / b.armor 护甲
-  SIM_BUF_INVIS,       // 隐身标记（未接入，预留）
+  SIM_BUF_INVIS,       // 隐身标记（接入：step_ai_unit 跳过目标扫描）
   SIM_BUF_DEFEND,      // b.pct 减伤 / b.atkPct 攻速
   SIM_BUF_RAGE,        // b.pct → 攻击倍率
   SIM_BUF_MANASHIELD,  // b.pct 吸伤 / b.flat = manaPerHp
@@ -1142,6 +1142,7 @@ static void step_ai_unit(SimUnit* u, int id) {
     for (int i = 0; i < SIM_MAX; i++) {
       SimUnit* o = &U[i];
       if (!o->alive || o == u || o->team == u->team) continue;
+      if (buff_find(i, SIM_BUF_INVIS)) continue;   // 隐身单位不可被 AI 获取
       const double d = hypot(o->x - u->x, o->y - u->y);
       if (d <= u->acquisitionRange && d < bd) { bd = d; best = i; }
     }

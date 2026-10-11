@@ -21,6 +21,8 @@ const golden = JSON.parse(fs.readFileSync(path.join(HERE, "..", "goldens", "buff
 const SIM_BUF_VAMPIRIC = 3;
 const SIM_BUF_REGEN = 4;
 const SIM_BUF_STUN = 7;
+const SIM_BUF_INVIS = 11;
+const SIM_BUF_SILENCE = 15;
 
 const HFOO = { hp: 420, armor: 2, armorType: "large", dmgBase: 11, dmgDice: 1, dmgSides: 2, atkCd: 1.35, atkRange: 90, attackPoint: 0.5, attackBackswing: 0.5, atkType: "normal", weaponKind: 0, missileSpeed: 0, moveSpeed: 270, radius: 31 };
 
@@ -191,7 +193,59 @@ check("位置变化量与 golden 一致 (stun 后均不动)",
   posUnchanged && jsPosUnchanged,
   `C Δx${posFinalC[0]-posBefore[0]} Δy${posFinalC[1]-posBefore[1]} | JS Δx${golden.stun.posFinal[0]-golden.stun.posBefore[0]} Δy${golden.stun.posFinal[1]-golden.stun.posBefore[1]}`);
 
-console.log(`\n${allOk ? "buff 效果对账: 3/3 全过" : "buff 效果对账: 存在不一致"}`);
+// ---- 场景 4: invis（隐身：AI 不获取隐身单位）----
+console.log("\n=== invis ===");
+eng._sim_clear_all();
+// A（id=0，隐身）在左，B（id=1，可见）在右，相距约 417（> atkRange+40，< acquisitionRange=500）
+// 坐标取 combat_trace golden melee_apart 的 freeSpotNear 实际位置（可寻路）
+eng._sim_spawn_fight(0, 1328, 1072, 0, HFOO.moveSpeed, HFOO.radius, HFOO.hp, HFOO.hp, HFOO.armor,
+  ARMOR_KINDS.indexOf(HFOO.armorType), 0, HFOO.dmgBase, HFOO.dmgDice, HFOO.dmgSides,
+  HFOO.atkCd, HFOO.atkRange, HFOO.attackPoint, HFOO.attackBackswing,
+  ATK_TYPES.indexOf(HFOO.atkType), HFOO.weaponKind, HFOO.missileSpeed);
+eng._sim_spawn_fight(1, 1744, 1104, 0, HFOO.moveSpeed, HFOO.radius, HFOO.hp, HFOO.hp, HFOO.armor,
+  ARMOR_KINDS.indexOf(HFOO.armorType), 1, HFOO.dmgBase, HFOO.dmgDice, HFOO.dmgSides,
+  HFOO.atkCd, HFOO.atkRange, HFOO.attackPoint, HFOO.attackBackswing,
+  ATK_TYPES.indexOf(HFOO.atkType), HFOO.weaponKind, HFOO.missileSpeed);
+// 给 A 施加 invis buff（永久 untilMs=BigInt(0)）
+eng._sim_apply_buff(0, SIM_BUF_INVIS, -1, BigInt(0), 0, 0, 0);
+const nBuff4 = eng._sim_get_buffs(0, gb, 4);
+let buff4Ok = false;
+for (let i = 0; i < nBuff4; i++) {
+  if (HEAP32[(gb >> 2) + i * 2] === SIM_BUF_INVIS) { buff4Ok = true; break; }
+}
+check("invis buff 已施加", buff4Ok, `nBuff=${nBuff4}`);
+// 记录初始位置
+eng._sim_get(0, sg); const ax0 = Math.round(eng.HEAPF32[sg >> 2]);
+eng._sim_get(1, sg); const bx0 = Math.round(eng.HEAPF32[sg >> 2]);
+// 跑 300 tick：A 应追击 B（A 可见 B），B 不追击 A（A 隐身）
+for (let t = 0; t < 300; t++) {
+  eng._sim_step(1 / 30);
+}
+eng._sim_get(0, sg); const ax1 = Math.round(eng.HEAPF32[sg >> 2]);
+eng._sim_get(1, sg); const bx1 = Math.round(eng.HEAPF32[sg >> 2]);
+eng._sim_get_fight(0, sg); const aAtk = Math.round(eng.HEAPF32[(sg >> 2) + 3]);
+eng._sim_get_fight(1, sg); const bAtk = Math.round(eng.HEAPF32[(sg >> 2) + 3]);
+check(`A 追击 B (A.x ${ax0}→${ax1} 增加)`, ax1 > ax0, `Δx=${ax1-ax0}`);
+check(`B 不追击 A (B.x ${bx0}→${bx1} 不变)`, bx1 === bx0, `Δx=${bx1-bx0}`);
+check(`A 攻击了 B (A.atkCount ${aAtk} > 0)`, aAtk > 0, `aAtk=${aAtk}`);
+console.log(`    invis: A.x ${ax0}→${ax1} Δ${ax1-ax0} | B.x ${bx0}→${bx1} Δ${bx1-bx0} | A.atk ${aAtk} B.atk ${bAtk}`);
+
+// ---- 场景 5: silence（沉默：仅存储/读取，无 C 侧效果）----
+console.log("\n=== silence ===");
+eng._sim_clear_all();
+eng._sim_spawn_fight(0, 1300, 1100, 0, HFOO.moveSpeed, HFOO.radius, HFOO.hp, HFOO.hp, HFOO.armor,
+  ARMOR_KINDS.indexOf(HFOO.armorType), 0, HFOO.dmgBase, HFOO.dmgDice, HFOO.dmgSides,
+  HFOO.atkCd, HFOO.atkRange, HFOO.attackPoint, HFOO.attackBackswing,
+  ATK_TYPES.indexOf(HFOO.atkType), HFOO.weaponKind, HFOO.missileSpeed);
+eng._sim_apply_buff(0, SIM_BUF_SILENCE, -1, BigInt(0), 0, 0, 0);
+const nBuff5 = eng._sim_get_buffs(0, gb, 4);
+let buff5Ok = false;
+for (let i = 0; i < nBuff5; i++) {
+  if (HEAP32[(gb >> 2) + i * 2] === SIM_BUF_SILENCE) { buff5Ok = true; break; }
+}
+check("silence buff 已施加且可读回", buff5Ok, `nBuff=${nBuff5}`);
+
+console.log(`\n${allOk ? "buff 效果对账: 5/5 全过" : "buff 效果对账: 存在不一致"}`);
 if (!allOk) process.exitCode = 1;
 eng._free(wp);
 eng._free(sg);
