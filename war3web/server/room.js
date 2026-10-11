@@ -311,6 +311,14 @@ export class Room {
       // reject them -- which is how a two-person duel ended with both players
       // sitting in the stands and nobody in the ring.
       ph.name = p.name; ph.controller = 0; ph.slotState = 1;
+      // Terenas 官方图: 玩家基地由 Blizzard.j MeleeStartingUnits 按玩家 start
+      // location 创建（CreateUnitAtLoc(whichPlayer, 'htow', startLoc, ...)）。
+      // 脚本只在 boot 时写入 DefineStartLocation(0, -4032, 2112) / (1, 3968,
+      // -2560)；若玩家的 engine index 不在 0/1，startLoc(index) 落到默认
+      // [0,0]，基地就建在地图中心（农民/大厅"生成位置错得离谱"）。
+      // boot 前把脚本定义的两个基地位置按队伍预置给在座玩家。
+      const loc = (p.team === 0 ? [-4032, 2112] : [3968, -2560]);
+      this.world.setStartLoc(ph.index, loc[0], loc[1]);
     }
     const t0 = Date.now();
     this.bootReport = this.eng.boot();

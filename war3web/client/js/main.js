@@ -49,6 +49,7 @@ const S = {
   prev: new Map(),           // id -> previous state (for interpolation)
   lastSnap: 0, snapDt: 1 / 15,
   selected: null, bounds: null, ready: false, showScore: false, cinematic: false, booted: false, camCentered: false,
+  slot: null, team: null,
   castPending: null, itemPending: null, unitCast: null, minimapImg: null, debug: false,
   hoverId: null, altHeld: false,
   unitModels: null,          // also feeds the lobby's rotating hero preview
@@ -118,7 +119,10 @@ net.on(Msg.STATE, (m) => {
   const was = S.phase;
   S.phase = m.phase;
   // the map's own slot for this client, which is what server-side events name
-  S.slot = m.players.find((x) => x.id === S.you)?.slot ?? null;
+  // (slot = engine player index, matching ent.p; team = 队伍，匹配 ent.t)
+  const me = m.players.find((x) => x.id === S.you);
+  S.slot = me?.slot ?? null;
+  S.team = me?.team ?? null;
   ui.renderTeams(m.players, S.you, m.phase);
   ui.updateScore(m.board, m.killsToWin);
   // a gate broken before this client joined, or before it reconnected: the
@@ -219,7 +223,7 @@ net.on(Msg.SNAPSHOT, (m) => {
     // 找玩家的第一个建筑或单位
     let target = null;
     for (const e of S.ents.values()) {
-      if (e.t === S.slot && e.a === 1) { target = e; break; }
+      if (e.t === S.team && e.a === 1) { target = e; break; }
     }
     if (target) {
       view.camTarget.set(target.x, 0, -target.y);
@@ -1032,8 +1036,8 @@ function relationTo(e) {
   if (!e) return null;
   if (e.p != null && e.p === S.slot) return 'own';
   if (e.p === NEUTRAL_PASSIVE) return 'neutral';
-  if (e.t == null || S.slot == null) return 'neutral';
-  return e.t === S.slot ? 'ally' : 'enemy';
+  if (e.t == null || S.team == null) return 'neutral';
+  return e.t === S.team ? 'ally' : 'enemy';
 }
 
 // Manual camera controls. Only the initial hero spawn centers automatically.
