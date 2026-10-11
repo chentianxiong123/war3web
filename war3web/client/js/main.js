@@ -227,8 +227,9 @@ net.on('s', (bytes) => {
   const data = bytes.slice(1);   // 去掉 tag 字节
   if (data.byteLength < 20) return;
   const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  // slots 未加载时 snapshotFromBinary 拿不到 typeKey——跳过创建，只更新已有视图位置
+  const slotsReady = S.slots && Object.keys(S.slots).length > 0;
   const ents = snapshotFromBinary(buf, S.slots || {}, S.colors || []);
-  // 创建/更新单位
   const seen = new Set();
   for (const e of ents) {
     seen.add(e.i);
@@ -236,7 +237,8 @@ net.on('s', (bytes) => {
     S.prev.set(e.i, old ? { x: old.x, y: old.y, f: old.f } : { x: e.x, y: e.y, f: e.f });
     const meta = findMeta(e);
     S.ents.set(e.i, Object.assign({}, meta, e));
-    if (!view.views.has(e.i)) view.spawnView(S.ents.get(e.i));
+    // slots 就绪前不创建新视图（standIn 兜底），等 JSON handler 创建
+    if (slotsReady && !view.views.has(e.i)) view.spawnView(S.ents.get(e.i));
     else if (old && old.u !== e.u) {
       view.removeView(e.i);
       view.spawnView(S.ents.get(e.i));

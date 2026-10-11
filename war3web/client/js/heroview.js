@@ -49,6 +49,7 @@ export class HeroPreview {
     // Replacing the instance's own method also disarms that listener, since it
     // is what the listener calls.
     this.r.resize = () => {
+      if (!this.r.renderer) return;
       this.r.renderer.setSize(this.w, this.h, false);
       this.r.camera.aspect = this.w / this.h;
       this.r.camera.updateProjectionMatrix();
