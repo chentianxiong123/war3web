@@ -22,6 +22,7 @@ const scenes = [
   { name: 'melee_apart', p0: ['hfoo', 1300, 1100], p1: ['hfoo', 1750, 1100] },   // 近战需走近
   { name: 'melee_3v1', p0: ['hfoo', 1300, 1100], p1: ['hfoo', 1750, 1100],
     extra: [['hfoo', 1350, 1150], ['hfoo', 1400, 1050]] },                       // 3v1 围攻
+  { name: 'ranged_hwat', p0: ['hwat', 1300, 1100], p1: ['hfoo', 1700, 1100] },   // 远程哨兵 vs 近战
 ];
 
 const runs = [];
@@ -55,6 +56,7 @@ for (const s of scenes) {
   }
   runs.push({
     pos: initPos,
+    types: units.map((u) => u.typeKey),
     p0: s.p0, p1: s.p1, extra: s.extra,
     name: s.name,
     nUnits: units.length,

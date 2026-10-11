@@ -13,7 +13,9 @@ const ARMOR_KINDS = ["small", "medium", "large", "fort", "normal", "hero", "divi
 const gp = JSON.parse(fs.readFileSync(path.join(HERE, "..", "data", "gameplay.json"), "utf8"));
 const dt = gp.damageBonus || {};
 const golden = JSON.parse(fs.readFileSync(path.join(HERE, "..", "goldens", "combat_trace.json"), "utf8"));
-const HFOO = { hp: 420, armor: 2, armorType: "large", dmgBase: 11, dmgDice: 1, dmgSides: 2, atkCd: 1.35, atkRange: 90, attackPoint: 0.5, attackBackswing: 0.5, atkType: "normal", weaponKind: 0, moveSpeed: 270, radius: 31 };
+const HFOO = { hp: 420, armor: 2, armorType: "large", dmgBase: 11, dmgDice: 1, dmgSides: 2, atkCd: 1.35, atkRange: 90, attackPoint: 0.5, attackBackswing: 0.5, atkType: "normal", weaponKind: 0, missileSpeed: 0, moveSpeed: 270, radius: 31 };
+// 远程哨兵（hwat，Terenas 官方）：missile kind + 1300 速（2019-06 实测）
+const HWAT = { hp: 525, armor: 0, armorType: "large", dmgBase: 17, dmgDice: 1, dmgSides: 5, atkCd: 1.5, atkRange: 300, attackPoint: 0.4, attackBackswing: 0.77, atkType: "pierce", weaponKind: 1, missileSpeed: 1300, moveSpeed: 220, radius: 32 };const TYPES = { hfoo: HFOO, hwat: HWAT };
 const eng = await createEngine();
 const W = 384, H = 384, OX = -6144, OY = -6144;
 const walkArr = new Uint8Array(fs.readFileSync(path.join(HERE, "..", "public", "data", "walk.bin")));
@@ -25,14 +27,20 @@ for (let a = 0; a < 7; a++) for (let k = 0; k < 8; k++) eng.HEAPF32[(tbl >> 2) +
 eng._sim_set_dmg_table(tbl);
 eng._free(tbl);
 const sg = eng._malloc(6 * 4);
-const spawnF = (id, x, y, team) => eng._sim_spawn_fight(id, x, y, 0, HFOO.moveSpeed, HFOO.radius, HFOO.hp, HFOO.hp, HFOO.armor, ARMOR_KINDS.indexOf(HFOO.armorType), team, HFOO.dmgBase, HFOO.dmgDice, HFOO.dmgSides, HFOO.atkCd, HFOO.atkRange, HFOO.attackPoint, HFOO.attackBackswing, ATK_TYPES.indexOf(HFOO.atkType), HFOO.weaponKind);
+// weaponKind：C 0=normal 1=missile/artillery（!=0 才发导弹）
+const spawnF = (id, x, y, team, typeKey) => {
+  const T = TYPES[typeKey] || HFOO;
+  eng._sim_spawn_fight(id, x, y, 0, T.moveSpeed, T.radius, T.hp, T.hp, T.armor, ARMOR_KINDS.indexOf(T.armorType), team, T.dmgBase, T.dmgDice, T.dmgSides, T.atkCd, T.atkRange, T.attackPoint, T.attackBackswing, ATK_TYPES.indexOf(T.atkType), T.weaponKind, T.missileSpeed);
+};
 let allOk = true;
 for (const s of golden.scenes) {
   eng._sim_clear_all();
   const list = s.pos;   // 实际 spawn 位置（freeSpotNear 微调后）
-  spawnF(0, list[0][0], list[0][1], 0);
-  spawnF(1, list[1][0], list[1][1], 1);
-  for (let i = 2; i < list.length; i++) spawnF(i, list[i][0], list[i][1], 1);
+  const types = s.types || ["hfoo", "hfoo"];
+  const spawnAll = () => {
+    for (let i = 0; i < list.length; i++) spawnF(i, list[i][0], list[i][1], i === 0 ? 0 : 1, types[i]);
+  };
+  spawnAll();
   const windupStarts = [];
   const prevW = new Array(list.length).fill(0);
   let cDeath = null, cDeathId = null;
@@ -70,6 +78,6 @@ for (const s of golden.scenes) {
   console.log(`${s.name}: 死亡 ${cDeath} vs JS ${s.deathTick} (Δ${dtk}≤45 ${dtk<=45?"OK":"FAIL"}) | 首击 ${cStarts[0]} vs JS ${jsStarts[0]} (Δ${dFirst}≤3) | 攻击数 ${cStarts.length} vs ${jsStarts.length} (Δ≤6) | HP曲 ${hpOk?"OK":"FAIL"} | 首死id C${cDeathId} vs JS${s.deaths?.[0]?.[1]}`);
 }
 if (!allOk) process.exitCode = 1;
-console.log(allOk ? "combat 对照: 3/3 场景硬门禁全过" : "combat 对照: 存在不一致");
+console.log(allOk ? "combat 对照: 4/4 场景硬门禁全过（近战 3 + 远程导弹 1）" : "combat 对照: 存在不一致");
 eng._free(wp);
 

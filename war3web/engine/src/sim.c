@@ -58,6 +58,18 @@ typedef struct {
 } SimUnit;
 static SimUnit U[SIM_MAX];
 static double DMG_TABLE[SIM_ATK_KINDS][SIM_ARMOR_KINDS];   // 伤害倍率表（gameplay.json damageBonus）
+
+// ---- 导弹表（阶段 2：stepMissiles）----
+// JS launchMissile/stepMissiles 语义：homing 追踪（目标死则无伤）、aim 快照(dx,dy) 用于点射、
+// deadline 兜底、命中调 onHit=land(sim_damage)。
+#define SIM_MISSILE_MAX 256
+typedef struct {
+  int active, srcId, targetId;
+  double x, y, dx, dy, speed, deadlineMs;
+  double amount;        // 发射时已 roll 的伤害（JS releaseAttack 先 roll）
+  int atkTypeIdx;
+} SimMissile;
+static SimMissile M[SIM_MISSILE_MAX];
 static int DMG_TABLE_SET;
 
 /** 伤害倍率表装载（sim_test 从 gameplay.json 读入；JS 侧 HEAPF32 写 → float* 读）。 */
@@ -641,7 +653,7 @@ void sim_spawn_fight(int id, double x, double y, double facing, double speed, do
                      double hp, double maxHp, double armor, int armorTypeIdx, int team,
                      double dmgBase, double dmgDice, double dmgSides,
                      double atkCd, double atkRange, double attackPoint, double attackBackswing,
-                     int atkTypeIdx, int weaponKind) {
+                     int atkTypeIdx, int weaponKind, double missileSpeed) {
   sim_spawn(id, x, y, facing, speed, radius, 0, 0);
   SimUnit* u = &U[id];
   u->hp = hp; u->maxHp = maxHp; u->armor = armor;
@@ -650,6 +662,7 @@ void sim_spawn_fight(int id, double x, double y, double facing, double speed, do
   u->atkCd = atkCd; u->atkRange = atkRange;
   u->attackPoint = attackPoint; u->attackBackswing = attackBackswing;
   u->atkTypeIdx = atkTypeIdx; u->weaponKind = weaponKind;
+  u->missileSpeed = missileSpeed;
   u->atkTimer = 0; u->attackWindupRemaining = 0; u->attackWindupTarget = -1;
   u->atkCount = 0; u->dmgCount = 0; u->deathCount = 0;
   // AI 初始：idle、acquisitionRange 500（hfoo 实测）、home = spawn
@@ -670,13 +683,28 @@ static double sim_damage(int srcId, int tgtId, double amount, int atkTypeIdx) {
   return dmg;
 }
 
-/** 攻击释放（releaseAttack 近战子集：roll + 伤害）。 */
+/** 攻击释放（releaseAttack 3046-3106：roll + 近战直击 / 远程发导弹延迟伤害）。 */
 static void release_attack(SimUnit* u, SimUnit* t) {
+  const int slot = (int)(u - U), tgt = (int)(t - U);
   double amount = u->dmgBase;
   const int dice = (int)u->dmgDice;
   for (int i = 0; i < dice; i++) amount += floor(rng_next() * fmax(1, u->dmgSides)) + 1;
   u->atkCount++;
-  sim_damage((int)(u - U), (int)(t - U), amount, u->atkTypeIdx);
+  // 远程：非 normal 武器 + 有导弹速度 → 发射导弹（伤害延迟到命中，对齐 releaseAttack 3103-3104）
+  if (u->weaponKind != 0 && u->missileSpeed > 0) {
+    for (int i = 0; i < SIM_MISSILE_MAX; i++) {
+      if (M[i].active) continue;
+      const double dist = hypot(t->x - u->x, t->y - u->y);
+      M[i].active = 1; M[i].srcId = slot; M[i].targetId = tgt;
+      M[i].x = u->x; M[i].y = u->y; M[i].dx = t->x; M[i].dy = t->y;
+      M[i].speed = u->missileSpeed;
+      M[i].deadlineMs = SIM_NOW * (1000.0 / 30.0) + fmax(1500.0, (dist / u->missileSpeed) * 3000.0);
+      M[i].amount = amount; M[i].atkTypeIdx = u->atkTypeIdx;
+      return;
+    }
+    return;   // 槽满：本次攻击放弃命中（不常见，保表简单）
+  }
+  sim_damage(slot, tgt, amount, u->atkTypeIdx);
 }
 
 /** 单单位攻击 tick（stepAttack 子集，对齐 2991-3044）。 */
@@ -760,9 +788,37 @@ static void step_ai_unit(SimUnit* u, int id) {
   }
 }
 
-/** 战斗 tick：每单位 AI → 移动 → 攻击（对齐 step 单位循环顺序）。 */
+/** 导弹推进（stepMissiles 2929-2957：homing 追踪、deadline 兜底、命中调 land=sim_damage）。 */
+static void step_missiles(double dt) {
+  const double nowMs = SIM_NOW * (1000.0 / 30.0);
+  for (int i = 0; i < SIM_MISSILE_MAX; i++) {
+    SimMissile* m = &M[i];
+    if (!m->active) continue;
+    const SimUnit* t = m->targetId >= 0 ? &U[m->targetId] : NULL;
+    // 目标死亡/消失 → 无效坠落（无伤害）
+    if (m->targetId >= 0 && (!t || !t->alive)) { m->active = 0; continue; }
+    const double aimX = t ? t->x : m->dx, aimY = t ? t->y : m->dy;
+    const double dx = aimX - m->x, dy = aimY - m->y;
+    const double dist = hypot(dx, dy);
+    const double travel = m->speed * dt;
+    const double reach = dist - (t ? t->radius : 0);
+    if (reach <= travel || nowMs > m->deadlineMs) {
+      m->x = aimX; m->y = aimY;
+      m->active = 0;
+      // onHit：射手存活才结算（src 阵亡则导弹空耗）
+      const SimUnit* s = &U[m->srcId];
+      if (s->alive && t && t->alive) sim_damage(m->srcId, m->targetId, m->amount, m->atkTypeIdx);
+      continue;
+    }
+    m->x += (dx / dist) * travel;
+    m->y += (dy / dist) * travel;
+  }
+}
+
+/** 战斗 tick：导弹推进 → 每单位 AI → 移动 → 攻击（对齐 step 顺序：stepMissiles 在单位循环前）。 */
 void sim_combat_step(double dt) {
   SIM_NOW++;
+  step_missiles(dt);   // stepMissiles（发射发生在单位循环内，下一 tick 才动）
   for (int id = 0; id < SIM_MAX; id++) {
     SimUnit* u = &U[id];
     if (!u->alive) continue;
