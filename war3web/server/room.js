@@ -431,7 +431,7 @@ export class Room {
     this.broadcastBinary(Msg.SNAPSHOT_BIN, buf);
   }
 
-  /** M5: 命令处理后立即广播快照（不等下一个 tick），降低输入延迟。 */
+  /** M6: 命令处理后立即广播快照（不等下一个 tick），降低输入延迟。 */
   broadcastSnapshotNow() {
     if (!this.world) return;
     // JSON 快照（包含完整 ents/items/res/clock/quests）
