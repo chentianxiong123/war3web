@@ -174,14 +174,39 @@
 - **节拍差异**：C 恒 56 tick/周期、JS 平均 56.7（浮点毫秒累积 + 移动差）→ 3600 tick
   边界 C 64 次 vs JS 63 次，末次差 17 tick，均在容差内。
 
+#### 2.10 全量 tick + 事件桥（b401159）——4/4 场景全过 ✅
+- **`sim_step(dt)`**（wasm_step 落地）：`SIM_NOW++` → `gather_pass()` → `step_missiles()`
+  → 单位循环（step_ai_unit → step_move_unit → step_attack_unit）。对齐 JS step()
+  顺序：stepGathers（只发单不下移）→ stepMissiles → 单位循环统一 stepMove。
+- **重构**：`sim_econ_step` 的采集状态机提取为 `gather_pass()`（不含 SIM_NOW/移动推进），
+  供 `sim_econ_step`（采集状态机 + 农民移动，供 econ_test）与 `sim_step`（全量）复用。
+  `sim_combat_step` 保持不动（combat_test 用）。
+- **事件桥**（JS emit 的 C 侧对等物）：固定环缓冲 `EV[SIM_EVENT_MAX=8192]`，每条
+  `{tick,type,a,b}` 4 int32；导出 `sim_events_reset` / `sim_event_count` /
+  `sim_events_get(out,maxN)`（float4 对读回）。
+  - `SIM_EV_ATTACK(0)`：windup 设起时 push(a=srcId,b=targetId)——对齐 emit 3035。
+  - `SIM_EV_MISSILE_END(1)`：导弹移除时 push(a=fx)——`SimMissile` 增 `fx` 字段 +
+    全局 `FXSEQ` 计数器（launch 时 `++FXSEQ`）。
+  - `SIM_EV_DEATH(2)`：`sim_damage` 里 `t->alive=0` 时 push(a=tgtId)。
+- **tick 基准对齐**：golden 用 0-based 循环计数，C 的 `SIM_NOW` 在步内已自增
+  （= t+1）→ `ev_push` 用 `SIM_NOW - 1` 写 tick，C/JS 事件 tick **精确相等**（首击 Δ0）。
+- **`sim_clear_all` 增 reset**：`EVN=0`、`FXSEQ=0`、`SIM_NOW=0`——跨场景独立计数
+  （原 bug：SIM_NOW 不重置导致第 2 场景起事件 tick 整体偏移 ~3600）。
+- **CMakeLists** 增导出 `_sim_step,_sim_events_reset,_sim_event_count,_sim_events_get`。
+- **新测试 tools/sim_step_test.mjs**：用 `sim_step` 跑 4 战斗场景，事件桥读回对照
+  golden 的 atkEvents/deaths。结果：死亡 Δ41/41/0/45、**attack 首击全部 Δ0**、
+  攻击数 76/76/55/50 vs JS 78/78/55/52、missileEnd 24 vs JS 25、death 事件 tick
+  精确等于 deathTick——**4/4 全过**。
+- **回归**：combat 4/4、econ 全过、engine 114/114、sim_test 全绿（零回归）。
+
 #### 2.3 C 移植设计
 - sim 单位表扩展：hp/maxHp/atkTimer/attackWindup/weapon 快照（atkCd/attackPoint/
   atkRange/dmg/atkType/atkTargetsAllowed 位集）+ team/playerOf
 - 导弹表（SOA 数组）：x/y/speed/dx/dy/targetId/onHit 类型+伤害参数——复用
   launchMissile 快照语义
 - 伤害公式：先无 buff 纯数值（护甲减伤/魔法抗性表），buff 依赖留给 ability 桥
-- `wasm_step(dt)`：单位循环（移动→攻击→经济）+ 导弹推进 + 事件出队（attack/
-  missileEnd/death 事件 push 出 heap，JS 消费——阶段 2 事件桥）
+- `wasm_step(dt)` **（b401159 已落地为 `sim_step`）**：gather → 导弹 → 单位循环（移动→
+  攻击）+ 事件出队（attack/missileEnd/death push 出 heap，JS 消费——阶段 2 事件桥 ✅）
 
 #### 2.4 风险
 - weaponFor 元数据依赖（atkTargetsAllowed/classifications 是字符串集合）——
