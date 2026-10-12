@@ -42,3 +42,6 @@ __pycache__/
 
 # engine build intermediates (out/ holds the committed artifacts)
 engine/build-web/
+# parent .gitignore has *.wasm; commit the wasm artifact so a fresh clone runs
+# the full WASM engine without needing an Emscripten toolchain to rebuild it.
+!engine/out/engine.wasm
